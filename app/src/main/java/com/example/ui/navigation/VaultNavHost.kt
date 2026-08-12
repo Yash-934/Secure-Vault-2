@@ -26,7 +26,6 @@ import com.example.ui.components.StealthModeDialog
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.CalculatorScreen
 import com.example.ui.screens.DashboardScreen
-import com.example.ui.screens.DecoyVaultScreen
 import com.example.ui.screens.IntruderLogsScreen
 import com.example.ui.screens.LockScreen
 import com.example.ui.screens.MediaViewerScreen
@@ -125,7 +124,7 @@ fun VaultNavHost(
                 }
             }
             VaultMode.DECOY -> {
-                navController.navigate(NavRoutes.DecoyVault.route) {
+                navController.navigate(NavRoutes.Dashboard.route) {
                     popUpTo(targetLockRoute) { inclusive = true }
                 }
             }
@@ -160,7 +159,7 @@ fun VaultNavHost(
                         pinErrorMessage = null
                         if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
                             vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
-                            navController.navigate(NavRoutes.DecoyVault.route) {
+                            navController.navigate(NavRoutes.Dashboard.route) {
                                 popUpTo(NavRoutes.Lock.route) { inclusive = true }
                             }
                         } else {
@@ -190,7 +189,7 @@ fun VaultNavHost(
                         pinErrorMessage = null
                         if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
                             vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
-                            navController.navigate(NavRoutes.DecoyVault.route) {
+                            navController.navigate(NavRoutes.Dashboard.route) {
                                 popUpTo(NavRoutes.Calculator.route) { inclusive = true }
                             }
                         } else {
@@ -252,16 +251,6 @@ fun VaultNavHost(
                     }
                 )
             }
-        }
-
-        // 3. Decoy Vault Destination
-        composable(NavRoutes.DecoyVault.route) {
-            DecoyVaultScreen(
-                onLockClick = {
-                    vaultViewModel.lockVault()
-                    onLockApp()
-                }
-            )
         }
 
         // 4. Settings Screen

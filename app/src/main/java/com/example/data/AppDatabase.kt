@@ -13,6 +13,8 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+        @Volatile
+        private var DECOY_INSTANCE: AppDatabase? = null
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -24,6 +26,20 @@ abstract class AppDatabase : RoomDatabase() {
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
+                instance
+            }
+        }
+
+        fun getDecoyDatabase(context: Context): AppDatabase {
+            return DECOY_INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "decoy_vault_db"
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
+                DECOY_INSTANCE = instance
                 instance
             }
         }

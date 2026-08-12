@@ -25,7 +25,7 @@ data class ImportResult(
     val deleteIntentSender: android.content.IntentSender? = null
 )
 
-class VaultRepository(private val vaultDao: VaultDao) {
+class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: String = "vault") {
 
     val allVaultItems: Flow<List<VaultItem>> = vaultDao.getAllVaultItems()
     val photos: Flow<List<VaultItem>> = vaultDao.getPhotos()
@@ -49,7 +49,7 @@ class VaultRepository(private val vaultDao: VaultDao) {
 
     suspend fun copyItemToFolder(context: Context, item: VaultItem, destinationFolder: String): VaultItem? = withContext(Dispatchers.IO) {
         try {
-            val vaultDir = File(context.filesDir, "vault")
+            val vaultDir = File(context.filesDir, vaultDirName)
             val sourceEncryptedFile = File(vaultDir, item.encryptedFileName)
             if (!sourceEncryptedFile.exists()) return@withContext null
 
@@ -153,7 +153,7 @@ class VaultRepository(private val vaultDao: VaultDao) {
             val isVideo = mimeType.startsWith("video/")
 
             // 2. Prepare internal vault destination file inside Context.filesDir
-            val vaultDir = File(context.filesDir, "vault").apply { if (!exists()) mkdirs() }
+            val vaultDir = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
             val encryptedFileName = "enc_${UUID.randomUUID()}.bin"
             val targetEncryptedFile = File(vaultDir, encryptedFileName)
 
@@ -229,7 +229,7 @@ class VaultRepository(private val vaultDao: VaultDao) {
         mimeType: String,
         sizeBytes: Long
     ): VaultItem = withContext(Dispatchers.IO) {
-        val vaultDir = File(context.filesDir, "vault").apply { if (!exists()) mkdirs() }
+        val vaultDir = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
         val encryptedFileName = "enc_${UUID.randomUUID()}.bin"
         val targetEncryptedFile = File(vaultDir, encryptedFileName)
 
@@ -265,7 +265,7 @@ class VaultRepository(private val vaultDao: VaultDao) {
      */
     suspend fun decryptFileToByteArray(context: Context, item: VaultItem): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            val vaultDir = File(context.filesDir, "vault")
+            val vaultDir = File(context.filesDir, vaultDirName)
             val encryptedFile = File(vaultDir, item.encryptedFileName)
             if (!encryptedFile.exists()) return@withContext null
 
@@ -282,7 +282,7 @@ class VaultRepository(private val vaultDao: VaultDao) {
      * Removes file from internal vault storage and deletes its Room record.
      */
     suspend fun deleteVaultItem(context: Context, item: VaultItem) = withContext(Dispatchers.IO) {
-        val vaultDir = File(context.filesDir, "vault")
+        val vaultDir = File(context.filesDir, vaultDirName)
         val encryptedFile = File(vaultDir, item.encryptedFileName)
         if (encryptedFile.exists()) {
             encryptedFile.delete()
@@ -295,7 +295,7 @@ class VaultRepository(private val vaultDao: VaultDao) {
      */
     suspend fun exportVaultItemToGallery(context: Context, item: VaultItem): Uri? = withContext(Dispatchers.IO) {
         try {
-            val vaultDir = File(context.filesDir, "vault")
+            val vaultDir = File(context.filesDir, vaultDirName)
             val encryptedFile = File(vaultDir, item.encryptedFileName)
             if (!encryptedFile.exists()) return@withContext null
 

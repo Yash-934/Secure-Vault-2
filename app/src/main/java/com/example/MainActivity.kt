@@ -39,8 +39,10 @@ class MainActivity : FragmentActivity() {
 
     private val vaultViewModel: VaultViewModel by viewModels {
         val database = AppDatabase.getDatabase(applicationContext)
-        val repository = VaultRepository(database.vaultDao())
-        VaultViewModel.Factory(repository)
+        val decoyDatabase = AppDatabase.getDecoyDatabase(applicationContext)
+        val realRepository = VaultRepository(database.vaultDao(), "vault")
+        val decoyRepository = VaultRepository(decoyDatabase.vaultDao(), "decoy_vault")
+        VaultViewModel.Factory(realRepository, decoyRepository)
     }
 
     private val settingsViewModel: SettingsViewModel by viewModels {

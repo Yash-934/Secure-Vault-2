@@ -20,10 +20,15 @@ import kotlinx.coroutines.launch
 
 enum class VaultFilterTab { ALL, PHOTOS, VIDEOS, DOCUMENTS }
 
-class VaultViewModel(val repository: VaultRepository) : ViewModel() {
+class VaultViewModel(
+    private val realRepository: VaultRepository,
+    private val decoyRepository: VaultRepository
+) : ViewModel() {
 
     private val _vaultMode = MutableStateFlow(VaultMode.LOCKED)
     val vaultMode: StateFlow<VaultMode> = _vaultMode.asStateFlow()
+
+    val repository: VaultRepository get() = if (vaultMode.value == VaultMode.DECOY) decoyRepository else realRepository
 
     private val _isUnlocked = MutableStateFlow(false)
     val isUnlocked: StateFlow<Boolean> = _isUnlocked.asStateFlow()
@@ -34,7 +39,10 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
     private val _selectedFolder = MutableStateFlow<String>("ALL")
     val selectedFolder: StateFlow<String> = _selectedFolder.asStateFlow()
 
-    val folders: StateFlow<List<com.example.data.VaultFolder>> = repository.allFolders.stateIn(
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val folders: StateFlow<List<com.example.data.VaultFolder>> = _vaultMode.flatMapLatest { mode ->
+        if (mode == VaultMode.DECOY) decoyRepository.allFolders else realRepository.allFolders
+    }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -44,10 +52,11 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val vaultItems: StateFlow<List<VaultItem>> = kotlinx.coroutines.flow.combine(_selectedFolder, _filterTab) { folder, tab ->
-        folder to tab
-    }.flatMapLatest { (folder, tab) ->
-        repository.getItemsForFolderAndTab(folder, tab)
+    val vaultItems: StateFlow<List<VaultItem>> = kotlinx.coroutines.flow.combine(_vaultMode, _selectedFolder, _filterTab) { mode, folder, tab ->
+        Triple(mode, folder, tab)
+    }.flatMapLatest { (mode, folder, tab) ->
+        val activeRepo = if (mode == VaultMode.DECOY) decoyRepository else realRepository
+        activeRepo.getItemsForFolderAndTab(folder, tab)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -479,11 +488,14 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
         _deleteIntentSender.value = null
     }
 
-    class Factory(private val repository: VaultRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val realRepository: VaultRepository,
+        private val decoyRepository: VaultRepository
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(VaultViewModel::class.java)) {
-                return VaultViewModel(repository) as T
+                return VaultViewModel(realRepository, decoyRepository) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }
