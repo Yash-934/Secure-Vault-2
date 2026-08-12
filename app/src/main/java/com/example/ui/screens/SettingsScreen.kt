@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PhonelinkSetup
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -119,7 +120,8 @@ fun SettingsScreen(
     onChangeDeadManDays: (Int) -> Unit = {},
     onExecuteSelfDestructClick: () -> Unit = {},
     onEmbedStegoClick: () -> Unit = {},
-    onExtractStegoClick: () -> Unit = {}
+    onExtractStegoClick: () -> Unit = {},
+    onHelpClick: () -> Unit = {}
 ) {
     var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
     var showChangeKillPinDialog by remember { mutableStateOf(false) }
@@ -962,6 +964,48 @@ fun SettingsScreen(
                         },
                         onClick = { showConfirmSelfDestructDialog = true },
                         modifier = Modifier.testTag("nuclear_self_destruct_now_item")
+                    )
+                }
+            }
+
+            // SECTION 6: SUPPORT & DOCUMENTATION
+            SectionHeader(title = "SUPPORT & DOCUMENTATION")
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+            ) {
+                Column {
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Help & How to Use",
+                        subtitle = "Read the manual and documentation",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "View Help",
+                                tint = SubtitleText,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = onHelpClick
                     )
                 }
             }

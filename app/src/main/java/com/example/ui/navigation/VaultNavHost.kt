@@ -24,6 +24,7 @@ import com.example.ui.components.ChangePinDialog
 import com.example.ui.components.ImportPromptDialog
 import com.example.ui.components.StealthModeDialog
 import com.example.ui.screens.AboutScreen
+import com.example.ui.screens.HelpScreen
 import com.example.ui.screens.CalculatorScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.IntruderLogsScreen
@@ -285,6 +286,9 @@ fun VaultNavHost(
                 },
                 onExtractStegoClick = {
                     stegoExtractLauncher.launch(arrayOf("image/jpeg", "image/*"))
+                },
+                onHelpClick = {
+                    navController.navigate(NavRoutes.Help.route)
                 }
             )
 
@@ -433,7 +437,14 @@ fun VaultNavHost(
             )
         }
 
-        // 7. Media Viewer Screen
+        // 7. Help Screen
+        composable(NavRoutes.Help.route) {
+            HelpScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        // 8. Media Viewer Screen
         composable(
             route = NavRoutes.MediaViewer.route,
             arguments = listOf(navArgument("itemId") { type = NavType.LongType })

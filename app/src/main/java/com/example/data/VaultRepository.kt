@@ -186,27 +186,62 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             var deleteIntentSender: android.content.IntentSender? = null
 
             if (deleteOriginal) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    try {
-                        val rowsDeleted = contentResolver.delete(sourceUri, null, null)
-                        if (rowsDeleted > 0) {
-                            originalDeleted = true
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        try {
+                            val rowsDeleted = contentResolver.delete(sourceUri, null, null)
+                            if (rowsDeleted > 0) {
+                                originalDeleted = true
+                            }
+                        } catch (securityException: SecurityException) {
+                            val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(sourceUri))
+                            deleteIntentSender = deleteRequest.intentSender
                         }
-                    } catch (securityException: SecurityException) {
-                        val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(sourceUri))
-                        deleteIntentSender = deleteRequest.intentSender
+                    } else {
+                        try {
+                            val rowsDeleted = contentResolver.delete(sourceUri, null, null)
+                            if (rowsDeleted > 0) {
+                                originalDeleted = true
+                            }
+                        } catch (securityException: SecurityException) {
+                            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                                val recoverableException = securityException as? android.app.RecoverableSecurityException
+                                deleteIntentSender = recoverableException?.userAction?.actionIntent?.intentSender
+                            }
+                        }
                     }
-                } else {
+                } catch (e: Exception) {
+                    android.util.Log.e("VaultRepository", "Failed to delete original file (Picker/Document URI restriction): ${e.message}")
+                    // We don't fail the import just because delete failed.
+                }
+
+                // Fallback for PhotoPicker or SAF URIs where direct delete throws exception and fails
+                if (!originalDeleted && deleteIntentSender == null) {
                     try {
-                        val rowsDeleted = contentResolver.delete(sourceUri, null, null)
-                        if (rowsDeleted > 0) {
-                            originalDeleted = true
+                        val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.SIZE} = ?"
+                        val selectionArgs = arrayOf(originalName, sizeBytes.toString())
+                        
+                        contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), selection, selectionArgs, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val id = cursor.getLong(0)
+                                val mediaStoreUri = android.content.ContentUris.withAppendedId(collection, id)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                    try {
+                                        val rows = contentResolver.delete(mediaStoreUri, null, null)
+                                        if (rows > 0) originalDeleted = true
+                                    } catch (se: SecurityException) {
+                                        val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(mediaStoreUri))
+                                        deleteIntentSender = deleteRequest.intentSender
+                                    }
+                                } else {
+                                    val rows = contentResolver.delete(mediaStoreUri, null, null)
+                                    if (rows > 0) originalDeleted = true
+                                }
+                            }
                         }
-                    } catch (securityException: SecurityException) {
-                        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-                            val recoverableException = securityException as? android.app.RecoverableSecurityException
-                            deleteIntentSender = recoverableException?.userAction?.actionIntent?.intentSender
-                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("VaultRepository", "Fallback MediaStore query/delete failed: ${e.message}")
                     }
                 }
             }

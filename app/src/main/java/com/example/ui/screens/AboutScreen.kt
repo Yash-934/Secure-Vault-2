@@ -1,84 +1,64 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.WifiOff
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.VaultBorder
-import com.example.ui.theme.VaultDarkBackground
-import com.example.ui.theme.VaultPrimaryCyan
-import com.example.ui.theme.VaultSurface
-import com.example.ui.theme.VaultTextSecondary
+import com.example.R
+
+private val DarkNavyBg = Color(0xFF03070C)
+private val CardBg = Color(0xFF07111B)
+private val CardBorder = Color(0xFF112538)
+private val BrightCyan = Color(0xFF00D2EF)
+private val SubtitleText = Color(0xFF6C7A8E)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AboutScreen(
-    onBackClick: () -> Unit
-) {
+fun AboutScreen(onBackClick: () -> Unit) {
     Scaffold(
-        containerColor = VaultDarkBackground,
+        containerColor = DarkNavyBg,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = "About & Privacy",
-                        fontSize = 18.sp,
+                        "APP INFO",
+                        color = Color.White,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.2.sp
                     )
                 },
                 navigationIcon = {
-                    IconButton(
-                        onClick = onBackClick,
-                        modifier = Modifier.testTag("about_back_button")
-                    ) {
+                    IconButton(onClick = onBackClick) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onBackground
+                            tint = Color.White
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultDarkBackground)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkNavyBg)
             )
         }
     ) { innerPadding ->
@@ -88,187 +68,167 @@ fun AboutScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // App Identity Header Card
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 1. App Identity Section
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(BrightCyan.copy(alpha = 0.15f))
+                    .border(2.dp, BrightCyan.copy(alpha = 0.3f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                // Using the quantum_logo, fallback to shield if not possible, but user explicitly asked to use lock/shield icon placeholder for now
+                Icon(
+                    imageVector = Icons.Default.Shield,
+                    contentDescription = "App Logo",
+                    tint = BrightCyan,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Text(
+                text = "QUANTUM VAULT",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp
+            )
+            
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            Text(
+                text = "Version 1.0.0",
+                fontSize = 13.sp,
+                color = SubtitleText,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.Monospace
+            )
+            
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // 2. Description Section
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = VaultSurface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, VaultBorder)
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Quantum Vault is a next-generation, offline-first security application designed for absolute privacy. Built on a strict 'Zero-Trust' architecture, it ensures that your personal data remains encrypted, invisible, and completely isolated from the outside world.",
+                        fontSize = 13.sp,
+                        color = Color.LightGray,
+                        lineHeight = 22.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 3. Tech Stack / Features Section
+            Text(
+                text = "TECH STACK & CAPABILITIES",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = BrightCyan,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.5.sp,
+                modifier = Modifier.align(Alignment.Start).padding(start = 4.dp, bottom = 12.dp)
+            )
+
+            TechStackChip(label = "AES-256-GCM Encryption")
+            Spacer(modifier = Modifier.height(10.dp))
+            TechStackChip(label = "Zero Cloud Tracking")
+            Spacer(modifier = Modifier.height(10.dp))
+            TechStackChip(label = "100% Offline")
+            
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // 4. Developer & Dedication Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkNavyBg), // Slightly different to make it stand out
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
+                        .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(CircleShape)
-                            .background(VaultPrimaryCyan.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Shield,
-                            contentDescription = null,
-                            tint = VaultPrimaryCyan,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
                     Text(
-                        text = "Secure Vault Pro",
-                        fontSize = 20.sp,
+                        text = "Developed & Engineered by: Yash Pradeep",
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = Color.White,
+                        textAlign = TextAlign.Center
                     )
-
-                    Text(
-                        text = "v2.0.0 (Clean Architecture • Offline Edition)",
-                        fontSize = 11.sp,
-                        color = VaultPrimaryCyan,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-
-            // Zero Network Privacy Policy Card
-            AboutSectionHeader("Zero-Knowledge Privacy Guarantee")
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = VaultSurface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, VaultBorder)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.WifiOff,
-                            contentDescription = null,
-                            tint = VaultPrimaryCyan,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "100% Offline Operating Model",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
+                    
                     Spacer(modifier = Modifier.height(8.dp))
-
+                    
                     Text(
-                        text = "• INTERNET permission is strictly omitted from the application manifest.\n" +
-                                "• Zero network calls, telemetry, or analytics trackers exist in this build.\n" +
-                                "• All encrypted media remains stored exclusively within app-isolated private storage (filesDir/vault).\n" +
-                                "• Keys never leave the hardware TEE (Trusted Execution Environment).",
+                        text = "Dedicated to Ruem❤️Rumi",
                         fontSize = 12.sp,
-                        color = VaultTextSecondary,
-                        lineHeight = 18.sp
+                        fontWeight = FontWeight.Normal,
+                        fontStyle = FontStyle.Italic,
+                        color = BrightCyan.copy(alpha = 0.8f),
+                        textAlign = TextAlign.Center
                     )
                 }
             }
+            
+            Spacer(modifier = Modifier.weight(1f, fill = false))
+            Spacer(modifier = Modifier.height(40.dp))
 
-            // Architecture & Encryption Engine Card
-            AboutSectionHeader("Cryptographic Engine Specs")
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = VaultSurface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, VaultBorder)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = VaultPrimaryCyan,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "AES-256-GCM + Hardware Keystore",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "• Algorithm: AES/GCM/NoPadding (256-bit Key)\n" +
-                                "• Nonce / IV: Unique 12-byte cryptographically secure random IV per file stream\n" +
-                                "• Hardware Support: Key master backed by Android OS StrongBox/TEE KeyStore\n" +
-                                "• Decryption: Transient in volatile RAM only; zero disk cache.",
-                        fontSize = 12.sp,
-                        color = VaultTextSecondary,
-                        lineHeight = 18.sp
-                    )
-                }
-            }
-
-            // Open Source Components
-            AboutSectionHeader("Open Source Libraries")
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = VaultSurface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, VaultBorder)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Code,
-                            contentDescription = null,
-                            tint = VaultPrimaryCyan,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Licensed Core Dependencies",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "• Android Jetpack Compose & Material 3 (Apache 2.0)\n" +
-                                "• AndroidX Biometric Prompt Library (Apache 2.0)\n" +
-                                "• AndroidX Room Persistence Library (Apache 2.0)\n" +
-                                "• Coil Image Loader for Compose (Apache 2.0)",
-                        fontSize = 12.sp,
-                        color = VaultTextSecondary,
-                        lineHeight = 18.sp
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
+            // 5. Footer
+            Text(
+                text = "© 2026 Yash Pradeep. All Rights Reserved.",
+                fontSize = 10.sp,
+                color = SubtitleText.copy(alpha = 0.5f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
         }
     }
 }
 
 @Composable
-private fun AboutSectionHeader(title: String) {
-    Text(
-        text = title.uppercase(),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        color = VaultPrimaryCyan,
-        letterSpacing = 1.sp,
-        modifier = Modifier.padding(start = 4.dp, top = 4.dp)
-    )
+fun TechStackChip(label: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(BrightCyan)
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(
+                text = label,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+        }
+    }
 }
