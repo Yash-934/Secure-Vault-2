@@ -11,5 +11,6 @@ data class VaultItem(
     val mimeType: String,
     val sizeBytes: Long,
     val addedTimestamp: Long = System.currentTimeMillis(),
-    val isVideo: Boolean = false
+    val isVideo: Boolean = false,
+    val folderName: String = "Root"
 )

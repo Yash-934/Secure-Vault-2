@@ -24,8 +24,12 @@ object SelfDestructManager {
                 e.printStackTrace()
             }
 
-            // 2. Wipe /shred files in Context.filesDir recursively
+            // 2. Wipe /shred files in Context.filesDir and datastore recursively
             shredDirectory(context.filesDir)
+            val datastoreDir = File(context.filesDir.parent, "datastore")
+            if (datastoreDir.exists()) shredDirectory(datastoreDir)
+            val sharedPrefsDir = File(context.filesDir.parent, "shared_prefs")
+            if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir)
 
             // 3. Wipe /shred files in Context.cacheDir recursively
             shredDirectory(context.cacheDir)
@@ -36,6 +40,14 @@ object SelfDestructManager {
                 if (keyStore.containsAlias("VaultMasterKey")) {
                     keyStore.deleteEntry("VaultMasterKey")
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 5. Ultimate wipe using OS ActivityManager (terminates app)
+            try {
+                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                activityManager.clearApplicationUserData()
             } catch (e: Exception) {
                 e.printStackTrace()
             }

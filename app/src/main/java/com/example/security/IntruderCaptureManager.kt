@@ -30,6 +30,11 @@ object IntruderCaptureManager {
         attemptType: String,
         details: String
     ) {
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            saveLogWithImage(context, attemptType, details + " (No Camera Permission)", null)
+            return
+        }
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {

@@ -31,17 +31,23 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
     private val _filterTab = MutableStateFlow(VaultFilterTab.ALL)
     val filterTab: StateFlow<VaultFilterTab> = _filterTab.asStateFlow()
 
+    private val _selectedFolder = MutableStateFlow<String>("ALL")
+    val selectedFolder: StateFlow<String> = _selectedFolder.asStateFlow()
+
+    val folders: StateFlow<List<com.example.data.VaultFolder>> = repository.allFolders.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val vaultItems: StateFlow<List<VaultItem>> = _filterTab.flatMapLatest { tab ->
-        when (tab) {
-            VaultFilterTab.ALL -> repository.allVaultItems
-            VaultFilterTab.PHOTOS -> repository.photos
-            VaultFilterTab.VIDEOS -> repository.videos
-            VaultFilterTab.DOCUMENTS -> repository.documents
-        }
+    val vaultItems: StateFlow<List<VaultItem>> = kotlinx.coroutines.flow.combine(_selectedFolder, _filterTab) { folder, tab ->
+        folder to tab
+    }.flatMapLatest { (folder, tab) ->
+        repository.getItemsForFolderAndTab(folder, tab)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -220,6 +226,73 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
         }
     }
 
+    fun exportStegoBackup(context: Context, masterPassword: String, coverUri: android.net.Uri, outputUri: android.net.Uri) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            try {
+                val tempBackupFile = java.io.File(context.cacheDir, "temp_stego_backup.bin")
+                val tempOut = java.io.FileOutputStream(tempBackupFile)
+                val backupResult = com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, tempOut, repository)
+                tempOut.close()
+
+                if (backupResult.isSuccess) {
+                    val backupBytes = tempBackupFile.readBytes()
+                    val coverBytes = context.contentResolver.openInputStream(coverUri)?.readBytes()
+                    if (coverBytes != null) {
+                        val stegoBytes = com.example.security.SteganographyManager.embedPayloadInJpeg(coverBytes, backupBytes)
+                        val outStream = context.contentResolver.openOutputStream(outputUri)
+                        if (outStream != null) {
+                            outStream.write(stegoBytes)
+                            outStream.flush()
+                            outStream.close()
+                            _statusMessage.value = "Steganography Vault Backup embedded in JPEG!"
+                        } else {
+                            _statusMessage.value = "Failed to open output stream."
+                        }
+                    } else {
+                        _statusMessage.value = "Failed to read cover image."
+                    }
+                } else {
+                    _statusMessage.value = "Failed to create backup for Steganography."
+                }
+                tempBackupFile.delete()
+            } catch (e: Exception) {
+                _statusMessage.value = "Steganography failed: ${e.message}"
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    fun importStegoBackup(context: Context, masterPassword: String, stegoUri: android.net.Uri) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            try {
+                val stegoBytes = context.contentResolver.openInputStream(stegoUri)?.readBytes()
+                if (stegoBytes != null) {
+                    val backupBytes = com.example.security.SteganographyManager.extractPayloadFromJpeg(stegoBytes)
+                    if (backupBytes != null) {
+                        val tempIn = java.io.ByteArrayInputStream(backupBytes)
+                        val result = com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, tempIn, repository)
+                        result.onSuccess { count ->
+                            _statusMessage.value = "Steganography Restore complete! Restored $count items."
+                        }.onFailure {
+                            _statusMessage.value = "Restore failed: Invalid password or corrupt stego payload."
+                        }
+                    } else {
+                        _statusMessage.value = "No Steganography payload found in this JPEG."
+                    }
+                } else {
+                    _statusMessage.value = "Failed to read stego image."
+                }
+            } catch (e: Exception) {
+                _statusMessage.value = "Steganography extraction failed: ${e.message}"
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
     fun exportMasterBackup(context: Context, masterPassword: String, outputStream: java.io.OutputStream) {
         _isProcessing.value = true
         viewModelScope.launch {
@@ -264,6 +337,50 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
         _filterTab.value = tab
     }
 
+    fun selectFolder(folderName: String) {
+        _selectedFolder.value = folderName
+    }
+
+    fun createFolder(folderName: String) {
+        val trimmed = folderName.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            repository.createFolder(trimmed)
+            _selectedFolder.value = trimmed
+            _statusMessage.value = "Folder '$trimmed' created."
+        }
+    }
+
+    fun deleteFolder(folderName: String) {
+        viewModelScope.launch {
+            repository.deleteFolder(folderName)
+            if (_selectedFolder.value == folderName) {
+                _selectedFolder.value = "ALL"
+            }
+            _statusMessage.value = "Folder '$folderName' removed."
+        }
+    }
+
+    fun moveItemToFolder(itemId: Long, destinationFolder: String) {
+        viewModelScope.launch {
+            repository.moveItemToFolder(itemId, destinationFolder)
+            _statusMessage.value = "Moved file to '$destinationFolder'."
+        }
+    }
+
+    fun copyItemToFolder(context: Context, item: VaultItem, destinationFolder: String) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            val copied = repository.copyItemToFolder(context, item, destinationFolder)
+            _isProcessing.value = false
+            if (copied != null) {
+                _statusMessage.value = "Copied '${item.originalName}' to '$destinationFolder'."
+            } else {
+                _statusMessage.value = "Failed to copy file."
+            }
+        }
+    }
+
     fun onFilesSelected(uris: List<Uri>) {
         if (uris.isNotEmpty()) {
             _pendingImportUris.value = uris
@@ -281,12 +398,14 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
         _pendingImportUris.value = emptyList()
         _isProcessing.value = true
 
+        val targetFolder = if (_selectedFolder.value == "ALL") "Root" else _selectedFolder.value
+
         viewModelScope.launch {
             var successCount = 0
             var failCount = 0
 
             for (uri in urisToImport) {
-                val result = repository.encryptAndImportFile(context, uri, deleteOriginal)
+                val result = repository.encryptAndImportFile(context, uri, deleteOriginal, targetFolder = targetFolder)
                 result.onSuccess { importRes ->
                     successCount++
                     if (importRes.deleteIntentSender != null) {

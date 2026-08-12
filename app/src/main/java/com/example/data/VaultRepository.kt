@@ -32,6 +32,67 @@ class VaultRepository(private val vaultDao: VaultDao) {
     val videos: Flow<List<VaultItem>> = vaultDao.getVideos()
     val documents: Flow<List<VaultItem>> = vaultDao.getDocuments()
 
+    val allFolders: Flow<List<VaultFolder>> = vaultDao.getAllFolders()
+
+    suspend fun createFolder(name: String, iconType: String = "FOLDER") = withContext(Dispatchers.IO) {
+        vaultDao.insertFolder(VaultFolder(name = name, iconType = iconType))
+    }
+
+    suspend fun deleteFolder(name: String) = withContext(Dispatchers.IO) {
+        vaultDao.resetItemsInFolderToRoot(name)
+        vaultDao.deleteFolder(name)
+    }
+
+    suspend fun moveItemToFolder(itemId: Long, destinationFolder: String) = withContext(Dispatchers.IO) {
+        vaultDao.updateItemFolder(itemId, destinationFolder)
+    }
+
+    suspend fun copyItemToFolder(context: Context, item: VaultItem, destinationFolder: String): VaultItem? = withContext(Dispatchers.IO) {
+        try {
+            val vaultDir = File(context.filesDir, "vault")
+            val sourceEncryptedFile = File(vaultDir, item.encryptedFileName)
+            if (!sourceEncryptedFile.exists()) return@withContext null
+
+            val newEncryptedFileName = "enc_${UUID.randomUUID()}.bin"
+            val targetEncryptedFile = File(vaultDir, newEncryptedFileName)
+
+            sourceEncryptedFile.copyTo(targetEncryptedFile, overwrite = true)
+
+            val newItem = VaultItem(
+                originalName = "Copy_${item.originalName}",
+                encryptedFileName = newEncryptedFileName,
+                mimeType = item.mimeType,
+                sizeBytes = item.sizeBytes,
+                isVideo = item.isVideo,
+                folderName = destinationFolder
+            )
+
+            val generatedId = vaultDao.insertVaultItem(newItem)
+            newItem.copy(id = generatedId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun getItemsForFolderAndTab(folderName: String, tab: com.example.ui.VaultFilterTab): Flow<List<VaultItem>> {
+        return if (folderName == "ALL" || folderName.isEmpty()) {
+            when (tab) {
+                com.example.ui.VaultFilterTab.ALL -> vaultDao.getAllVaultItems()
+                com.example.ui.VaultFilterTab.PHOTOS -> vaultDao.getPhotos()
+                com.example.ui.VaultFilterTab.VIDEOS -> vaultDao.getVideos()
+                com.example.ui.VaultFilterTab.DOCUMENTS -> vaultDao.getDocuments()
+            }
+        } else {
+            when (tab) {
+                com.example.ui.VaultFilterTab.ALL -> vaultDao.getItemsByFolder(folderName)
+                com.example.ui.VaultFilterTab.PHOTOS -> vaultDao.getPhotosByFolder(folderName)
+                com.example.ui.VaultFilterTab.VIDEOS -> vaultDao.getVideosByFolder(folderName)
+                com.example.ui.VaultFilterTab.DOCUMENTS -> vaultDao.getDocumentsByFolder(folderName)
+            }
+        }
+    }
+
     /**
      * Encrypts the user-selected file from public gallery and stores it in app-private storage (filesDir/vault/).
      * Option to delete original source Uri using MediaStore APIs.
@@ -39,7 +100,8 @@ class VaultRepository(private val vaultDao: VaultDao) {
     suspend fun encryptAndImportFile(
         context: Context,
         sourceUri: Uri,
-        deleteOriginal: Boolean
+        deleteOriginal: Boolean,
+        targetFolder: String = "Root"
     ): Result<ImportResult> = withContext(Dispatchers.IO) {
         try {
             val contentResolver = context.contentResolver
@@ -113,7 +175,8 @@ class VaultRepository(private val vaultDao: VaultDao) {
                 encryptedFileName = encryptedFileName,
                 mimeType = mimeType,
                 sizeBytes = sizeBytes,
-                isVideo = isVideo
+                isVideo = isVideo,
+                folderName = targetFolder
             )
             val generatedId = vaultDao.insertVaultItem(vaultItem)
             val savedVaultItem = vaultItem.copy(id = generatedId)
@@ -123,27 +186,34 @@ class VaultRepository(private val vaultDao: VaultDao) {
             var deleteIntentSender: android.content.IntentSender? = null
 
             if (deleteOriginal) {
-                try {
-                    val rowsDeleted = contentResolver.delete(sourceUri, null, null)
-                    if (rowsDeleted > 0) {
-                        originalDeleted = true
-                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    try {
+                        val rowsDeleted = contentResolver.delete(sourceUri, null, null)
+                        if (rowsDeleted > 0) {
+                            originalDeleted = true
+                        }
+                    } catch (securityException: SecurityException) {
                         val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(sourceUri))
                         deleteIntentSender = deleteRequest.intentSender
                     }
-                } catch (securityException: SecurityException) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        val recoverableException = securityException as? android.app.RecoverableSecurityException
-                        deleteIntentSender = recoverableException?.userAction?.actionIntent?.intentSender
-                            ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                MediaStore.createDeleteRequest(contentResolver, listOf(sourceUri)).intentSender
-                            } else null
+                } else {
+                    try {
+                        val rowsDeleted = contentResolver.delete(sourceUri, null, null)
+                        if (rowsDeleted > 0) {
+                            originalDeleted = true
+                        }
+                    } catch (securityException: SecurityException) {
+                        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                            val recoverableException = securityException as? android.app.RecoverableSecurityException
+                            deleteIntentSender = recoverableException?.userAction?.actionIntent?.intentSender
+                        }
                     }
                 }
             }
 
             Result.success(ImportResult(savedVaultItem, originalDeleted, deleteIntentSender))
         } catch (e: Exception) {
+            android.util.Log.e("VaultRepository", "Import failed for URI: $sourceUri - ${e.message}", e)
             Result.failure(e)
         }
     }

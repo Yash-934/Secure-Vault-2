@@ -2,6 +2,7 @@ package com.example.ui.navigation
 
 sealed class NavRoutes(val route: String) {
     object Lock : NavRoutes("lock")
+    object Calculator : NavRoutes("calculator")
     object Dashboard : NavRoutes("dashboard")
     object DecoyVault : NavRoutes("decoy_vault")
     object Settings : NavRoutes("settings")

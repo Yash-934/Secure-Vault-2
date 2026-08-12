@@ -25,7 +25,7 @@ data class VaultSettings(
     val isStealthModeEnabled: Boolean = false,
     val isCamouflageEnabled: Boolean = false,
     val isScreenProtectionEnabled: Boolean = false,
-    val isIntruderSelfieEnabled: Boolean = true,
+    val isIntruderSelfieEnabled: Boolean = false,
     val isDeadManSwitchEnabled: Boolean = false,
     val deadManDays: Int = 30,
     val lastLoginTimestamp: Long = System.currentTimeMillis()
@@ -60,7 +60,7 @@ class SettingsDataStore(private val context: Context) {
             isStealthModeEnabled = prefs[STEALTH_MODE_ENABLED_KEY] ?: false,
             isCamouflageEnabled = prefs[CAMOUFLAGE_ENABLED_KEY] ?: false,
             isScreenProtectionEnabled = prefs[SCREEN_PROTECTION_ENABLED_KEY] ?: false,
-            isIntruderSelfieEnabled = prefs[INTRUDER_SELFIE_ENABLED_KEY] ?: true,
+            isIntruderSelfieEnabled = prefs[INTRUDER_SELFIE_ENABLED_KEY] ?: false,
             isDeadManSwitchEnabled = prefs[DEAD_MAN_SWITCH_ENABLED_KEY] ?: false,
             deadManDays = prefs[DEAD_MAN_DAYS_KEY] ?: 30,
             lastLoginTimestamp = prefs[LAST_LOGIN_TIMESTAMP_KEY] ?: System.currentTimeMillis()

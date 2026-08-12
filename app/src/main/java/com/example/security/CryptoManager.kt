@@ -75,26 +75,14 @@ object CryptoManager {
         val iv = cipher.iv
         outputStream.write(iv)
 
-        // 2. Encrypt the data in chunks
-        val buffer = ByteArray(BUFFER_SIZE)
-        var bytesRead: Int
-        try {
+        // 2. Encrypt the data in chunks using CipherOutputStream
+        javax.crypto.CipherOutputStream(outputStream, cipher).use { cipherOut ->
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                val encryptedBytes = cipher.update(buffer, 0, bytesRead)
-                if (encryptedBytes != null) {
-                    outputStream.write(encryptedBytes)
-                }
+                cipherOut.write(buffer, 0, bytesRead)
             }
-        } finally {
-            buffer.zeroize()
         }
-
-        // 3. Complete encryption (appends GCM authentication tag)
-        val finalBytes = cipher.doFinal()
-        if (finalBytes != null) {
-            outputStream.write(finalBytes)
-        }
-        outputStream.flush()
     }
 
     /**

@@ -7,17 +7,18 @@ import androidx.compose.ui.graphics.Color
 
 private val VaultColorScheme = darkColorScheme(
     primary = VaultPrimaryCyan,
-    onPrimary = Color.Black,
-    secondary = VaultSecondaryBlue,
-    onSecondary = Color.Black,
-    tertiary = VaultAccentGold,
+    onPrimary = Color(0xFF03070C),
+    secondary = VaultSecondaryNeonBlue,
+    onSecondary = Color(0xFF03070C),
+    tertiary = VaultNeonPurple,
+    onTertiary = Color.White,
     background = VaultDarkBackground,
     onBackground = VaultTextPrimary,
     surface = VaultSurface,
     onSurface = VaultTextPrimary,
     surfaceVariant = VaultSurfaceVariant,
     onSurfaceVariant = VaultTextSecondary,
-    outline = VaultBorder,
+    outline = VaultBorderGlow,
     error = VaultErrorRed,
     onError = Color.White
 )

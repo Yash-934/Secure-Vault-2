@@ -43,8 +43,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Brush
+import com.example.ui.theme.CyberBackgroundGradient
+import com.example.ui.theme.CyberNeonGradient
+import com.example.ui.theme.CyberPlasmaGradient
 import com.example.ui.theme.VaultDarkBackground
 import com.example.ui.theme.VaultErrorRed
+import com.example.ui.theme.VaultNeonPink
+import com.example.ui.theme.VaultNeonPurple
 import com.example.ui.theme.VaultPrimaryCyan
 
 @Composable
@@ -65,12 +71,12 @@ fun LockScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF03070C)) // Deep pitch black background
+            .background(CyberBackgroundGradient)
     ) {
-        // Futuristic Cyber Background Grid
+        // Futuristic Cyber Background Grid with Ambient Radial Glow
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val gridSpacing = 44.dp.toPx()
-            val gridColor = Color(0xFF00D2EF).copy(alpha = 0.04f)
+            val gridColor = Color(0xFF00F5D4).copy(alpha = 0.05f)
             
             var x = 0f
             while (x < size.width) {
@@ -83,6 +89,19 @@ fun LockScreen(
                 drawLine(gridColor, androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Offset(size.width, y), strokeWidth = 1f)
                 y += gridSpacing
             }
+
+            // Radial Center Ambient Purple/Cyan Glow
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        VaultNeonPurple.copy(alpha = 0.25f),
+                        VaultPrimaryCyan.copy(alpha = 0.12f),
+                        Color.Transparent
+                    ),
+                    center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height * 0.35f),
+                    radius = size.width * 0.65f
+                )
+            )
         }
 
         Column(
@@ -94,104 +113,104 @@ fun LockScreen(
         ) {
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 1. Top System Badge (Pill)
+            // 1. Top System Badge (Pill with Gradient Border)
             Box(
                 modifier = Modifier
                     .clip(CircleShape)
-                    .background(Color(0xFF041C28))
-                    .border(1.dp, Color(0xFF00B2D6).copy(alpha = 0.6f), CircleShape)
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .background(Color(0xFF0B1424))
+                    .border(1.5.dp, CyberNeonGradient, CircleShape)
+                    .padding(horizontal = 16.dp, vertical = 7.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(8.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF00FF66)) // Glowing green dot
+                            .background(Color(0xFF00FF87)) // Matrix Emerald Green
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "VAULT SYSTEM: ENCRYPTED",
+                        text = "QUANTUM VAULT: ENCRYPTED",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF00D2EF),
+                        color = VaultPrimaryCyan,
                         fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.2.sp
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // 2. Glowing Shield Ring Logo
+            // 2. Glowing Shield Ring Logo with Concentric Mixed Gradient Rings
             Box(
-                modifier = Modifier.size(100.dp),
+                modifier = Modifier.size(108.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Outer Cyan Circle
+                // Outer Cyber Plasma Gradient Circle
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
+                        .size(108.dp)
                         .clip(CircleShape)
-                        .border(2.dp, Color(0xFF00D2EF), CircleShape)
+                        .border(2.5.dp, CyberPlasmaGradient, CircleShape)
                 )
-                // Inner Cyan Circle
+                // Inner Cyber Neon Gradient Circle
                 Box(
                     modifier = Modifier
-                        .size(80.dp)
+                        .size(86.dp)
                         .clip(CircleShape)
-                        .border(1.5.dp, Color(0xFF00D2EF).copy(alpha = 0.8f), CircleShape)
+                        .border(1.8.dp, CyberNeonGradient, CircleShape)
                 )
                 // Center Shield Icon
                 Icon(
                     imageVector = Icons.Default.Shield,
                     contentDescription = "Vault Shield",
-                    tint = Color(0xFF00D2EF),
-                    modifier = Modifier.size(42.dp)
+                    tint = VaultPrimaryCyan,
+                    modifier = Modifier.size(46.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             // 3. Title & Subtitle
             Text(
-                text = "SECURE VAULT",
-                fontSize = 24.sp,
+                text = "QUANTUM VAULT",
+                fontSize = 26.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color.White,
-                letterSpacing = 2.5.sp
+                letterSpacing = 3.sp
             )
 
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "AUTHENTICATION REQUIRED",
+                text = "NEON PROTOCOL • AUTH REQUIRED",
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF6C7A8E),
+                color = VaultNeonPurple,
                 fontFamily = FontFamily.Monospace,
                 letterSpacing = 2.sp
             )
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // 4. PIN Indicator Dots
+            // 4. PIN Indicator Dots with Cyber Neon Gradient Fill
             Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 for (i in 0 until 4) {
                     val isFilled = i < enteredPin.length
                     Box(
                         modifier = Modifier
-                            .size(18.dp)
+                            .size(20.dp)
                             .clip(CircleShape)
                             .background(
-                                if (isFilled) Color(0xFF00D2EF) else Color.Transparent
+                                if (isFilled) CyberPlasmaGradient else Brush.linearGradient(listOf(Color(0xFF0A1320), Color(0xFF0A1320)))
                             )
                             .border(
                                 width = 1.5.dp,
-                                color = if (isFilled) Color(0xFF00D2EF) else Color(0xFF1B2A3A),
+                                brush = if (isFilled) CyberNeonGradient else Brush.linearGradient(listOf(Color(0xFF1E3148), Color(0xFF1E3148))),
                                 shape = CircleShape
                             )
                     )
@@ -324,8 +343,8 @@ fun LockScreen(
                             .weight(1f)
                             .height(68.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF061824))
-                            .border(1.5.dp, Color(0xFF00D2EF), RoundedCornerShape(20.dp))
+                            .background(Brush.linearGradient(listOf(Color(0xFF091B2A), Color(0xFF11283F))))
+                            .border(1.5.dp, CyberNeonGradient, RoundedCornerShape(20.dp))
                             .clickable { onAuthenticateClick() }
                             .testTag("biometric_keypad_button"),
                         contentAlignment = Alignment.Center
@@ -333,8 +352,8 @@ fun LockScreen(
                         Icon(
                             imageVector = Icons.Default.Fingerprint,
                             contentDescription = "Biometric Unlock",
-                            tint = Color(0xFF00D2EF),
-                            modifier = Modifier.size(30.dp)
+                            tint = VaultPrimaryCyan,
+                            modifier = Modifier.size(32.dp)
                         )
                     }
 
@@ -355,8 +374,8 @@ fun LockScreen(
                             .weight(1f)
                             .height(68.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF420816))
-                            .border(1.dp, Color(0xFF6E0D24), RoundedCornerShape(20.dp))
+                            .background(Brush.linearGradient(listOf(Color(0xFF2E0915), Color(0xFF450D20))))
+                            .border(1.5.dp, Brush.horizontalGradient(listOf(VaultErrorRed, VaultNeonPink)), RoundedCornerShape(20.dp))
                             .clickable {
                                 if (enteredPin.isNotEmpty()) {
                                     enteredPin = enteredPin.dropLast(1)
@@ -368,7 +387,7 @@ fun LockScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Backspace,
                             contentDescription = "Delete",
-                            tint = Color(0xFFFF2A55),
+                            tint = VaultErrorRed,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -400,8 +419,8 @@ private fun androidx.compose.foundation.layout.RowScope.NumberKey(
             .weight(1f)
             .height(68.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFF08121C))
-            .border(1.dp, Color(0xFF132334), RoundedCornerShape(20.dp))
+            .background(Brush.verticalGradient(listOf(Color(0xFF0F1B2B), Color(0xFF0B1420))))
+            .border(1.dp, Brush.horizontalGradient(listOf(Color(0xFF1E3852), Color(0xFF284868))), RoundedCornerShape(20.dp))
             .clickable { onDigitClick(digit) }
             .testTag("keypad_$digit"),
         contentAlignment = Alignment.Center

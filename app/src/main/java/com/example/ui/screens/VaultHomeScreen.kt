@@ -63,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,9 +71,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.VaultItem
 import com.example.ui.VaultFilterTab
+import androidx.compose.ui.graphics.Brush
+import com.example.ui.theme.CyberBackgroundGradient
+import com.example.ui.theme.CyberCardGlowGradient
+import com.example.ui.theme.CyberHeaderGradient
+import com.example.ui.theme.CyberNeonGradient
+import com.example.ui.theme.CyberPlasmaGradient
 import com.example.ui.theme.VaultBorder
+import com.example.ui.theme.VaultBorderGlow
 import com.example.ui.theme.VaultDarkBackground
 import com.example.ui.theme.VaultErrorRed
+import com.example.ui.theme.VaultNeonPink
+import com.example.ui.theme.VaultNeonPurple
 import com.example.ui.theme.VaultPrimaryCyan
 import com.example.ui.theme.VaultSecondaryBlue
 import com.example.ui.theme.VaultSurface
@@ -171,24 +181,32 @@ fun VaultHomeScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    mediaPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                    )
-                },
-                containerColor = VaultPrimaryCyan,
-                contentColor = Color.Black,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.testTag("import_fab")
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(CyberNeonGradient)
+                    .clickable {
+                        mediaPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                        )
+                    }
+                    .padding(horizontal = 20.dp, vertical = 14.dp)
+                    .testTag("import_fab"),
+                contentAlignment = Alignment.Center
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Files")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add Files",
+                        tint = Color(0xFF03070C)
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Import Media", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "Import Media",
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF03070C),
+                        fontSize = 14.sp
+                    )
                 }
             }
         }
@@ -199,26 +217,27 @@ fun VaultHomeScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
         ) {
-            // Vault Security Summary Card
-            Card(
+            // Vault Security Summary Card with Cyber Gradient Glow
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = VaultSurface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, VaultBorder)
+                    .padding(vertical = 8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(VaultSurface)
+                    .border(1.5.dp, CyberNeonGradient, RoundedCornerShape(16.dp))
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
+                        .background(CyberCardGlowGradient)
+                        .padding(16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
                         Text(
                             text = "${vaultItems.size} Encrypted File${if (vaultItems.size != 1) "s" else ""}",
-                            fontSize = 14.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -232,8 +251,9 @@ fun VaultHomeScreen(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(VaultSecondaryBlue.copy(alpha = 0.15f))
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                            .background(Color(0xFF0A1C2A))
+                            .border(1.dp, VaultPrimaryCyan.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -242,12 +262,14 @@ fun VaultHomeScreen(
                             tint = VaultPrimaryCyan,
                             modifier = Modifier.size(12.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Offline Storage",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = VaultPrimaryCyan
+                            text = "AIR-GAPPED OFFLINE",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = VaultPrimaryCyan,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
                         )
                     }
                 }
@@ -314,24 +336,21 @@ private fun VaultFilterChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(text, fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal) },
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = VaultPrimaryCyan,
-            selectedLabelColor = Color.Black,
-            containerColor = VaultSurface,
-            labelColor = VaultTextSecondary
-        ),
-        border = FilterChipDefaults.filterChipBorder(
-            enabled = true,
-            selected = selected,
-            borderColor = VaultBorder,
-            selectedBorderColor = VaultPrimaryCyan
-        ),
-        shape = RoundedCornerShape(20.dp)
-    )
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) CyberNeonGradient else Brush.horizontalGradient(listOf(VaultSurface, VaultSurface)))
+            .border(1.dp, if (selected) Color.Transparent else VaultBorderGlow.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+            color = if (selected) Color(0xFF03070C) else VaultTextSecondary
+        )
+    }
 }
 
 @Composable
@@ -343,29 +362,36 @@ private fun VaultItemCard(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(VaultSurface)
+            .border(1.dp, CyberCardGlowGradient, RoundedCornerShape(16.dp))
             .clickable { onClick() }
-            .testTag("vault_item_card_${item.id}"),
-        colors = CardDefaults.cardColors(containerColor = VaultSurface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, VaultBorder)
+            .testTag("vault_item_card_${item.id}")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Media Thumbnail Placeholder Box
+            // Media Thumbnail Placeholder Box with Cyber Gradient Accent
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(110.dp)
-                    .background(VaultSurfaceVariant),
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFF142030),
+                                Color(0xFF0D1622)
+                            )
+                        )
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = if (item.isVideo) Icons.Default.PlayCircle else Icons.Default.Image,
                     contentDescription = null,
-                    tint = if (item.isVideo) VaultSecondaryBlue else VaultPrimaryCyan,
-                    modifier = Modifier.size(44.dp)
+                    tint = if (item.isVideo) VaultNeonPurple else VaultPrimaryCyan,
+                    modifier = Modifier.size(46.dp)
                 )
 
                 // AES-256 Badge Overlay
@@ -374,7 +400,8 @@ private fun VaultItemCard(
                         .align(Alignment.TopStart)
                         .padding(8.dp)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(VaultDarkBackground.copy(alpha = 0.8f))
+                        .background(Color(0xE6050910))
+                        .border(0.8.dp, VaultPrimaryCyan.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -388,8 +415,9 @@ private fun VaultItemCard(
                         Text(
                             text = "AES-256",
                             fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = VaultPrimaryCyan
+                            fontWeight = FontWeight.ExtraBold,
+                            color = VaultPrimaryCyan,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }

@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.app.Activity
+import android.content.IntentSender
+import androidx.activity.result.IntentSenderRequest
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -21,16 +24,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -78,28 +87,39 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.VaultFolder
 import com.example.data.VaultItem
 import com.example.ui.VaultFilterTab
+import com.example.ui.components.CreateFolderDialog
+import com.example.ui.components.MoveCopyDialog
 import com.example.ui.components.PlaceholderLoadingCard
 import com.example.ui.theme.VaultErrorRed
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val PitchBlackBg = Color(0xFF03070C)
-private val DarkCapsuleBg = Color(0xFF0A131C)
-private val CapsuleBorder = Color(0xFF132334)
-private val BrightCyan = Color(0xFF00D2EF)
-private val MutedText = Color(0xFF6C7A8E)
+private val PitchBlackBg = Color(0xFF06090E)
+private val DarkCapsuleBg = Color(0xFF0C1420)
+private val CapsuleBorder = Color(0xFF1B3148)
+private val BrightCyan = Color(0xFF00F5D4)
+private val NeonPurple = Color(0xFF9D4EDD)
+private val MutedText = Color(0xFF94A3B8)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     vaultItems: List<VaultItem>,
     activeFilter: VaultFilterTab,
+    selectedFolder: String = "ALL",
+    folders: List<VaultFolder> = emptyList(),
     statusMessage: String?,
     isLoading: Boolean,
     onFilterChanged: (VaultFilterTab) -> Unit,
+    onSelectFolder: (String) -> Unit = {},
+    onCreateFolder: (String) -> Unit = {},
+    onDeleteFolder: (String) -> Unit = {},
+    onMoveItem: (VaultItem, String) -> Unit = { _, _ -> },
+    onCopyItem: (VaultItem, String) -> Unit = { _, _ -> },
     onFilesSelected: (List<Uri>) -> Unit,
     onItemClick: (VaultItem) -> Unit,
     onDeleteItem: (VaultItem) -> Unit,
@@ -107,6 +127,8 @@ fun DashboardScreen(
     onLockClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToAbout: () -> Unit,
+    deleteIntentSender: IntentSender? = null,
+    onClearDeleteIntentSender: () -> Unit = {},
     onClearStatusMessage: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -117,6 +139,24 @@ fun DashboardScreen(
     var scanProgress by remember { mutableStateOf(100) }
     var isHudExpanded by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showCreateFolderDialog by remember { mutableStateOf(false) }
+    var moveCopyTargetItem by remember { mutableStateOf<VaultItem?>(null) }
+
+    val deleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            // Delete succeeded
+        }
+        onClearDeleteIntentSender()
+    }
+
+    LaunchedEffect(deleteIntentSender) {
+        if (deleteIntentSender != null) {
+            val request = IntentSenderRequest.Builder(deleteIntentSender).build()
+            deleteLauncher.launch(request)
+        }
+    }
 
     LaunchedEffect(statusMessage) {
         if (!statusMessage.isNullOrEmpty()) {
@@ -447,6 +487,84 @@ fun DashboardScreen(
                     )
                 }
 
+                // Folder Management Header & Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "VAULT FOLDERS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = BrightCyan,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(BrightCyan.copy(alpha = 0.15f))
+                            .border(0.8.dp, BrightCyan.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .clickable { showCreateFolderDialog = true }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("add_folder_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Create Folder",
+                            tint = BrightCyan,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "NEW FOLDER",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = BrightCyan,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                // Scrollable Folder Chips
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    item {
+                        FolderChipItem(
+                            title = "📁 ALL",
+                            isSelected = selectedFolder == "ALL",
+                            onClick = { onSelectFolder("ALL") }
+                        )
+                    }
+                    item {
+                        FolderChipItem(
+                            title = "📂 Root",
+                            isSelected = selectedFolder == "Root",
+                            onClick = { onSelectFolder("Root") }
+                        )
+                    }
+                    items(folders) { folder ->
+                        if (folder.name != "ALL" && folder.name != "Root") {
+                            FolderChipItem(
+                                title = "📂 ${folder.name}",
+                                isSelected = selectedFolder == folder.name,
+                                onClick = { onSelectFolder(folder.name) },
+                                onDelete = { onDeleteFolder(folder.name) }
+                            )
+                        }
+                    }
+                }
+
                 // Capsule Filter Tab Bar
                 Box(
                     modifier = Modifier
@@ -518,20 +636,51 @@ fun DashboardScreen(
                                     item = item,
                                     onClick = { onItemClick(item) },
                                     onDelete = { onDeleteItem(item) },
-                                    onExport = { onExportItem(item) }
+                                    onExport = { onExportItem(item) },
+                                    onMoveCopy = { moveCopyTargetItem = item }
                                 )
                             } else {
                                 VaultListCard(
                                     item = item,
                                     onClick = { onItemClick(item) },
                                     onDelete = { onDeleteItem(item) },
-                                    onExport = { onExportItem(item) }
+                                    onExport = { onExportItem(item) },
+                                    onMoveCopy = { moveCopyTargetItem = item }
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+
+        if (showCreateFolderDialog) {
+            CreateFolderDialog(
+                onDismiss = { showCreateFolderDialog = false },
+                onCreateFolder = { name ->
+                    onCreateFolder(name)
+                    showCreateFolderDialog = false
+                }
+            )
+        }
+
+        if (moveCopyTargetItem != null) {
+            MoveCopyDialog(
+                item = moveCopyTargetItem!!,
+                availableFolders = folders,
+                onDismiss = { moveCopyTargetItem = null },
+                onMove = { dest ->
+                    onMoveItem(moveCopyTargetItem!!, dest)
+                    moveCopyTargetItem = null
+                },
+                onCopy = { dest ->
+                    onCopyItem(moveCopyTargetItem!!, dest)
+                    moveCopyTargetItem = null
+                },
+                onCreateNewFolder = { name ->
+                    onCreateFolder(name)
+                }
+            )
         }
 
         if (showImportDialog) {
@@ -897,7 +1046,8 @@ private fun VaultGridCard(
     item: VaultItem,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onExport: () -> Unit
+    onExport: () -> Unit,
+    onMoveCopy: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val (itemIcon, itemBadge) = remember(item.mimeType, item.isVideo) {
@@ -928,22 +1078,44 @@ private fun VaultGridCard(
                     modifier = Modifier.size(42.dp)
                 )
 
-                Box(
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(8.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(PitchBlackBg.copy(alpha = 0.85f))
-                        .border(0.8.dp, BrightCyan, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
-                        text = itemBadge,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = BrightCyan,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(PitchBlackBg.copy(alpha = 0.85f))
+                            .border(0.8.dp, BrightCyan, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = itemBadge,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = BrightCyan,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    if (item.folderName.isNotEmpty() && item.folderName != "Root") {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFF0E2235))
+                                .border(0.8.dp, BrightCyan.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "📂 ${item.folderName}",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = BrightCyan
+                            )
+                        }
+                    }
                 }
             }
 
@@ -985,6 +1157,20 @@ private fun VaultGridCard(
                             onDismissRequest = { menuExpanded = false },
                             modifier = Modifier.background(DarkCapsuleBg)
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.DriveFileMove,
+                                        contentDescription = null,
+                                        tint = BrightCyan
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onMoveCopy()
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Restore to Gallery", fontSize = 12.sp, color = Color.White) },
                                 leadingIcon = {
@@ -1044,7 +1230,8 @@ private fun VaultListCard(
     item: VaultItem,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onExport: () -> Unit
+    onExport: () -> Unit,
+    onMoveCopy: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val (itemIcon, itemBadge) = remember(item.mimeType, item.isVideo) {
@@ -1097,23 +1284,16 @@ private fun VaultListCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(PitchBlackBg)
-                            .border(0.6.dp, BrightCyan, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    ) {
+                    if (item.folderName.isNotEmpty() && item.folderName != "Root") {
                         Text(
-                            text = itemBadge,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
+                            text = "📂 ${item.folderName}",
+                            fontSize = 10.sp,
                             color = BrightCyan,
-                            fontFamily = FontFamily.Monospace
+                            fontWeight = FontWeight.Bold
                         )
                     }
                     Text(
-                        text = "${formatFileSize(item.sizeBytes)} • ${formatDate(item.addedTimestamp)}",
+                        text = formatFileSize(item.sizeBytes),
                         fontSize = 10.sp,
                         color = MutedText
                     )
@@ -1138,6 +1318,20 @@ private fun VaultListCard(
                     onDismissRequest = { menuExpanded = false },
                     modifier = Modifier.background(DarkCapsuleBg)
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.DriveFileMove,
+                                contentDescription = null,
+                                tint = BrightCyan
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onMoveCopy()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("Restore to Gallery", fontSize = 12.sp, color = Color.White) },
                         leadingIcon = {
@@ -1192,5 +1386,43 @@ private fun getVaultItemIconAndBadge(mimeType: String, isVideo: Boolean): Pair<a
         mimeType.startsWith("text/") -> Icons.Default.Description to "TXT"
         mimeType.startsWith("audio/") -> Icons.Default.Description to "AUDIO"
         else -> Icons.Default.InsertDriveFile to "DOC"
+    }
+}
+
+@Composable
+private fun FolderChipItem(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isSelected) BrightCyan else DarkCapsuleBg)
+            .border(1.dp, if (isSelected) BrightCyan else CapsuleBorder, RoundedCornerShape(16.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+            .testTag("folder_chip_${title.replace(" ", "_")}")
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                fontSize = 12.sp,
+                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                color = if (isSelected) Color(0xFF03070C) else Color.White
+            )
+            if (onDelete != null) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Delete Folder",
+                    tint = if (isSelected) Color(0xFF03070C) else MutedText,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable { onDelete() }
+                )
+            }
+        }
     }
 }

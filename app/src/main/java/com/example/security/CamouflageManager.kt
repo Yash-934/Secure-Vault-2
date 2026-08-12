@@ -17,25 +17,27 @@ object CamouflageManager {
 
         try {
             if (useCalculatorIcon) {
-                pm.setComponentEnabledSetting(
-                    mainComponent,
-                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                    PackageManager.DONT_KILL_APP
-                )
+                // Enable Calculator first, then disable Main
                 pm.setComponentEnabledSetting(
                     calcComponent,
                     PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+                pm.setComponentEnabledSetting(
+                    mainComponent,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                     PackageManager.DONT_KILL_APP
                 )
             } else {
-                pm.setComponentEnabledSetting(
-                    calcComponent,
-                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                    PackageManager.DONT_KILL_APP
-                )
+                // Enable Main first, then disable Calculator
                 pm.setComponentEnabledSetting(
                     mainComponent,
                     PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+                pm.setComponentEnabledSetting(
+                    calcComponent,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                     PackageManager.DONT_KILL_APP
                 )
             }

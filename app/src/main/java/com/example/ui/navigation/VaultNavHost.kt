@@ -24,6 +24,7 @@ import com.example.ui.components.ChangePinDialog
 import com.example.ui.components.ImportPromptDialog
 import com.example.ui.components.StealthModeDialog
 import com.example.ui.screens.AboutScreen
+import com.example.ui.screens.CalculatorScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.DecoyVaultScreen
 import com.example.ui.screens.IntruderLogsScreen
@@ -65,6 +66,12 @@ fun VaultNavHost(
     var showExportPasswordDialog by remember { mutableStateOf(false) }
     var showImportPasswordDialog by remember { mutableStateOf(false) }
 
+    var stegoCoverUri by remember { mutableStateOf<Uri?>(null) }
+    var stegoOutputUri by remember { mutableStateOf<Uri?>(null) }
+    var stegoExtractUri by remember { mutableStateOf<Uri?>(null) }
+    var showStegoEmbedPasswordDialog by remember { mutableStateOf(false) }
+    var showStegoExtractPasswordDialog by remember { mutableStateOf(false) }
+
     // Storage Access Framework (SAF) Launchers for Master Backup
     val exportBackupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -84,21 +91,47 @@ fun VaultNavHost(
         }
     }
 
-    androidx.compose.runtime.LaunchedEffect(vaultMode) {
+    val stegoOutputLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/jpeg")
+    ) { uri ->
+        if (uri != null) {
+            stegoOutputUri = uri
+            showStegoEmbedPasswordDialog = true
+        }
+    }
+    val stegoCoverLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            stegoCoverUri = uri
+            stegoOutputLauncher.launch("stego_vault_backup_${System.currentTimeMillis()}.jpg")
+        }
+    }
+    val stegoExtractLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            stegoExtractUri = uri
+            showStegoExtractPasswordDialog = true
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(vaultMode, settings.isCamouflageEnabled) {
+        val targetLockRoute = if (settings.isCamouflageEnabled) NavRoutes.Calculator.route else NavRoutes.Lock.route
         when (vaultMode) {
             VaultMode.REAL -> {
                 navController.navigate(NavRoutes.Dashboard.route) {
-                    popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                    popUpTo(targetLockRoute) { inclusive = true }
                 }
             }
             VaultMode.DECOY -> {
                 navController.navigate(NavRoutes.DecoyVault.route) {
-                    popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                    popUpTo(targetLockRoute) { inclusive = true }
                 }
             }
             VaultMode.LOCKED -> {
-                if (navController.currentDestination?.route != NavRoutes.Lock.route) {
-                    navController.navigate(NavRoutes.Lock.route) {
+                if (navController.currentDestination?.route != targetLockRoute) {
+                    navController.navigate(targetLockRoute) {
                         popUpTo(0) { inclusive = true }
                     }
                 }
@@ -106,9 +139,10 @@ fun VaultNavHost(
         }
     }
 
+    val initialTargetLockRoute = if (settings.isCamouflageEnabled) NavRoutes.Calculator.route else NavRoutes.Lock.route
     NavHost(
         navController = navController,
-        startDestination = if (vaultMode == VaultMode.LOCKED) NavRoutes.Lock.route else NavRoutes.Dashboard.route
+        startDestination = if (vaultMode == VaultMode.LOCKED) initialTargetLockRoute else NavRoutes.Dashboard.route
     ) {
         // 1. Lock Screen Destination
         composable(NavRoutes.Lock.route) {
@@ -142,14 +176,54 @@ fun VaultNavHost(
             )
         }
 
+        composable(NavRoutes.Calculator.route) {
+            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            CalculatorScreen(
+                onPinSubmit = { enteredPin ->
+                    val success = vaultViewModel.authenticateWithPin(
+                        context = context,
+                        lifecycleOwner = lifecycleOwner,
+                        enteredPin = enteredPin,
+                        settings = settings
+                    )
+                    if (success) {
+                        pinErrorMessage = null
+                        if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                            vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
+                            navController.navigate(NavRoutes.DecoyVault.route) {
+                                popUpTo(NavRoutes.Calculator.route) { inclusive = true }
+                            }
+                        } else {
+                            navController.navigate(NavRoutes.Dashboard.route) {
+                                popUpTo(NavRoutes.Calculator.route) { inclusive = true }
+                            }
+                        }
+                    } else {
+                        // Silent failure for calculator to maintain stealth
+                    }
+                }
+            )
+        }
+
         // 2. Real Vault Dashboard
         composable(NavRoutes.Dashboard.route) {
+            val selectedFolder by vaultViewModel.selectedFolder.collectAsStateWithLifecycle()
+            val folders by vaultViewModel.folders.collectAsStateWithLifecycle()
+            val deleteIntentSender by vaultViewModel.deleteIntentSender.collectAsStateWithLifecycle()
+
             DashboardScreen(
                 vaultItems = vaultItems,
                 activeFilter = filterTab,
+                selectedFolder = selectedFolder,
+                folders = folders,
                 statusMessage = statusMessage,
                 isLoading = isLoading,
                 onFilterChanged = { vaultViewModel.setFilterTab(it) },
+                onSelectFolder = { vaultViewModel.selectFolder(it) },
+                onCreateFolder = { vaultViewModel.createFolder(it) },
+                onDeleteFolder = { vaultViewModel.deleteFolder(it) },
+                onMoveItem = { item, destFolder -> vaultViewModel.moveItemToFolder(item.id, destFolder) },
+                onCopyItem = { item, destFolder -> vaultViewModel.copyItemToFolder(context, item, destFolder) },
                 onFilesSelected = { vaultViewModel.onFilesSelected(it) },
                 onItemClick = { item ->
                     vaultViewModel.openViewer(context, item)
@@ -163,6 +237,8 @@ fun VaultNavHost(
                 },
                 onNavigateToSettings = { navController.navigate(NavRoutes.Settings.route) },
                 onNavigateToAbout = { navController.navigate(NavRoutes.About.route) },
+                deleteIntentSender = deleteIntentSender,
+                onClearDeleteIntentSender = { vaultViewModel.clearDeleteIntentSender() },
                 onClearStatusMessage = { vaultViewModel.clearStatusMessage() }
             )
 
@@ -216,11 +292,10 @@ fun VaultNavHost(
                 onChangeDeadManDays = { settingsViewModel.setDeadManDays(it) },
                 onExecuteSelfDestructClick = { vaultViewModel.executeSelfDestruct(context) },
                 onEmbedStegoClick = {
-                    // Quick stego toast trigger feedback
-                    vaultViewModel.clearStatusMessage()
+                    stegoCoverLauncher.launch(arrayOf("image/jpeg"))
                 },
                 onExtractStegoClick = {
-                    vaultViewModel.clearStatusMessage()
+                    stegoExtractLauncher.launch(arrayOf("image/jpeg", "image/*"))
                 }
             )
 
@@ -262,10 +337,10 @@ fun VaultNavHost(
 
             if (showStealthDialog) {
                 StealthModeDialog(
-                    isEnabled = settings.isStealthModeEnabled,
+                    isEnabled = settings.isCamouflageEnabled,
                     onDismiss = { showStealthDialog = false },
                     onToggleStealth = {
-                        settingsViewModel.setStealthModeEnabled(it)
+                        settingsViewModel.setCamouflageEnabled(context, it)
                         showStealthDialog = false
                     }
                 )
@@ -309,6 +384,42 @@ fun VaultNavHost(
                         if (inputStream != null) {
                             vaultViewModel.importMasterBackup(context, password, inputStream)
                         }
+                    }
+                )
+            }
+
+            // Stego Embed Password Prompt
+            if (showStegoEmbedPasswordDialog && stegoCoverUri != null && stegoOutputUri != null) {
+                BackupPasswordDialog(
+                    title = "Encrypt Stego Backup",
+                    subtitle = "Enter a password to encrypt the backup before hiding it in the JPEG.",
+                    onDismiss = {
+                        showStegoEmbedPasswordDialog = false
+                        stegoCoverUri = null
+                        stegoOutputUri = null
+                    },
+                    onConfirm = { password ->
+                        showStegoEmbedPasswordDialog = false
+                        vaultViewModel.exportStegoBackup(context, password, stegoCoverUri!!, stegoOutputUri!!)
+                        stegoCoverUri = null
+                        stegoOutputUri = null
+                    }
+                )
+            }
+
+            // Stego Extract Password Prompt
+            if (showStegoExtractPasswordDialog && stegoExtractUri != null) {
+                BackupPasswordDialog(
+                    title = "Decrypt Stego Backup",
+                    subtitle = "Enter the password to decrypt the backup extracted from the JPEG.",
+                    onDismiss = {
+                        showStegoExtractPasswordDialog = false
+                        stegoExtractUri = null
+                    },
+                    onConfirm = { password ->
+                        showStegoExtractPasswordDialog = false
+                        vaultViewModel.importStegoBackup(context, password, stegoExtractUri!!)
+                        stegoExtractUri = null
                     }
                 )
             }

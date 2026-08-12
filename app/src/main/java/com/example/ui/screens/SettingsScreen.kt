@@ -67,6 +67,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -116,6 +123,18 @@ fun SettingsScreen(
 ) {
     var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
     var showChangeKillPinDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            onToggleIntruderSelfie(true)
+        } else {
+            Toast.makeText(context, "Camera permission required for Intruder Selfie", Toast.LENGTH_SHORT).show()
+            onToggleIntruderSelfie(false)
+        }
+    }
     Scaffold(
         containerColor = DarkNavyBg,
         topBar = {
@@ -173,7 +192,10 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.weight(1f).padding(end = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Box(
                                 modifier = Modifier
                                     .size(38.dp)
@@ -231,7 +253,9 @@ fun SettingsScreen(
                                     text = if (auditResult == null) "RUN SCAN" else "RE-SCAN",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
@@ -811,7 +835,17 @@ fun SettingsScreen(
                         trailing = {
                             Switch(
                                 checked = settings.isIntruderSelfieEnabled,
-                                onCheckedChange = onToggleIntruderSelfie,
+                                onCheckedChange = { checked ->
+                                    if (checked) {
+                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                            onToggleIntruderSelfie(true)
+                                        } else {
+                                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                        }
+                                    } else {
+                                        onToggleIntruderSelfie(false)
+                                    }
+                                },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = DarkNavyBg,
                                     checkedTrackColor = BrightCyan,
