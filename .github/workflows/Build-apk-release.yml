@@ -27,6 +27,10 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      - name: Force Headless Mode for KSP
+        run: |
+          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 -Djava.awt.headless=true" >> gradle.properties
+
       - name: Decode Production Keystore
         env:
           ENCODED_STRING: ${{ secrets.KEYSTORE_BASE64 }}
@@ -35,11 +39,13 @@ jobs:
 
       - name: Build & Sign Release APK
         env:
+          # Yeh environment variable ensure karega ki koi bhi Java process UI na maange
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
           SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           SIGNING_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
         run: |
-          gradle assembleRelease -Djava.awt.headless=true \
+          gradle assembleRelease \
             -Pandroid.injected.signing.store.file=$(pwd)/release-keystore.jks \
             -Pandroid.injected.signing.store.password=$SIGNING_STORE_PASSWORD \
             -Pandroid.injected.signing.key.alias=$SIGNING_KEY_ALIAS \
