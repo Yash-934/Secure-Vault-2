@@ -183,6 +183,13 @@ class VaultRepository(private val vaultDao: VaultDao) {
     }
 
     /**
+     * Inserts a restored VaultItem into Room DB (for Disaster Recovery / Master Backup import).
+     */
+    suspend fun insertRestoredVaultItem(item: VaultItem): Long = withContext(Dispatchers.IO) {
+        vaultDao.insertVaultItem(item)
+    }
+
+    /**
      * Decrypts encrypted vault file directly in-memory to a ByteArray for viewing.
      * Keeps decrypted content transient in memory.
      */

@@ -5,6 +5,7 @@ sealed class NavRoutes(val route: String) {
     object Dashboard : NavRoutes("dashboard")
     object DecoyVault : NavRoutes("decoy_vault")
     object Settings : NavRoutes("settings")
+    object IntruderLogs : NavRoutes("intruder_logs")
     object About : NavRoutes("about")
     object MediaViewer : NavRoutes("media_viewer/{itemId}") {
         fun createRoute(itemId: Long): String = "media_viewer/$itemId"

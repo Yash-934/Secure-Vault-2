@@ -1,6 +1,9 @@
 package com.example.ui.navigation
 
 import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -12,15 +15,18 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.example.data.AppDatabase
 import com.example.data.local.VaultSettings
 import com.example.domain.model.VaultMode
 import com.example.ui.VaultViewModel
+import com.example.ui.components.BackupPasswordDialog
 import com.example.ui.components.ChangePinDialog
 import com.example.ui.components.ImportPromptDialog
 import com.example.ui.components.StealthModeDialog
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.DecoyVaultScreen
+import com.example.ui.screens.IntruderLogsScreen
 import com.example.ui.screens.LockScreen
 import com.example.ui.screens.MediaViewerScreen
 import com.example.ui.screens.SettingsScreen
@@ -49,8 +55,34 @@ fun VaultNavHost(
 
     var showMasterPinDialog by remember { mutableStateOf(false) }
     var showDecoyPinDialog by remember { mutableStateOf(false) }
+    var showKillPinDialog by remember { mutableStateOf(false) }
     var showStealthDialog by remember { mutableStateOf(false) }
     var pinErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Backup & Restore SAF dialog states
+    var exportTargetUri by remember { mutableStateOf<Uri?>(null) }
+    var importSourceUri by remember { mutableStateOf<Uri?>(null) }
+    var showExportPasswordDialog by remember { mutableStateOf(false) }
+    var showImportPasswordDialog by remember { mutableStateOf(false) }
+
+    // Storage Access Framework (SAF) Launchers for Master Backup
+    val exportBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) {
+            exportTargetUri = uri
+            showExportPasswordDialog = true
+        }
+    }
+
+    val importBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            importSourceUri = uri
+            showImportPasswordDialog = true
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(vaultMode) {
         when (vaultMode) {
@@ -80,17 +112,20 @@ fun VaultNavHost(
     ) {
         // 1. Lock Screen Destination
         composable(NavRoutes.Lock.route) {
+            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
             LockScreen(
                 onAuthenticateClick = onTriggerBiometrics,
                 onPinSubmit = { enteredPin ->
                     val success = vaultViewModel.authenticateWithPin(
+                        context = context,
+                        lifecycleOwner = lifecycleOwner,
                         enteredPin = enteredPin,
-                        masterPin = settings.masterPin,
-                        decoyPin = settings.decoyPin
+                        settings = settings
                     )
                     if (success) {
                         pinErrorMessage = null
                         if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                            vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
                             navController.navigate(NavRoutes.DecoyVault.route) {
                                 popUpTo(NavRoutes.Lock.route) { inclusive = true }
                             }
@@ -168,7 +203,25 @@ fun VaultNavHost(
                 onChangeMasterPinClick = { showMasterPinDialog = true },
                 onChangeDecoyPinClick = { showDecoyPinDialog = true },
                 onTogglePanicFlip = { settingsViewModel.setPanicFlipEnabled(it) },
-                onOpenStealthDialog = { showStealthDialog = true }
+                onToggleCamouflage = { settingsViewModel.setCamouflageEnabled(context, it) },
+                onToggleScreenProtection = { settingsViewModel.setScreenProtectionEnabled(it) },
+                onExportBackupClick = { exportBackupLauncher.launch("vault_master_backup_${System.currentTimeMillis()}.bin") },
+                onImportBackupClick = { importBackupLauncher.launch(arrayOf("*/*")) },
+                onViewIntruderLogsClick = { navController.navigate(NavRoutes.IntruderLogs.route) },
+                onOpenStealthDialog = { showStealthDialog = true },
+                onToggleKillPin = { settingsViewModel.setKillPinEnabled(it) },
+                onChangeKillPinClick = { showKillPinDialog = true },
+                onToggleIntruderSelfie = { settingsViewModel.setIntruderSelfieEnabled(it) },
+                onToggleDeadManSwitch = { settingsViewModel.setDeadManSwitchEnabled(context, it) },
+                onChangeDeadManDays = { settingsViewModel.setDeadManDays(it) },
+                onExecuteSelfDestructClick = { vaultViewModel.executeSelfDestruct(context) },
+                onEmbedStegoClick = {
+                    // Quick stego toast trigger feedback
+                    vaultViewModel.clearStatusMessage()
+                },
+                onExtractStegoClick = {
+                    vaultViewModel.clearStatusMessage()
+                }
             )
 
             if (showMasterPinDialog) {
@@ -195,6 +248,18 @@ fun VaultNavHost(
                 )
             }
 
+            if (showKillPinDialog) {
+                ChangePinDialog(
+                    title = "Configure Kill PIN",
+                    subtitle = "Entering this PIN on the lock screen will IMMEDIATELY execute nuclear self-destruct.",
+                    onDismiss = { showKillPinDialog = false },
+                    onSavePin = {
+                        settingsViewModel.updateKillPin(it)
+                        showKillPinDialog = false
+                    }
+                )
+            }
+
             if (showStealthDialog) {
                 StealthModeDialog(
                     isEnabled = settings.isStealthModeEnabled,
@@ -205,16 +270,70 @@ fun VaultNavHost(
                     }
                 )
             }
+
+            // Export Backup Password Prompt
+            if (showExportPasswordDialog && exportTargetUri != null) {
+                BackupPasswordDialog(
+                    title = "Encrypt Master Backup",
+                    subtitle = "Enter a password to derive an AES-256 key via PBKDF2 for this backup.",
+                    onDismiss = {
+                        showExportPasswordDialog = false
+                        exportTargetUri = null
+                    },
+                    onConfirm = { password ->
+                        showExportPasswordDialog = false
+                        val uri = exportTargetUri ?: return@BackupPasswordDialog
+                        exportTargetUri = null
+                        val outputStream = context.contentResolver.openOutputStream(uri)
+                        if (outputStream != null) {
+                            vaultViewModel.exportMasterBackup(context, password, outputStream)
+                        }
+                    }
+                )
+            }
+
+            // Import Backup Password Prompt
+            if (showImportPasswordDialog && importSourceUri != null) {
+                BackupPasswordDialog(
+                    title = "Decrypt Master Backup",
+                    subtitle = "Enter the password used when creating this backup file.",
+                    onDismiss = {
+                        showImportPasswordDialog = false
+                        importSourceUri = null
+                    },
+                    onConfirm = { password ->
+                        showImportPasswordDialog = false
+                        val uri = importSourceUri ?: return@BackupPasswordDialog
+                        importSourceUri = null
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        if (inputStream != null) {
+                            vaultViewModel.importMasterBackup(context, password, inputStream)
+                        }
+                    }
+                )
+            }
         }
 
-        // 5. About Screen
+        // 5. Intruder Logs Screen
+        composable(NavRoutes.IntruderLogs.route) {
+            val logsFlow = remember { AppDatabase.getDatabase(context).intruderLogDao().getAllLogs() }
+            val logs by logsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+
+            IntruderLogsScreen(
+                logs = logs,
+                onBackClick = { navController.popBackStack() },
+                onClearLogsClick = { vaultViewModel.clearIntruderLogs(context) }
+            )
+        }
+
+        // 6. About Screen
         composable(NavRoutes.About.route) {
             AboutScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }
 
-        // 6. Media Viewer Screen
+        // 7. Media Viewer Screen
         composable(
             route = NavRoutes.MediaViewer.route,
             arguments = listOf(navArgument("itemId") { type = NavType.LongType })

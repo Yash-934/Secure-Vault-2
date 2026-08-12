@@ -72,6 +72,66 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setCamouflageEnabled(context: android.content.Context, enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.setCamouflageEnabled(enabled)
+            com.example.security.CamouflageManager.setAppIconCamouflage(context, enabled)
+        }
+    }
+
+    fun updateKillPin(newPin: String) {
+        viewModelScope.launch {
+            settingsDataStore.updateKillPin(newPin)
+        }
+    }
+
+    fun setKillPinEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.setKillPinEnabled(enabled)
+        }
+    }
+
+    fun setIntruderSelfieEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.setIntruderSelfieEnabled(enabled)
+        }
+    }
+
+    fun setDeadManSwitchEnabled(context: android.content.Context, enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.setDeadManSwitchEnabled(enabled)
+            if (enabled) {
+                scheduleDeadManWork(context)
+            } else {
+                androidx.work.WorkManager.getInstance(context).cancelUniqueWork("DeadManSwitchWork")
+            }
+        }
+    }
+
+    fun setDeadManDays(days: Int) {
+        viewModelScope.launch {
+            settingsDataStore.setDeadManDays(days)
+        }
+    }
+
+    private fun scheduleDeadManWork(context: android.content.Context) {
+        val workRequest = androidx.work.PeriodicWorkRequestBuilder<com.example.security.DeadManSwitchWorker>(
+            12, java.util.concurrent.TimeUnit.HOURS
+        ).build()
+
+        androidx.work.WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            "DeadManSwitchWork",
+            androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
+            workRequest
+        )
+    }
+
+    fun setScreenProtectionEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.setScreenProtectionEnabled(enabled)
+        }
+    }
+
     class Factory(
         private val settingsDataStore: SettingsDataStore,
         private val securityAuditEngine: SecurityAuditEngine

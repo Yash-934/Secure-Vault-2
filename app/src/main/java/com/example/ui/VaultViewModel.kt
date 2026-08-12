@@ -80,17 +80,169 @@ class VaultViewModel(val repository: VaultRepository) : ViewModel() {
         _isUnlocked.value = true
     }
 
-    fun authenticateWithPin(enteredPin: String, masterPin: String, decoyPin: String): Boolean {
-        return when (enteredPin) {
-            masterPin -> {
-                unlockRealVault()
-                true
+    // Consecutive Failed Attempts Counter
+    var consecutiveFailedAttempts = 0
+        private set
+
+    fun executeSelfDestruct(context: Context) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            com.example.security.SelfDestructManager.executeNuclearSelfDestruct(context)
+            lockVault()
+            _isProcessing.value = false
+            _statusMessage.value = "NUCLEAR SELF-DESTRUCT EXECUTED: All vault files, keys, and databases shredded!"
+        }
+    }
+
+    fun authenticateWithPin(
+        context: Context,
+        lifecycleOwner: androidx.lifecycle.LifecycleOwner?,
+        enteredPin: String,
+        settings: com.example.data.local.VaultSettings
+    ): Boolean {
+        // 1. Check Kill PIN
+        if (settings.isKillPinEnabled && enteredPin == settings.killPin) {
+            logIntruderAttempt(context, "KILL_PIN_TRIGGERED", "Nuclear Kill PIN entered! Shredding all data...")
+            executeSelfDestruct(context)
+            return false
+        }
+
+        // 2. Check Master PIN
+        if (enteredPin == settings.masterPin) {
+            unlockRealVault()
+            consecutiveFailedAttempts = 0
+            return true
+        }
+
+        // 3. Check Decoy PIN
+        if (enteredPin == settings.decoyPin) {
+            unlockDecoyVault()
+            consecutiveFailedAttempts = 0
+            return true
+        }
+
+        // 4. Incorrect PIN
+        consecutiveFailedAttempts++
+        logIntruderAttempt(context, "PIN_FAILED", "Incorrect PIN attempt #$consecutiveFailedAttempts")
+
+        if (consecutiveFailedAttempts >= 3 && settings.isIntruderSelfieEnabled && lifecycleOwner != null) {
+            com.example.security.IntruderCaptureManager.captureIntruderSelfie(
+                context = context,
+                lifecycleOwner = lifecycleOwner,
+                attemptType = "INTRUDER_SELFIE_3X",
+                details = "Captured 3 consecutive failed PIN attempts"
+            )
+            consecutiveFailedAttempts = 0
+        }
+
+        return false
+    }
+
+    fun hideItemInStegoJpeg(context: Context, item: VaultItem, coverJpegInputStream: java.io.InputStream, outputStream: java.io.OutputStream) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            try {
+                val decryptedVaultBytes = repository.decryptFileToByteArray(context, item)
+                if (decryptedVaultBytes == null) {
+                    _statusMessage.value = "Failed to decrypt vault file for steganography embedding."
+                    _isProcessing.value = false
+                    return@launch
+                }
+
+                val coverBytes = coverJpegInputStream.readBytes()
+                val stegoBytes = com.example.security.SteganographyManager.embedPayloadInJpeg(coverBytes, decryptedVaultBytes)
+                outputStream.write(stegoBytes)
+                outputStream.flush()
+                outputStream.close()
+
+                _statusMessage.value = "Vault item embedded inside JPEG via Steganography!"
+            } catch (e: Exception) {
+                _statusMessage.value = "Steganography embedding failed: ${e.localizedMessage}"
+            } finally {
+                _isProcessing.value = false
             }
-            decoyPin -> {
-                unlockDecoyVault()
-                true
+        }
+    }
+
+    fun extractItemFromStegoJpeg(context: Context, stegoJpegInputStream: java.io.InputStream) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            try {
+                val stegoBytes = stegoJpegInputStream.readBytes()
+                val extractedBytes = com.example.security.SteganographyManager.extractPayloadFromJpeg(stegoBytes)
+
+                if (extractedBytes != null) {
+                    val tempFile = java.io.File(context.cacheDir, "stego_extracted_${System.currentTimeMillis()}.bin")
+                    tempFile.writeBytes(extractedBytes)
+                    val uri = Uri.fromFile(tempFile)
+
+                    val result = repository.encryptAndImportFile(context, uri, true)
+                    result.onSuccess {
+                        _statusMessage.value = "Steganography payload extracted & imported into Vault!"
+                    }.onFailure {
+                        _statusMessage.value = "Failed to import extracted steganography payload."
+                    }
+                } else {
+                    _statusMessage.value = "No valid Steganography payload found in selected JPEG image."
+                }
+            } catch (e: Exception) {
+                _statusMessage.value = "Steganography extraction failed: ${e.localizedMessage}"
+            } finally {
+                _isProcessing.value = false
             }
-            else -> false
+        }
+    }
+
+    fun logIntruderAttempt(context: Context, attemptType: String, details: String = "Unauthorized access attempt blocked") {
+        viewModelScope.launch {
+            try {
+                val db = com.example.data.AppDatabase.getDatabase(context)
+                db.intruderLogDao().insertLog(
+                    com.example.data.IntruderLog(
+                        attemptType = attemptType,
+                        details = details
+                    )
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun clearIntruderLogs(context: Context) {
+        viewModelScope.launch {
+            try {
+                val db = com.example.data.AppDatabase.getDatabase(context)
+                db.intruderLogDao().clearLogs()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun exportMasterBackup(context: Context, masterPassword: String, outputStream: java.io.OutputStream) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            val result = com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, outputStream, repository)
+            _isProcessing.value = false
+            result.onSuccess {
+                _statusMessage.value = "Master Encrypted Backup exported successfully!"
+            }.onFailure { err ->
+                _statusMessage.value = "Backup failed: ${err.localizedMessage ?: "Unknown error"}"
+            }
+        }
+    }
+
+    fun importMasterBackup(context: Context, masterPassword: String, inputStream: java.io.InputStream) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            val result = com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, inputStream, repository)
+            _isProcessing.value = false
+            result.onSuccess { restoredCount ->
+                _statusMessage.value = "Disaster Recovery complete! Restored $restoredCount item(s)."
+            }.onFailure { err ->
+                _statusMessage.value = "Restore failed: Invalid password or corrupt backup."
+            }
         }
     }
 

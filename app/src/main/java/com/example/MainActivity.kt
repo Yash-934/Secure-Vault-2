@@ -3,6 +3,7 @@ package com.example
 import android.app.Activity.RESULT_OK
 import android.content.IntentSender
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -50,6 +51,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         enableEdgeToEdge()
 
         biometricPromptManager = BiometricPromptManager(this)
@@ -61,6 +63,15 @@ class MainActivity : FragmentActivity() {
                 val deleteIntentSender by vaultViewModel.deleteIntentSender.collectAsStateWithLifecycle()
                 val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
                 val isUnlocked by vaultViewModel.isUnlocked.collectAsStateWithLifecycle()
+
+                // Dynamically update Anti-Screen Capture (FLAG_SECURE)
+                LaunchedEffect(settings.isScreenProtectionEnabled) {
+                    if (settings.isScreenProtectionEnabled) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                }
 
                 // MediaStore delete permission launcher for Android 10+
                 val deleteIntentLauncher = rememberLauncherForActivityResult(
@@ -147,6 +158,7 @@ class MainActivity : FragmentActivity() {
                     }
                     is BiometricPromptManager.AuthResult.Error -> {
                         Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
+                        vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", result.message)
                     }
                     else -> {}
                 }

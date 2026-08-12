@@ -34,13 +34,15 @@ class SecurityAuditEngine @Inject constructor(
         val cryptoCheck = checkAesGcmCryptoTest()
         val biometricCheck = checkBiometricAvailability()
         val storageCheck = checkPrivateStoragePath()
+        val rootEnvironmentCheck = !RootDetectionManager.isDeviceRooted(context)
 
         val checkResults = mapOf(
             "Internet Permission Denied (Network Isolation)" to internetCheck,
             "Android Keystore Key Integrity" to keystoreCheck,
             "AES-256-GCM Buffer Encryption Test" to cryptoCheck,
             "Biometric Hardware & Prompt Availability" to biometricCheck,
-            "App-Private Storage Path Isolation" to storageCheck
+            "App-Private Storage Path Isolation" to storageCheck,
+            "Root / Custom ROM Tamper Protection" to rootEnvironmentCheck
         )
 
         val allPassed = checkResults.values.all { it }

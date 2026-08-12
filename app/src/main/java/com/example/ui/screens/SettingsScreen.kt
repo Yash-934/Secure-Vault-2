@@ -27,16 +27,21 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PhonelinkSetup
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -50,9 +55,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.VaultSettings
 import com.example.security.AuditResult
+import com.example.ui.components.ChangePinDialog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -88,8 +99,23 @@ fun SettingsScreen(
     onChangeMasterPinClick: () -> Unit,
     onChangeDecoyPinClick: () -> Unit,
     onTogglePanicFlip: (Boolean) -> Unit,
-    onOpenStealthDialog: () -> Unit
+    onToggleCamouflage: (Boolean) -> Unit = {},
+    onToggleScreenProtection: (Boolean) -> Unit = {},
+    onExportBackupClick: () -> Unit = {},
+    onImportBackupClick: () -> Unit = {},
+    onViewIntruderLogsClick: () -> Unit = {},
+    onOpenStealthDialog: () -> Unit = {},
+    onToggleKillPin: (Boolean) -> Unit = {},
+    onChangeKillPinClick: () -> Unit = {},
+    onToggleIntruderSelfie: (Boolean) -> Unit = {},
+    onToggleDeadManSwitch: (Boolean) -> Unit = {},
+    onChangeDeadManDays: (Int) -> Unit = {},
+    onExecuteSelfDestructClick: () -> Unit = {},
+    onEmbedStegoClick: () -> Unit = {},
+    onExtractStegoClick: () -> Unit = {}
 ) {
+    var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
+    var showChangeKillPinDialog by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = DarkNavyBg,
         topBar = {
@@ -503,7 +529,458 @@ fun SettingsScreen(
                         onClick = onOpenStealthDialog,
                         modifier = Modifier.testTag("stealth_mode_item")
                     )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // Item 3: App Icon Camouflage (Calculator Disguise)
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GridView,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "App Icon Camouflage",
+                        subtitle = "Disguise home launcher icon as a stealth Calculator",
+                        trailing = {
+                            Switch(
+                                checked = settings.isCamouflageEnabled,
+                                onCheckedChange = onToggleCamouflage,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DarkNavyBg,
+                                    checkedTrackColor = BrightCyan,
+                                    uncheckedThumbColor = SubtitleText,
+                                    uncheckedTrackColor = CardBg,
+                                    uncheckedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier.testTag("camouflage_switch")
+                            )
+                        }
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // Item 4: Anti-Screen Capture (FLAG_SECURE)
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PanicRed.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = PanicRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Anti-Screen Capture (FLAG_SECURE)",
+                        subtitle = "Blocks screenshots/recording (Note: turns web preview black)",
+                        trailing = {
+                            Switch(
+                                checked = settings.isScreenProtectionEnabled,
+                                onCheckedChange = onToggleScreenProtection,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DarkNavyBg,
+                                    checkedTrackColor = PanicRed,
+                                    uncheckedThumbColor = SubtitleText,
+                                    uncheckedTrackColor = CardBg,
+                                    uncheckedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier.testTag("screen_protection_switch")
+                            )
+                        }
+                    )
                 }
+            }
+
+            // SECTION 4: ANTI-FORENSICS & DISASTER RECOVERY
+            SectionHeader(title = "ANTI-FORENSICS & DISASTER RECOVERY")
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+            ) {
+                Column {
+                    // Item 1: Export Encrypted Master Backup
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Export Encrypted Master Backup",
+                        subtitle = "ZIP archive encrypted via PBKDF2 password for offline SAF export",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Export Backup",
+                                tint = BrightCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = onExportBackupClick,
+                        modifier = Modifier.testTag("export_backup_item")
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // Item 2: Restore Master Backup
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Restore Encrypted Master Backup",
+                        subtitle = "Decrypt and restore vault files from a master backup file",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Restore Backup",
+                                tint = BrightCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = onImportBackupClick,
+                        modifier = Modifier.testTag("restore_backup_item")
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // Item 3: View Intruder Access Logs
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PanicRed.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = PanicRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Intruder Access Logs",
+                        subtitle = "Review timestamp records of failed PIN/Biometric breach attempts",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "View Intruder Logs",
+                                tint = PanicRed,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = onViewIntruderLogsClick,
+                        modifier = Modifier.testTag("intruder_logs_item")
+                    )
+                }
+            }
+
+            // SECTION 5: NUCLEAR & GHOST PROTOCOL (PHASE 5)
+            SectionHeader(title = "NUCLEAR & GHOST PROTOCOL")
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PanicRed.copy(alpha = 0.5f))
+            ) {
+                Column {
+                    // 1. Kill PIN (Self-Destruct PIN)
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PanicRed.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = PanicRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "The 'Kill PIN' (Self-Destruct)",
+                        subtitle = "Secondary PIN that instantly shreds all files, keys & databases upon input",
+                        trailing = {
+                            Switch(
+                                checked = settings.isKillPinEnabled,
+                                onCheckedChange = onToggleKillPin,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DarkNavyBg,
+                                    checkedTrackColor = PanicRed,
+                                    uncheckedThumbColor = SubtitleText,
+                                    uncheckedTrackColor = CardBg,
+                                    uncheckedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier.testTag("kill_pin_switch")
+                            )
+                        }
+                    )
+
+                    if (settings.isKillPinEnabled) {
+                        HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                        SettingRowItem(
+                            icon = { Spacer(modifier = Modifier.size(36.dp)) },
+                            title = "Configure Kill PIN",
+                            subtitle = "Current Kill PIN: ****",
+                            trailing = {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit Kill PIN",
+                                    tint = PanicRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            onClick = { showChangeKillPinDialog = true },
+                            modifier = Modifier.testTag("change_kill_pin_item")
+                        )
+                    }
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // 2. Intruder Selfie (CameraX)
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Intruder Selfie (CameraX)",
+                        subtitle = "Silently capture front camera photo on 3 consecutive failed PIN attempts",
+                        trailing = {
+                            Switch(
+                                checked = settings.isIntruderSelfieEnabled,
+                                onCheckedChange = onToggleIntruderSelfie,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DarkNavyBg,
+                                    checkedTrackColor = BrightCyan,
+                                    uncheckedThumbColor = SubtitleText,
+                                    uncheckedTrackColor = CardBg,
+                                    uncheckedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier.testTag("intruder_selfie_switch")
+                            )
+                        }
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // 3. Steganography (File Hiding in JPEG)
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Image,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Steganography Engine",
+                        subtitle = "Embed/extract encrypted vault files hidden inside normal JPEG photos",
+                        trailing = {
+                            Row {
+                                TextButton(onClick = onEmbedStegoClick) {
+                                    Text("Embed", color = BrightCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                                TextButton(onClick = onExtractStegoClick) {
+                                    Text("Extract", color = PassGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // 4. Dead Man's Switch (WorkManager)
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PanicRed.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Timer,
+                                    contentDescription = null,
+                                    tint = PanicRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Dead Man's Switch",
+                        subtitle = "Auto self-destruct if vault is inactive for ${settings.deadManDays} days",
+                        trailing = {
+                            Switch(
+                                checked = settings.isDeadManSwitchEnabled,
+                                onCheckedChange = onToggleDeadManSwitch,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DarkNavyBg,
+                                    checkedTrackColor = PanicRed,
+                                    uncheckedThumbColor = SubtitleText,
+                                    uncheckedTrackColor = CardBg,
+                                    uncheckedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier.testTag("dead_man_switch")
+                            )
+                        }
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // 5. Manual Nuclear Wipe Action
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PanicRed),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteForever,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "EXECUTE NUCLEAR SELF-DESTRUCT NOW",
+                        subtitle = "Irreversibly shred all internal storage, keys, logs and cache immediately",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Execute Self Destruct",
+                                tint = PanicRed,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = { showConfirmSelfDestructDialog = true },
+                        modifier = Modifier.testTag("nuclear_self_destruct_now_item")
+                    )
+                }
+            }
+
+            if (showChangeKillPinDialog) {
+                ChangePinDialog(
+                    title = "Configure Kill PIN",
+                    subtitle = "Entering this PIN on lock screen will IMMEDIATELY execute nuclear self-destruct.",
+                    onDismiss = { showChangeKillPinDialog = false },
+                    onSavePin = { newPin ->
+                        onChangeKillPinClick()
+                        showChangeKillPinDialog = false
+                    }
+                )
+            }
+
+            if (showConfirmSelfDestructDialog) {
+                AlertDialog(
+                    onDismissRequest = { showConfirmSelfDestructDialog = false },
+                    containerColor = DarkNavyBg,
+                    title = {
+                        Text(
+                            text = "DANGER: NUCLEAR SELF-DESTRUCT",
+                            color = PanicRed,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Are you absolutely sure? This action will zero-overwrite and shred ALL files, database entries, keys, and logs in internal storage immediately. This CANNOT be undone!",
+                            color = Color.White,
+                            fontSize = 13.sp
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showConfirmSelfDestructDialog = false
+                                onExecuteSelfDestructClick()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = PanicRed, contentColor = Color.White)
+                        ) {
+                            Text("CONFIRM SHRED")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showConfirmSelfDestructDialog = false }) {
+                            Text("Cancel", color = SubtitleText)
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
