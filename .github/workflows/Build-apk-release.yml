@@ -2,30 +2,30 @@ name: Android Release Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main" ][span_1](start_span)[span_1](end_span)
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: # Allows manual trigger
+    branches: [ "main" ][span_2](start_span)[span_2](end_span)
+  workflow_dispatch: # Allows manual trigger[span_3](start_span)[span_3](end_span)
 
 jobs:
   build-release:
     name: Build & Sign Release APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest[span_4](start_span)[span_4](end_span)
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4[span_5](start_span)[span_5](end_span)
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4[span_6](start_span)[span_6](end_span)
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          java-version: '21[span_7](start_span)'[span_7](end_span)
+          distribution: 'temurin[span_8](start_span)'[span_8](end_span)
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v3[span_9](start_span)[span_9](end_span)
         with:
-          gradle-version: '9.3.1'
+          gradle-version: '9.3.1[span_10](start_span)'[span_10](end_span)
 
       - name: Decode Production Keystore
         env:
@@ -39,14 +39,14 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           SIGNING_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
         run: |
-          gradle assembleRelease \
+          gradle assembleRelease -Djava.awt.headless=true \
             -Pandroid.injected.signing.store.file=$(pwd)/release-keystore.jks \
             -Pandroid.injected.signing.store.password=$SIGNING_STORE_PASSWORD \
             -Pandroid.injected.signing.key.alias=$SIGNING_KEY_ALIAS \
             -Pandroid.injected.signing.key.password=$SIGNING_KEY_PASSWORD
 
       - name: Upload Release APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4[span_11](start_span)[span_11](end_span)
         with:
           name: vault-app-release
           path: app/build/outputs/apk/release/app-release.apk
