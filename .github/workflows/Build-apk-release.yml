@@ -3,8 +3,6 @@ name: Android Release Build
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -27,19 +25,12 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Force Headless Mode for KSP
-        run: |
-          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8 -Djava.awt.headless=true" >> gradle.properties
-
       - name: Decode Production Keystore
-        env:
-          ENCODED_STRING: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo $ENCODED_STRING | base64 --decode > release-keystore.jks
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release-keystore.jks
 
       - name: Build & Sign Release APK
         env:
-          # Yeh environment variable ensure karega ki koi bhi Java process UI na maange
           JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
           SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
