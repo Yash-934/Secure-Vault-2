@@ -252,6 +252,24 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
                             }
                         }
 
+                        // Try name match if size fails
+                        if (resolvedMediaStoreUri == null && originalName.isNotEmpty() && !originalName.startsWith("media_")) {
+                            val nameSelection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+                            val nameArgs = arrayOf(originalName)
+                            contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), nameSelection, nameArgs, null)?.use { cursor ->
+                                if (cursor.moveToFirst()) {
+                                    resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
+                                }
+                            }
+                        }
+
+                        // Try extracting ID directly from Picker URI
+                        if (resolvedMediaStoreUri == null) {
+                            sourceUri.lastPathSegment?.toLongOrNull()?.let { id ->
+                                resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, id)
+                            }
+                        }
+
                         resolvedMediaStoreUri?.let { mediaStoreUri ->
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                                 try {
