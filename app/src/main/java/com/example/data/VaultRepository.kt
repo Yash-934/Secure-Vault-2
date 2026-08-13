@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import com.example.security.CryptoManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
@@ -22,7 +23,8 @@ import java.util.UUID
 data class ImportResult(
     val vaultItem: VaultItem,
     val originalDeleted: Boolean,
-    val deleteIntentSender: android.content.IntentSender? = null
+    val deleteIntentSender: android.content.IntentSender? = null,
+    val mediaStoreUriToDelete: android.net.Uri? = null
 )
 
 class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: String = "vault") {
@@ -36,6 +38,14 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
 
     suspend fun createFolder(name: String, iconType: String = "FOLDER") = withContext(Dispatchers.IO) {
         vaultDao.insertFolder(VaultFolder(name = name, iconType = iconType))
+    }
+
+    suspend fun renameFolder(oldName: String, newName: String) = withContext(Dispatchers.IO) {
+        val oldFolder = vaultDao.getAllFolders().firstOrNull()?.find { it.name == oldName }
+        val iconType = oldFolder?.iconType ?: "FOLDER"
+        vaultDao.insertFolder(VaultFolder(name = newName, iconType = iconType))
+        vaultDao.renameItemsFolder(oldName, newName)
+        vaultDao.deleteFolder(oldName)
     }
 
     suspend fun deleteFolder(name: String) = withContext(Dispatchers.IO) {
@@ -184,6 +194,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             // 5. Handle deletion of original file if requested
             var originalDeleted = false
             var deleteIntentSender: android.content.IntentSender? = null
+            var resolvedMediaStoreUri: android.net.Uri? = null
 
             if (deleteOriginal) {
                 try {
@@ -219,25 +230,40 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
                 if (!originalDeleted && deleteIntentSender == null) {
                     try {
                         val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        
+                        // Try exact match first
                         val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.SIZE} = ?"
                         val selectionArgs = arrayOf(originalName, sizeBytes.toString())
                         
                         contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), selection, selectionArgs, null)?.use { cursor ->
                             if (cursor.moveToFirst()) {
-                                val id = cursor.getLong(0)
-                                val mediaStoreUri = android.content.ContentUris.withAppendedId(collection, id)
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                    try {
-                                        val rows = contentResolver.delete(mediaStoreUri, null, null)
-                                        if (rows > 0) originalDeleted = true
-                                    } catch (se: SecurityException) {
-                                        val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(mediaStoreUri))
-                                        deleteIntentSender = deleteRequest.intentSender
-                                    }
-                                } else {
+                                resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
+                            }
+                        }
+                        
+                        // Try size only match if exact match fails
+                        if (resolvedMediaStoreUri == null && sizeBytes > 0) {
+                            val sizeSelection = "${MediaStore.MediaColumns.SIZE} = ?"
+                            val sizeArgs = arrayOf(sizeBytes.toString())
+                            contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), sizeSelection, sizeArgs, null)?.use { cursor ->
+                                if (cursor.moveToFirst()) {
+                                    resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
+                                }
+                            }
+                        }
+
+                        resolvedMediaStoreUri?.let { mediaStoreUri ->
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                try {
                                     val rows = contentResolver.delete(mediaStoreUri, null, null)
                                     if (rows > 0) originalDeleted = true
+                                } catch (se: SecurityException) {
+                                    val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(mediaStoreUri))
+                                    deleteIntentSender = deleteRequest.intentSender
                                 }
+                            } else {
+                                val rows = contentResolver.delete(mediaStoreUri, null, null)
+                                if (rows > 0) originalDeleted = true
                             }
                         }
                     } catch (e: Exception) {
@@ -246,7 +272,14 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
                 }
             }
 
-            Result.success(ImportResult(savedVaultItem, originalDeleted, deleteIntentSender))
+            // For Android 11+, we need to return the resolvedUri to batch delete requests
+            val returnUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !originalDeleted) {
+                resolvedMediaStoreUri
+            } else {
+                null
+            }
+
+            Result.success(ImportResult(savedVaultItem, originalDeleted, deleteIntentSender, returnUri))
         } catch (e: Exception) {
             android.util.Log.e("VaultRepository", "Import failed for URI: $sourceUri - ${e.message}", e)
             Result.failure(e)

@@ -185,11 +185,12 @@ private fun IntruderLogCard(log: IntruderLog, formattedDate: String) {
         colors = CardDefaults.cardColors(containerColor = CardBg),
         border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedCornerShape(10.dp))
@@ -245,5 +246,27 @@ private fun IntruderLogCard(log: IntruderLog, formattedDate: String) {
                 )
             }
         }
+        
+        if (log.imagePath != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp)
+                    .padding(horizontal = 14.dp)
+                    .padding(bottom = 14.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                coil.compose.AsyncImage(
+                    model = java.io.File(log.imagePath),
+                    contentDescription = "Intruder Selfie",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                )
+            }
+        }
     }
+}
 }

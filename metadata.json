@@ -1,5 +1,5 @@
 {
-  "name": "Secure Vault",
+  "name": "Quantum Vault",
   "description": "A highly secure, offline-only Android Vault app to hide and encrypt personal photos and videos using AES-256-GCM and Biometric authentication.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

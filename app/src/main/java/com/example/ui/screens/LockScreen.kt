@@ -57,14 +57,17 @@ import com.example.ui.theme.VaultPrimaryCyan
 fun LockScreen(
     onAuthenticateClick: () -> Unit,
     onPinSubmit: (pin: String) -> Unit,
-    errorMessage: String? = null
+    errorMessage: String? = null,
+    errorTrigger: Int = 0
 ) {
     var enteredPin by remember { mutableStateOf("") }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     // Auto-clear PIN input when error occurs
-    LaunchedEffect(errorMessage) {
-        if (!errorMessage.isNullOrEmpty()) {
+    LaunchedEffect(errorTrigger) {
+        if (errorTrigger > 0) {
             enteredPin = ""
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
         }
     }
 

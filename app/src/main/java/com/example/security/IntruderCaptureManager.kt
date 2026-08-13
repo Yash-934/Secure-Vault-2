@@ -45,7 +45,14 @@ object IntruderCaptureManager {
                     .build()
 
                 // Select front camera
-                val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                var cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                if (!cameraProvider.hasCamera(cameraSelector)) {
+                    cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                    if (!cameraProvider.hasCamera(cameraSelector)) {
+                        saveLogWithImage(context, attemptType, details + " (No camera available on device)", null)
+                        return@addListener
+                    }
+                }
 
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, imageCapture)
@@ -67,12 +74,12 @@ object IntruderCaptureManager {
 
                         override fun onError(exception: ImageCaptureException) {
                             cameraProvider.unbindAll()
-                            saveLogWithImage(context, attemptType, details, null)
+                            saveLogWithImage(context, attemptType, details + " (CameraX Error: ${exception.message})", null)
                         }
                     }
                 )
             } catch (e: Exception) {
-                saveLogWithImage(context, attemptType, details, null)
+                saveLogWithImage(context, attemptType, details + " (Exception: ${e.message})", null)
             }
         }, ContextCompat.getMainExecutor(context))
     }

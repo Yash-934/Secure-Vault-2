@@ -883,13 +883,21 @@ fun SettingsScreen(
                         title = "Steganography Engine",
                         subtitle = "Embed/extract encrypted vault files hidden inside normal JPEG photos",
                         trailing = {
-                            Row {
-                                TextButton(onClick = onEmbedStegoClick) {
-                                    Text("Embed", color = BrightCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                                TextButton(onClick = onExtractStegoClick) {
-                                    Text("Extract", color = PassGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Text(
+                                    text = "Embed",
+                                    color = BrightCyan,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable { onEmbedStegoClick() }.padding(vertical = 8.dp)
+                                )
+                                Text(
+                                    text = "Extract",
+                                    color = PassGreen,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable { onExtractStegoClick() }.padding(vertical = 8.dp)
+                                )
                             }
                         }
                     )

@@ -34,6 +34,9 @@ interface VaultDao {
     @Query("UPDATE vault_items SET folderName = 'Root' WHERE folderName = :folderName")
     suspend fun resetItemsInFolderToRoot(folderName: String)
 
+    @Query("UPDATE vault_items SET folderName = :newFolder WHERE folderName = :oldFolder")
+    suspend fun renameItemsFolder(oldFolder: String, newFolder: String)
+
     @Query("UPDATE vault_items SET folderName = :newFolder WHERE id = :itemId")
     suspend fun updateItemFolder(itemId: Long, newFolder: String)
 

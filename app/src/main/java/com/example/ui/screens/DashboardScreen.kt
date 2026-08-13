@@ -12,6 +12,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -118,6 +120,7 @@ fun DashboardScreen(
     onSelectFolder: (String) -> Unit = {},
     onCreateFolder: (String) -> Unit = {},
     onDeleteFolder: (String) -> Unit = {},
+    onRenameFolder: (oldName: String, newName: String) -> Unit = { _, _ -> },
     onMoveItem: (VaultItem, String) -> Unit = { _, _ -> },
     onCopyItem: (VaultItem, String) -> Unit = { _, _ -> },
     onFilesSelected: (List<Uri>) -> Unit,
@@ -127,8 +130,6 @@ fun DashboardScreen(
     onLockClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToAbout: () -> Unit,
-    deleteIntentSender: IntentSender? = null,
-    onClearDeleteIntentSender: () -> Unit = {},
     onClearStatusMessage: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -140,23 +141,8 @@ fun DashboardScreen(
     var isHudExpanded by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
+    var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var moveCopyTargetItem by remember { mutableStateOf<VaultItem?>(null) }
-
-    val deleteLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartIntentSenderForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            // Delete succeeded
-        }
-        onClearDeleteIntentSender()
-    }
-
-    LaunchedEffect(deleteIntentSender) {
-        if (deleteIntentSender != null) {
-            val request = IntentSenderRequest.Builder(deleteIntentSender).build()
-            deleteLauncher.launch(request)
-        }
-    }
 
     LaunchedEffect(statusMessage) {
         if (!statusMessage.isNullOrEmpty()) {
@@ -280,7 +266,7 @@ fun DashboardScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            text = "SECURE VAULT",
+                            text = "QUANTUM VAULT",
                             fontSize = 19.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = BrightCyan,
@@ -559,7 +545,8 @@ fun DashboardScreen(
                                 title = "📂 ${folder.name}",
                                 isSelected = selectedFolder == folder.name,
                                 onClick = { onSelectFolder(folder.name) },
-                                onDelete = { onDeleteFolder(folder.name) }
+                                onDelete = { onDeleteFolder(folder.name) },
+                                onRename = { renameFolderTarget = folder.name }
                             )
                         }
                     }
@@ -660,6 +647,17 @@ fun DashboardScreen(
                 onCreateFolder = { name ->
                     onCreateFolder(name)
                     showCreateFolderDialog = false
+                }
+            )
+        }
+        
+        renameFolderTarget?.let { targetFolder ->
+            com.example.ui.components.RenameFolderDialog(
+                initialName = targetFolder,
+                onDismiss = { renameFolderTarget = null },
+                onRenameFolder = { newName ->
+                    onRenameFolder(targetFolder, newName)
+                    renameFolderTarget = null
                 }
             )
         }
@@ -1389,19 +1387,26 @@ private fun getVaultItemIconAndBadge(mimeType: String, isVideo: Boolean): Pair<a
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun FolderChipItem(
     title: String,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onDelete: (() -> Unit)? = null
+    onDelete: (() -> Unit)? = null,
+    onRename: (() -> Unit)? = null
 ) {
+    var showMenu by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
             .background(if (isSelected) BrightCyan else DarkCapsuleBg)
             .border(1.dp, if (isSelected) BrightCyan else CapsuleBorder, RoundedCornerShape(16.dp))
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { if (onDelete != null || onRename != null) showMenu = true }
+            )
             .padding(horizontal = 14.dp, vertical = 7.dp)
             .testTag("folder_chip_${title.replace(" ", "_")}")
     ) {
@@ -1412,15 +1417,28 @@ private fun FolderChipItem(
                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                 color = if (isSelected) Color(0xFF03070C) else Color.White
             )
+        }
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            if (onRename != null) {
+                DropdownMenuItem(
+                    text = { Text("Rename Folder") },
+                    onClick = {
+                        showMenu = false
+                        onRename()
+                    }
+                )
+            }
             if (onDelete != null) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Delete Folder",
-                    tint = if (isSelected) Color(0xFF03070C) else MutedText,
-                    modifier = Modifier
-                        .size(14.dp)
-                        .clickable { onDelete() }
+                DropdownMenuItem(
+                    text = { Text("Delete Folder") },
+                    onClick = {
+                        showMenu = false
+                        onDelete()
+                    }
                 )
             }
         }

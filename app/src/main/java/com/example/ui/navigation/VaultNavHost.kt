@@ -59,6 +59,7 @@ fun VaultNavHost(
     var showKillPinDialog by remember { mutableStateOf(false) }
     var showStealthDialog by remember { mutableStateOf(false) }
     var pinErrorMessage by remember { mutableStateOf<String?>(null) }
+    var pinErrorTrigger by remember { androidx.compose.runtime.mutableIntStateOf(0) }
 
     // Backup & Restore SAF dialog states
     var exportTargetUri by remember { mutableStateOf<Uri?>(null) }
@@ -91,6 +92,8 @@ fun VaultNavHost(
         }
     }
 
+    var triggerStegoOutput by remember { mutableStateOf(false) }
+
     val stegoOutputLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("image/jpeg")
     ) { uri ->
@@ -104,9 +107,17 @@ fun VaultNavHost(
     ) { uri ->
         if (uri != null) {
             stegoCoverUri = uri
-            stegoOutputLauncher.launch("stego_vault_backup_${System.currentTimeMillis()}.jpg")
+            triggerStegoOutput = true
         }
     }
+
+    if (triggerStegoOutput) {
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            stegoOutputLauncher.launch("stego_vault_backup_${System.currentTimeMillis()}.jpg")
+            triggerStegoOutput = false
+        }
+    }
+
     val stegoExtractLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -170,9 +181,11 @@ fun VaultNavHost(
                         }
                     } else {
                         pinErrorMessage = "Incorrect PIN. Please try again."
+                        pinErrorTrigger++
                     }
                 },
-                errorMessage = pinErrorMessage
+                errorMessage = pinErrorMessage,
+                errorTrigger = pinErrorTrigger
             )
         }
 
@@ -209,7 +222,6 @@ fun VaultNavHost(
         composable(NavRoutes.Dashboard.route) {
             val selectedFolder by vaultViewModel.selectedFolder.collectAsStateWithLifecycle()
             val folders by vaultViewModel.folders.collectAsStateWithLifecycle()
-            val deleteIntentSender by vaultViewModel.deleteIntentSender.collectAsStateWithLifecycle()
 
             DashboardScreen(
                 vaultItems = vaultItems,
@@ -222,6 +234,7 @@ fun VaultNavHost(
                 onSelectFolder = { vaultViewModel.selectFolder(it) },
                 onCreateFolder = { vaultViewModel.createFolder(it) },
                 onDeleteFolder = { vaultViewModel.deleteFolder(it) },
+                onRenameFolder = { oldName, newName -> vaultViewModel.renameFolder(oldName, newName) },
                 onMoveItem = { item, destFolder -> vaultViewModel.moveItemToFolder(item.id, destFolder) },
                 onCopyItem = { item, destFolder -> vaultViewModel.copyItemToFolder(context, item, destFolder) },
                 onFilesSelected = { vaultViewModel.onFilesSelected(it) },
@@ -237,8 +250,6 @@ fun VaultNavHost(
                 },
                 onNavigateToSettings = { navController.navigate(NavRoutes.Settings.route) },
                 onNavigateToAbout = { navController.navigate(NavRoutes.About.route) },
-                deleteIntentSender = deleteIntentSender,
-                onClearDeleteIntentSender = { vaultViewModel.clearDeleteIntentSender() },
                 onClearStatusMessage = { vaultViewModel.clearStatusMessage() }
             )
 
@@ -285,7 +296,7 @@ fun VaultNavHost(
                     stegoCoverLauncher.launch(arrayOf("image/jpeg"))
                 },
                 onExtractStegoClick = {
-                    stegoExtractLauncher.launch(arrayOf("image/jpeg", "image/*"))
+                    stegoExtractLauncher.launch(arrayOf("image/jpeg"))
                 },
                 onHelpClick = {
                     navController.navigate(NavRoutes.Help.route)

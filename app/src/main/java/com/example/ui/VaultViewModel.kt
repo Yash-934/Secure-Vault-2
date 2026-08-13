@@ -360,6 +360,19 @@ class VaultViewModel(
         }
     }
 
+    fun renameFolder(oldName: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        
+        viewModelScope.launch {
+            repository.renameFolder(oldName, trimmed)
+            if (_selectedFolder.value == oldName) {
+                _selectedFolder.value = trimmed
+            }
+            _statusMessage.value = "Folder renamed to '$trimmed'."
+        }
+    }
+
     fun deleteFolder(folderName: String) {
         viewModelScope.launch {
             repository.deleteFolder(folderName)
@@ -412,17 +425,32 @@ class VaultViewModel(
         viewModelScope.launch {
             var successCount = 0
             var failCount = 0
+            val urisToDelete = mutableListOf<android.net.Uri>()
+            var fallbackIntentSender: android.content.IntentSender? = null
 
             for (uri in urisToImport) {
                 val result = repository.encryptAndImportFile(context, uri, deleteOriginal, targetFolder = targetFolder)
                 result.onSuccess { importRes ->
                     successCount++
-                    if (importRes.deleteIntentSender != null) {
-                        _deleteIntentSender.value = importRes.deleteIntentSender
+                    if (importRes.mediaStoreUriToDelete != null) {
+                        urisToDelete.add(importRes.mediaStoreUriToDelete)
+                    } else if (importRes.deleteIntentSender != null) {
+                        fallbackIntentSender = importRes.deleteIntentSender
                     }
                 }.onFailure {
                     failCount++
                 }
+            }
+
+            if (urisToDelete.isNotEmpty() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                try {
+                    val deleteRequest = android.provider.MediaStore.createDeleteRequest(context.contentResolver, urisToDelete)
+                    _deleteIntentSender.value = deleteRequest.intentSender
+                } catch (e: Exception) {
+                    _deleteIntentSender.value = fallbackIntentSender
+                }
+            } else if (fallbackIntentSender != null) {
+                _deleteIntentSender.value = fallbackIntentSender
             }
 
             _isProcessing.value = false
