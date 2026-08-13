@@ -27,20 +27,20 @@ class SettingsViewModel @Inject constructor(
     private val _isAuditing = MutableStateFlow(false)
     val isAuditing: StateFlow<Boolean> = _isAuditing.asStateFlow()
 
-    val isSettingsLoaded: StateFlow<Boolean> = settingsDataStore.settingsFlow
-        .map { true }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = false
-        )
+    private val _settings = MutableStateFlow(VaultSettings())
+    val settings: StateFlow<VaultSettings> = _settings.asStateFlow()
 
-    val settings: StateFlow<VaultSettings> = settingsDataStore.settingsFlow
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = VaultSettings()
-        )
+    private val _isSettingsLoaded = MutableStateFlow(false)
+    val isSettingsLoaded: StateFlow<Boolean> = _isSettingsLoaded.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            settingsDataStore.settingsFlow.collect { newSettings ->
+                _settings.value = newSettings
+                _isSettingsLoaded.value = true
+            }
+        }
+    }
 
     fun runSecurityAudit() {
         viewModelScope.launch {
