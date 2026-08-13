@@ -79,9 +79,13 @@ object VaultBackupManager {
                 if (vaultDir.exists()) {
                     vaultDir.listFiles()?.forEach { file ->
                         if (file.isFile) {
-                            zos.putNextEntry(ZipEntry("vault_data/${file.name}"))
+                            zos.putNextEntry(ZipEntry("vault_data_v2/${file.name}"))
                             FileInputStream(file).use { fis ->
-                                fis.copyTo(zos)
+                                try {
+                                    com.example.security.CryptoManager.decryptStreamToOutputStream(fis, zos)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
                             }
                             zos.closeEntry()
                         }
@@ -174,6 +178,17 @@ object VaultBackupManager {
                     if (entry.name == MANIFEST_FILENAME) {
                         val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
                         restoredItems = jsonAdapter.fromJson(manifestJson)
+                    } else if (entry.name.startsWith("vault_data_v2/")) {
+                        val fileName = File(entry.name).name
+                        val targetFile = File(vaultDir, fileName)
+                        try {
+                            FileOutputStream(targetFile).use { fos ->
+                                com.example.security.CryptoManager.encryptStream(zis, fos)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            targetFile.delete()
+                        }
                     } else if (entry.name.startsWith("vault_data/")) {
                         val fileName = File(entry.name).name
                         val targetFile = File(vaultDir, fileName)

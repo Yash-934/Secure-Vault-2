@@ -349,84 +349,6 @@ fun VaultNavHost(
                     }
                 )
             }
-
-            // Export Backup Password Prompt
-            if (showExportPasswordDialog && exportTargetUri != null) {
-                BackupPasswordDialog(
-                    title = "Encrypt Master Backup",
-                    subtitle = "Enter a password to derive an AES-256 key via PBKDF2 for this backup.",
-                    onDismiss = {
-                        showExportPasswordDialog = false
-                        exportTargetUri = null
-                    },
-                    onConfirm = { password ->
-                        showExportPasswordDialog = false
-                        val uri = exportTargetUri ?: return@BackupPasswordDialog
-                        exportTargetUri = null
-                        val outputStream = context.contentResolver.openOutputStream(uri)
-                        if (outputStream != null) {
-                            vaultViewModel.exportMasterBackup(context, password, outputStream)
-                        }
-                    }
-                )
-            }
-
-            // Import Backup Password Prompt
-            if (showImportPasswordDialog && importSourceUri != null) {
-                BackupPasswordDialog(
-                    title = "Decrypt Master Backup",
-                    subtitle = "Enter the password used when creating this backup file.",
-                    onDismiss = {
-                        showImportPasswordDialog = false
-                        importSourceUri = null
-                    },
-                    onConfirm = { password ->
-                        showImportPasswordDialog = false
-                        val uri = importSourceUri ?: return@BackupPasswordDialog
-                        importSourceUri = null
-                        val inputStream = context.contentResolver.openInputStream(uri)
-                        if (inputStream != null) {
-                            vaultViewModel.importMasterBackup(context, password, inputStream)
-                        }
-                    }
-                )
-            }
-
-            // Stego Embed Password Prompt
-            if (showStegoEmbedPasswordDialog && stegoCoverUri != null && stegoOutputUri != null) {
-                BackupPasswordDialog(
-                    title = "Encrypt Stego Backup",
-                    subtitle = "Enter a password to encrypt the backup before hiding it in the JPEG.",
-                    onDismiss = {
-                        showStegoEmbedPasswordDialog = false
-                        stegoCoverUri = null
-                        stegoOutputUri = null
-                    },
-                    onConfirm = { password ->
-                        showStegoEmbedPasswordDialog = false
-                        vaultViewModel.exportStegoBackup(context, password, stegoCoverUri!!, stegoOutputUri!!)
-                        stegoCoverUri = null
-                        stegoOutputUri = null
-                    }
-                )
-            }
-
-            // Stego Extract Password Prompt
-            if (showStegoExtractPasswordDialog && stegoExtractUri != null) {
-                BackupPasswordDialog(
-                    title = "Decrypt Stego Backup",
-                    subtitle = "Enter the password to decrypt the backup extracted from the JPEG.",
-                    onDismiss = {
-                        showStegoExtractPasswordDialog = false
-                        stegoExtractUri = null
-                    },
-                    onConfirm = { password ->
-                        showStegoExtractPasswordDialog = false
-                        vaultViewModel.importStegoBackup(context, password, stegoExtractUri!!)
-                        stegoExtractUri = null
-                    }
-                )
-            }
         }
 
         // 5. Intruder Logs Screen
@@ -482,6 +404,86 @@ fun VaultNavHost(
                     }
                 )
             }
+        }
+    }
+
+    if (vaultMode != VaultMode.LOCKED) {
+        // Export Backup Password Prompt
+        if (showExportPasswordDialog && exportTargetUri != null) {
+            BackupPasswordDialog(
+                title = "Encrypt Master Backup",
+                subtitle = "Enter a password to derive an AES-256 key via PBKDF2 for this backup.",
+                onDismiss = {
+                    showExportPasswordDialog = false
+                    exportTargetUri = null
+                },
+                onConfirm = { password ->
+                    showExportPasswordDialog = false
+                    val uri = exportTargetUri ?: return@BackupPasswordDialog
+                    exportTargetUri = null
+                    val outputStream = context.contentResolver.openOutputStream(uri)
+                    if (outputStream != null) {
+                        vaultViewModel.exportMasterBackup(context, password, outputStream)
+                    }
+                }
+            )
+        }
+
+        // Import Backup Password Prompt
+        if (showImportPasswordDialog && importSourceUri != null) {
+            BackupPasswordDialog(
+                title = "Decrypt Master Backup",
+                subtitle = "Enter the password used when creating this backup file.",
+                onDismiss = {
+                    showImportPasswordDialog = false
+                    importSourceUri = null
+                },
+                onConfirm = { password ->
+                    showImportPasswordDialog = false
+                    val uri = importSourceUri ?: return@BackupPasswordDialog
+                    importSourceUri = null
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    if (inputStream != null) {
+                        vaultViewModel.importMasterBackup(context, password, inputStream)
+                    }
+                }
+            )
+        }
+
+        // Stego Embed Password Prompt
+        if (showStegoEmbedPasswordDialog && stegoCoverUri != null && stegoOutputUri != null) {
+            BackupPasswordDialog(
+                title = "Encrypt Stego Backup",
+                subtitle = "Enter a password to encrypt the backup before hiding it in the JPEG.",
+                onDismiss = {
+                    showStegoEmbedPasswordDialog = false
+                    stegoCoverUri = null
+                    stegoOutputUri = null
+                },
+                onConfirm = { password ->
+                    showStegoEmbedPasswordDialog = false
+                    vaultViewModel.exportStegoBackup(context, password, stegoCoverUri!!, stegoOutputUri!!)
+                    stegoCoverUri = null
+                    stegoOutputUri = null
+                }
+            )
+        }
+
+        // Stego Extract Password Prompt
+        if (showStegoExtractPasswordDialog && stegoExtractUri != null) {
+            BackupPasswordDialog(
+                title = "Decrypt Stego Backup",
+                subtitle = "Enter the password to decrypt the backup extracted from the JPEG.",
+                onDismiss = {
+                    showStegoExtractPasswordDialog = false
+                    stegoExtractUri = null
+                },
+                onConfirm = { password ->
+                    showStegoExtractPasswordDialog = false
+                    vaultViewModel.importStegoBackup(context, password, stegoExtractUri!!)
+                    stegoExtractUri = null
+                }
+            )
         }
     }
 }

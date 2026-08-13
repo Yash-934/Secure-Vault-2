@@ -117,11 +117,6 @@ class MainActivity : FragmentActivity() {
                             Lifecycle.Event.ON_STOP -> {
                                 vaultViewModel.lockVault()
                             }
-                            Lifecycle.Event.ON_RESUME -> {
-                                if (!vaultViewModel.isUnlocked.value && settings.isBiometricsEnabled) {
-                                    triggerBiometricAuth()
-                                }
-                            }
                             else -> {}
                         }
                     }
