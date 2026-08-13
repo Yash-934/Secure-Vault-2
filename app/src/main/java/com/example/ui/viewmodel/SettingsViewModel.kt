@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -25,6 +26,14 @@ class SettingsViewModel @Inject constructor(
 
     private val _isAuditing = MutableStateFlow(false)
     val isAuditing: StateFlow<Boolean> = _isAuditing.asStateFlow()
+
+    val isSettingsLoaded: StateFlow<Boolean> = settingsDataStore.settingsFlow
+        .map { true }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = false
+        )
 
     val settings: StateFlow<VaultSettings> = settingsDataStore.settingsFlow
         .stateIn(

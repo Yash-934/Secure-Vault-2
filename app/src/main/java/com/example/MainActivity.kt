@@ -17,6 +17,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Color
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -61,6 +64,18 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             MyApplicationTheme {
+                val isSettingsLoaded by settingsViewModel.isSettingsLoaded.collectAsStateWithLifecycle()
+                
+                if (!isSettingsLoaded) {
+                    // Show a completely blank/black screen while loading to prevent camouflage flashes
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black)
+                    )
+                    return@MyApplicationTheme
+                }
+
                 val navController = rememberNavController()
                 val deleteIntentSender by vaultViewModel.deleteIntentSender.collectAsStateWithLifecycle()
                 val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
