@@ -1175,69 +1175,35 @@ fun SettingsScreen(
                 colors = CardDefaults.cardColors(containerColor = CardBg),
                 border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
             ) {
-                Column {
-                    SettingRowItem(
-                        icon = {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(BrightCyan.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Shield,
-                                    contentDescription = null,
-                                    tint = BrightCyan,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        },
-                        title = "Max Security Directives",
-                        subtitle = "Crucial rules for 100% unbreakable security",
-                        trailing = {
+                SettingRowItem(
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BrightCyan.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "View Security Directives",
-                                tint = SubtitleText,
-                                modifier = Modifier.size(22.dp)
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = BrightCyan,
+                                modifier = Modifier.size(20.dp)
                             )
-                        },
-                        onClick = { showMaxSecurityGuideDialog = true }
-                    )
-
-                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
-
-                    SettingRowItem(
-                        icon = {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(BrightCyan.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = null,
-                                    tint = BrightCyan,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        },
-                        title = "Help & How to Use",
-                        subtitle = "Read the manual and documentation",
-                        trailing = {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "View Help",
-                                tint = SubtitleText,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        },
-                        onClick = onHelpClick
-                    )
-                }
+                        }
+                    },
+                    title = "Help & How to Use",
+                    subtitle = "Read the manual and documentation",
+                    trailing = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "View Help",
+                            tint = SubtitleText,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    onClick = onHelpClick
+                )
             }
 
             if (showMaxSecurityGuideDialog) {

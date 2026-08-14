@@ -14,6 +14,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -468,11 +470,11 @@ fun DashboardScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF0C1420))
-                        .border(1.dp, BrightCyan.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF0A1420))
+                        .border(1.dp, BrightCyan.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
                         .clickable { onNavigateToPasswords() }
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         .testTag("dashboard_password_vault_banner")
                 ) {
                     Row(
@@ -483,7 +485,7 @@ fun DashboardScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
-                                    .size(34.dp)
+                                    .size(30.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(BrightCyan.copy(alpha = 0.15f)),
                                 contentAlignment = Alignment.Center
@@ -492,14 +494,14 @@ fun DashboardScreen(
                                     imageVector = Icons.Default.Key,
                                     contentDescription = null,
                                     tint = BrightCyan,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
                                     text = "PASSWORD & SECRET VAULT",
-                                    fontSize = 12.sp,
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
                                     fontFamily = FontFamily.Monospace,
@@ -507,7 +509,7 @@ fun DashboardScreen(
                                 )
                                 Text(
                                     text = "Store Logins, Bank Details & Strong Keys",
-                                    fontSize = 10.sp,
+                                    fontSize = 9.5.sp,
                                     color = MutedText
                                 )
                             }
@@ -521,7 +523,7 @@ fun DashboardScreen(
                         ) {
                             Text(
                                 text = "OPEN",
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = BrightCyan,
                                 fontFamily = FontFamily.Monospace
@@ -928,34 +930,36 @@ private fun CapsuleFilterTabItem(
 @Composable
 private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
         contentAlignment = Alignment.Center
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 40.dp),
+                .padding(top = 8.dp, bottom = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(260.dp)
-                    .clip(RoundedCornerShape(28.dp))
+                    .size(175.dp)
+                    .clip(RoundedCornerShape(22.dp))
                     .background(Color(0xFF060F18))
-                    .border(1.5.dp, Color(0xFF132B42), RoundedCornerShape(28.dp)),
+                    .border(1.5.dp, Color(0xFF132B42), RoundedCornerShape(22.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val stroke = 2.dp.toPx()
-                    val cornerLen = 20.dp.toPx()
+                    val cornerLen = 16.dp.toPx()
                     val color = BrightCyan
 
                     drawPath(
                         path = Path().apply {
-                            moveTo(12.dp.toPx(), 12.dp.toPx() + cornerLen)
-                            lineTo(12.dp.toPx(), 12.dp.toPx())
-                            lineTo(12.dp.toPx() + cornerLen, 12.dp.toPx())
+                            moveTo(10.dp.toPx(), 10.dp.toPx() + cornerLen)
+                            lineTo(10.dp.toPx(), 10.dp.toPx())
+                            lineTo(10.dp.toPx() + cornerLen, 10.dp.toPx())
                         },
                         color = color,
                         style = Stroke(stroke)
@@ -963,9 +967,9 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
 
                     drawPath(
                         path = Path().apply {
-                            moveTo(size.width - 12.dp.toPx() - cornerLen, 12.dp.toPx())
-                            lineTo(size.width - 12.dp.toPx(), 12.dp.toPx())
-                            lineTo(size.width - 12.dp.toPx(), 12.dp.toPx() + cornerLen)
+                            moveTo(size.width - 10.dp.toPx() - cornerLen, 10.dp.toPx())
+                            lineTo(size.width - 10.dp.toPx(), 10.dp.toPx())
+                            lineTo(size.width - 10.dp.toPx(), 10.dp.toPx() + cornerLen)
                         },
                         color = color,
                         style = Stroke(stroke)
@@ -973,9 +977,9 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
 
                     drawPath(
                         path = Path().apply {
-                            moveTo(12.dp.toPx(), size.height - 12.dp.toPx() - cornerLen)
-                            lineTo(12.dp.toPx(), size.height - 12.dp.toPx())
-                            lineTo(12.dp.toPx() + cornerLen, size.height - 12.dp.toPx())
+                            moveTo(10.dp.toPx(), size.height - 10.dp.toPx() - cornerLen)
+                            lineTo(10.dp.toPx(), size.height - 10.dp.toPx())
+                            lineTo(10.dp.toPx() + cornerLen, size.height - 10.dp.toPx())
                         },
                         color = color,
                         style = Stroke(stroke)
@@ -983,9 +987,9 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
 
                     drawPath(
                         path = Path().apply {
-                            moveTo(size.width - 12.dp.toPx() - cornerLen, size.height - 12.dp.toPx())
-                            lineTo(size.width - 12.dp.toPx(), size.height - 12.dp.toPx())
-                            lineTo(size.width - 12.dp.toPx(), size.height - 12.dp.toPx() - cornerLen)
+                            moveTo(size.width - 10.dp.toPx() - cornerLen, size.height - 10.dp.toPx())
+                            lineTo(size.width - 10.dp.toPx(), size.height - 10.dp.toPx())
+                            lineTo(size.width - 10.dp.toPx(), size.height - 10.dp.toPx() - cornerLen)
                         },
                         color = color,
                         style = Stroke(stroke)
@@ -998,7 +1002,7 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(80.dp)
+                            .size(56.dp)
                             .clip(CircleShape)
                             .background(
                                 Brush.radialGradient(
@@ -1015,84 +1019,84 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
                             imageVector = Icons.Default.Lock,
                             contentDescription = "Holographic Lock",
                             tint = BrightCyan,
-                            modifier = Modifier.size(42.dp)
+                            modifier = Modifier.size(28.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Box(
                         modifier = Modifier
-                            .width(130.dp)
-                            .height(44.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .width(115.dp)
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(6.dp))
                             .background(Color(0xFF0B1E2E))
-                            .border(1.dp, BrightCyan.copy(alpha = 0.6f), RoundedCornerShape(8.dp)),
+                            .border(1.dp, BrightCyan.copy(alpha = 0.6f), RoundedCornerShape(6.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(6.dp)
+                                    .size(5.dp)
                                     .clip(CircleShape)
                                     .background(Color(0xFF00FF66))
                             )
                             Text(
                                 text = "AES-256 CHIP",
-                                fontSize = 9.sp,
+                                fontSize = 8.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = BrightCyan,
                                 fontFamily = FontFamily.Monospace,
-                                letterSpacing = 1.sp
+                                letterSpacing = 0.8.sp
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Text(
                 text = "VAULT IS SECURE & EMPTY",
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color.White,
                 fontFamily = FontFamily.Monospace,
-                letterSpacing = 1.5.sp
+                letterSpacing = 1.2.sp
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(5.dp))
 
             Text(
                 text = "Tap 'ENCRYPT FILE' to import and isolate photos\nand videos inside zero-trust AES-256 storage.",
-                fontSize = 11.sp,
+                fontSize = 10.5.sp,
                 color = MutedText,
                 textAlign = TextAlign.Center,
-                lineHeight = 16.sp
+                lineHeight = 15.sp
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(52.dp)
                         .clip(CircleShape)
                         .background(Color(0xFF041824))
-                        .border(2.dp, BrightCyan, CircleShape)
+                        .border(1.5.dp, BrightCyan, CircleShape)
                         .clickable { onImportClick() }
                         .testTag("import_fab"),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
                             .background(BrightCyan.copy(alpha = 0.2f))
                             .border(1.dp, BrightCyan, CircleShape),
@@ -1102,18 +1106,18 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
                             imageVector = Icons.Default.Lock,
                             contentDescription = "Encrypt Media",
                             tint = BrightCyan,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
 
                 Text(
                     text = "ENCRYPT FILE",
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = BrightCyan,
                     fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.2.sp
+                    letterSpacing = 1.sp
                 )
             }
         }
