@@ -45,7 +45,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -69,8 +68,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -83,7 +80,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.security.CryptoManager
-import com.example.ui.theme.VaultNeonGreen
 import com.example.ui.theme.VaultPrimaryCyan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -102,20 +98,22 @@ private fun Context.findActivity(): Activity? {
 }
 
 /**
- * High-performance Encrypted Video & Audio Player with full-featured interactive controls:
+ * High-performance Encrypted Video & Audio Player with seamless playback & fullscreen:
  * - Play / Pause
- * - Fullscreen toggle (Immersive landscape & System UI hiding)
+ * - Seamless Fullscreen toggle (Immersive landscape & System UI hiding without reloading)
  * - 10s Forward / Rewind
  * - Scrubbing seekbar with live duration and position
  * - Playback speed selector (0.5x, 0.75x, 1.0x, 1.25x, 1.5x, 2.0x)
  * - Mute / Unmute toggle
  * - Auto-hiding control HUD on idle or single tap
- * - Strict Temp Cache Shredding on Pause/Stop/Dispose
+ * - Strict Temp Cache Shredding on Stop/Dispose
  */
 @Composable
 fun EncryptedVideoPlayer(
     encryptedFile: File,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -137,7 +135,6 @@ fun EncryptedVideoPlayer(
     var areControlsVisible by remember { mutableStateOf(true) }
     var isUserDraggingSlider by remember { mutableStateOf(false) }
     var sliderDragPosition by remember { mutableFloatStateOf(0f) }
-    var isFullscreen by remember { mutableStateOf(false) }
     var showSpeedMenu by remember { mutableStateOf(false) }
 
     // Shredder function
@@ -155,9 +152,12 @@ fun EncryptedVideoPlayer(
         withContext(Dispatchers.IO) {
             isDecrypting = true
             try {
+                if (!encryptedFile.exists()) {
+                    throw IllegalStateException("Encrypted media file not found on disk.")
+                }
                 val tempFile = File(context.cacheDir, "temp_video_${UUID.randomUUID()}.mp4")
-                encryptedFile.inputStream().use { input ->
-                    tempFile.outputStream().use { output ->
+                encryptedFile.inputStream().buffered(65536).use { input ->
+                    tempFile.outputStream().buffered(65536).use { output ->
                         CryptoManager.decryptStreamToOutputStream(input, output)
                     }
                 }
@@ -166,7 +166,7 @@ fun EncryptedVideoPlayer(
                 e.printStackTrace()
                 shredTempFile()
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Failed to decrypt video.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Error decrypting video stream.", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 isDecrypting = false
@@ -219,7 +219,7 @@ fun EncryptedVideoPlayer(
     // 4. Auto-Hide Controls Timer
     LaunchedEffect(areControlsVisible, isPlaying) {
         if (areControlsVisible && isPlaying) {
-            delay(4000)
+            delay(3500)
             areControlsVisible = false
         }
     }
@@ -241,10 +241,10 @@ fun EncryptedVideoPlayer(
         }
     }
 
-    // 6. Security Lifecycle Shredder
+    // 6. Lifecycle Listener - Only destroy when genuinely backgrounded (ON_STOP) or closed (onDispose)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+            if (event == Lifecycle.Event.ON_STOP) {
                 shredTempFile()
                 exoPlayer?.stop()
                 exoPlayer?.release()
@@ -270,327 +270,306 @@ fun EncryptedVideoPlayer(
 
     // Handle back button when in fullscreen mode
     BackHandler(enabled = isFullscreen) {
-        isFullscreen = false
+        onToggleFullscreen(false)
     }
 
-    val playerContent = @Composable { isFullscreenLayout: Boolean ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {
-                    areControlsVisible = !areControlsVisible
-                }
-                .testTag("encrypted_video_player_box"),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isDecrypting) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = VaultPrimaryCyan)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Decrypting stream in RAM...",
-                        fontSize = 12.sp,
-                        color = Color.White,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            } else if (exoPlayer != null) {
-                // ExoPlayer View
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false // Custom Jetpack Compose overlay controls used
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
+    Box(
+        modifier = modifier
+            .background(Color.Black)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                areControlsVisible = !areControlsVisible
+            }
+            .testTag("encrypted_video_player_box"),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isDecrypting) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = VaultPrimaryCyan)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Decrypting stream in RAM...",
+                    fontSize = 12.sp,
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace
                 )
+            }
+        } else if (exoPlayer != null) {
+            // ExoPlayer View
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        player = exoPlayer
+                        useController = false // Custom Jetpack Compose overlay controls used
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        layoutParams = FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                    }
+                },
+                update = { view ->
+                    view.player = exoPlayer
+                },
+                modifier = Modifier.fillMaxSize()
+            )
 
-                // Buffering Spinner
-                if (isBuffering) {
-                    CircularProgressIndicator(
-                        color = VaultPrimaryCyan,
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
+            // Buffering Spinner
+            if (isBuffering) {
+                CircularProgressIndicator(
+                    color = VaultPrimaryCyan,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
 
-                // Interactive Custom Overlay Controls
-                AnimatedVisibility(
-                    visible = areControlsVisible,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    modifier = Modifier.fillMaxSize()
+            // Interactive Custom Overlay Controls
+            AnimatedVisibility(
+                visible = areControlsVisible,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.70f),
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.85f)
+                                )
+                            )
+                        )
                 ) {
-                    Box(
+                    // Top Bar in Video Overlay (Speed & Mute)
+                    Row(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Black.copy(alpha = 0.65f),
-                                        Color.Transparent,
-                                        Color.Black.copy(alpha = 0.85f)
-                                    )
-                                )
-                            )
+                            .fillMaxWidth()
+                            .padding(14.dp)
+                            .align(Alignment.TopCenter),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Top Bar in Video Overlay (Speed & Mute)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                                .align(Alignment.TopCenter),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Playback Speed Selector
-                            Box {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color.Black.copy(alpha = 0.5f))
-                                        .clickable { showSpeedMenu = true }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Speed,
-                                        contentDescription = "Speed",
-                                        tint = VaultPrimaryCyan,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "${playbackSpeed}x",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-
-                                DropdownMenu(
-                                    expanded = showSpeedMenu,
-                                    onDismissRequest = { showSpeedMenu = false }
-                                ) {
-                                    listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
-                                        DropdownMenuItem(
-                                            text = { Text("${speed}x") },
-                                            onClick = {
-                                                playbackSpeed = speed
-                                                exoPlayer?.playbackParameters = PlaybackParameters(speed)
-                                                showSpeedMenu = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            // Mute / Unmute Button
-                            IconButton(
-                                onClick = {
-                                    isMuted = !isMuted
-                                    exoPlayer?.volume = if (isMuted) 0f else 1f
-                                },
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                            ) {
-                                Icon(
-                                    imageVector = if (isMuted) Icons.Default.VolumeMute else Icons.Default.VolumeUp,
-                                    contentDescription = if (isMuted) "Unmute" else "Mute",
-                                    tint = if (isMuted) Color(0xFFFF5252) else Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
-                        // Center Controls (10s Rewind, Play/Pause, 10s Forward)
-                        Row(
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Rewind 10s
-                            IconButton(
-                                onClick = {
-                                    exoPlayer?.let { player ->
-                                        val newPos = (player.currentPosition - 10000L).coerceAtLeast(0L)
-                                        player.seekTo(newPos)
-                                        currentPosition = newPos
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .testTag("video_rewind_10s")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Replay10,
-                                    contentDescription = "Rewind 10s",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(28.dp))
-
-                            // Big Play / Pause Button
-                            IconButton(
-                                onClick = {
-                                    exoPlayer?.let { player ->
-                                        if (player.isPlaying) {
-                                            player.pause()
-                                        } else {
-                                            player.play()
-                                        }
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(CircleShape)
-                                    .background(VaultPrimaryCyan)
-                                    .testTag("video_play_pause_button")
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlaying) "Pause" else "Play",
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(28.dp))
-
-                            // Forward 10s
-                            IconButton(
-                                onClick = {
-                                    exoPlayer?.let { player ->
-                                        val newPos = (player.currentPosition + 10000L).coerceAtMost(player.duration.coerceAtLeast(0L))
-                                        player.seekTo(newPos)
-                                        currentPosition = newPos
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .testTag("video_forward_10s")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Forward10,
-                                    contentDescription = "Forward 10s",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
-                        }
-
-                        // Bottom Control Bar (Time Labels, Scrubber Slider, Fullscreen Toggle)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .align(Alignment.BottomCenter)
-                                .padding(horizontal = 14.dp, vertical = 10.dp)
-                        ) {
-                            // Progress Slider
-                            val durationFloat = totalDuration.toFloat().coerceAtLeast(1f)
-                            val sliderValue = if (isUserDraggingSlider) sliderDragPosition else currentPosition.toFloat()
-
-                            Slider(
-                                value = sliderValue.coerceIn(0f, durationFloat),
-                                onValueChange = { newPos ->
-                                    isUserDraggingSlider = true
-                                    sliderDragPosition = newPos
-                                },
-                                onValueChangeFinished = {
-                                    isUserDraggingSlider = false
-                                    exoPlayer?.seekTo(sliderDragPosition.toLong())
-                                    currentPosition = sliderDragPosition.toLong()
-                                },
-                                valueRange = 0f..durationFloat,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = VaultPrimaryCyan,
-                                    activeTrackColor = VaultPrimaryCyan,
-                                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(20.dp)
-                                    .testTag("video_progress_slider")
-                            )
-
+                        // Playback Speed Selector
+                        Box {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.Black.copy(alpha = 0.6f))
+                                    .clickable { showSpeedMenu = true }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Time string (Current / Total)
+                                Icon(
+                                    imageVector = Icons.Default.Speed,
+                                    contentDescription = "Speed",
+                                    tint = VaultPrimaryCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
                                 Text(
-                                    text = "${formatTime(currentPosition)} / ${formatTime(totalDuration)}",
-                                    fontSize = 12.sp,
+                                    text = "${playbackSpeed}x",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
                                     color = Color.White,
-                                    fontWeight = FontWeight.Medium,
                                     fontFamily = FontFamily.Monospace
                                 )
+                            }
 
-                                // Fullscreen Toggle Button
-                                IconButton(
-                                    onClick = { isFullscreen = !isFullscreen },
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.Black.copy(alpha = 0.4f))
-                                        .testTag("video_fullscreen_button")
-                                ) {
-                                    Icon(
-                                        imageVector = if (isFullscreenLayout) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                        contentDescription = if (isFullscreenLayout) "Exit Fullscreen" else "Enter Fullscreen",
-                                        tint = VaultPrimaryCyan,
-                                        modifier = Modifier.size(24.dp)
+                            DropdownMenu(
+                                expanded = showSpeedMenu,
+                                onDismissRequest = { showSpeedMenu = false }
+                            ) {
+                                listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
+                                    DropdownMenuItem(
+                                        text = { Text("${speed}x") },
+                                        onClick = {
+                                            playbackSpeed = speed
+                                            exoPlayer?.playbackParameters = PlaybackParameters(speed)
+                                            showSpeedMenu = false
+                                        }
                                     )
                                 }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        // Mute / Unmute Button
+                        IconButton(
+                            onClick = {
+                                isMuted = !isMuted
+                                exoPlayer?.volume = if (isMuted) 0f else 1f
+                            },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                imageVector = if (isMuted) Icons.Default.VolumeMute else Icons.Default.VolumeUp,
+                                contentDescription = if (isMuted) "Unmute" else "Mute",
+                                tint = if (isMuted) Color(0xFFFF5252) else Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // Center Controls (10s Rewind, Play/Pause, 10s Forward)
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Rewind 10s
+                        IconButton(
+                            onClick = {
+                                exoPlayer?.let { player ->
+                                    val newPos = (player.currentPosition - 10000L).coerceAtLeast(0L)
+                                    player.seekTo(newPos)
+                                    currentPosition = newPos
+                                }
+                            },
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .testTag("video_rewind_10s")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Replay10,
+                                contentDescription = "Rewind 10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(28.dp))
+
+                        // Big Play / Pause Button
+                        IconButton(
+                            onClick = {
+                                exoPlayer?.let { player ->
+                                    if (player.isPlaying) {
+                                        player.pause()
+                                    } else {
+                                        player.play()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(CircleShape)
+                                .background(VaultPrimaryCyan)
+                                .testTag("video_play_pause_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color.Black,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(28.dp))
+
+                        // Forward 10s
+                        IconButton(
+                            onClick = {
+                                exoPlayer?.let { player ->
+                                    val newPos = (player.currentPosition + 10000L).coerceAtMost(player.duration.coerceAtLeast(0L))
+                                    player.seekTo(newPos)
+                                    currentPosition = newPos
+                                }
+                            },
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .testTag("video_forward_10s")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Forward10,
+                                contentDescription = "Forward 10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+
+                    // Bottom Control Bar (Time Labels, Scrubber Slider, Fullscreen Toggle)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        // Progress Slider
+                        val durationFloat = totalDuration.toFloat().coerceAtLeast(1f)
+                        val sliderValue = if (isUserDraggingSlider) sliderDragPosition else currentPosition.toFloat()
+
+                        Slider(
+                            value = sliderValue.coerceIn(0f, durationFloat),
+                            onValueChange = { newPos ->
+                                isUserDraggingSlider = true
+                                sliderDragPosition = newPos
+                            },
+                            onValueChangeFinished = {
+                                isUserDraggingSlider = false
+                                exoPlayer?.seekTo(sliderDragPosition.toLong())
+                                currentPosition = sliderDragPosition.toLong()
+                            },
+                            valueRange = 0f..durationFloat,
+                            colors = SliderDefaults.colors(
+                                thumbColor = VaultPrimaryCyan,
+                                activeTrackColor = VaultPrimaryCyan,
+                                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(22.dp)
+                                .testTag("video_progress_slider")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Time string (Current / Total)
+                            Text(
+                                text = "${formatTime(currentPosition)} / ${formatTime(totalDuration)}",
+                                fontSize = 12.sp,
+                                color = Color.White,
+                                fontWeight = FontWeight.Medium,
+                                fontFamily = FontFamily.Monospace
+                            )
+
+                            // Fullscreen Toggle Button
+                            IconButton(
+                                onClick = { onToggleFullscreen(!isFullscreen) },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .testTag("video_fullscreen_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                    contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
+                                    tint = VaultPrimaryCyan,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
                         }
                     }
                 }
             }
-        }
-    }
-
-    if (isFullscreen) {
-        Dialog(
-            onDismissRequest = { isFullscreen = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
-        ) {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = Color.Black
-            ) {
-                playerContent(true)
-            }
-        }
-    } else {
-        Box(modifier = modifier) {
-            playerContent(false)
         }
     }
 }

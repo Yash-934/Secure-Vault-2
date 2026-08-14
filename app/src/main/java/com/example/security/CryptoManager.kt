@@ -28,7 +28,7 @@ object CryptoManager {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val IV_SIZE_BYTES = 12
     private const val GCM_TAG_LENGTH_BITS = 128
-    private const val BUFFER_SIZE = 8192
+    private const val BUFFER_SIZE = 65536
 
     private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply {
         load(null)
