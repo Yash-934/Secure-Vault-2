@@ -299,17 +299,6 @@ fun DashboardScreen(
                         }
 
                         IconButton(
-                            onClick = onNavigateToPasswords,
-                            modifier = Modifier.testTag("password_manager_nav_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Key,
-                                contentDescription = "Password Manager",
-                                tint = BrightCyan
-                            )
-                        }
-
-                        IconButton(
                             onClick = onNavigateToSettings,
                             modifier = Modifier.testTag("settings_nav_button")
                         ) {
