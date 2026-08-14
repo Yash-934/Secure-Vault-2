@@ -5,10 +5,11 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [VaultItem::class, VaultFolder::class, IntruderLog::class], version = 4, exportSchema = false)
+@Database(entities = [VaultItem::class, VaultFolder::class, IntruderLog::class, VaultPassword::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun vaultDao(): VaultDao
     abstract fun intruderLogDao(): IntruderLogDao
+    abstract fun vaultPasswordDao(): VaultPasswordDao
 
     companion object {
         @Volatile

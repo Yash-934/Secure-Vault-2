@@ -29,10 +29,12 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PhonelinkSetup
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -82,7 +84,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.VaultSettings
 import com.example.security.AuditResult
+import com.example.ui.components.AntiTamperReportDialog
 import com.example.ui.components.ChangePinDialog
+import com.example.ui.components.MaxSecurityGuideDialog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -121,10 +125,13 @@ fun SettingsScreen(
     onExecuteSelfDestructClick: () -> Unit = {},
     onEmbedStegoClick: () -> Unit = {},
     onExtractStegoClick: () -> Unit = {},
+    onNavigateToPasswords: () -> Unit = {},
     onHelpClick: () -> Unit = {}
 ) {
     var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
     var showChangeKillPinDialog by remember { mutableStateOf(false) }
+    var showMaxSecurityGuideDialog by remember { mutableStateOf(false) }
+    var showAntiTamperDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -381,6 +388,189 @@ fun SettingsScreen(
                             lineHeight = 16.sp
                         )
                     }
+                }
+            }
+
+            // MAX SECURITY BEST PRACTICES ACTION CARD
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { showMaxSecurityGuideDialog = true }
+                    .testTag("max_security_guide_card"),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BrightCyan.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BrightCyan.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Shield,
+                                contentDescription = null,
+                                tint = BrightCyan,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Max Security Directives",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "6 Essential Rules for 100% Unbreakable Security",
+                                fontSize = 11.sp,
+                                color = SubtitleText
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Open Security Directives",
+                        tint = BrightCyan,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            // ANTI-REVERSE ENGINEERING & TAMPER SHIELD CARD
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { showAntiTamperDialog = true }
+                    .testTag("anti_tamper_shield_card"),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PassGreen.copy(alpha = 0.45f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(PassGreen.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.EnhancedEncryption,
+                                contentDescription = null,
+                                tint = PassGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Anti-Tamper & Anti-Recompile Shield",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Anti-Debugger • Frida & Hooking Shield • SHA-256 Sig",
+                                fontSize = 11.sp,
+                                color = SubtitleText
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Open Anti-Tamper Shield",
+                        tint = PassGreen,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            // ENCRYPTED PASSWORD VAULT CARD
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { onNavigateToPasswords() }
+                    .testTag("settings_password_manager_btn"),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BrightCyan.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BrightCyan.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Key,
+                                contentDescription = null,
+                                tint = BrightCyan,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Encrypted Password Vault",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "AES-256 Logins, Credit Cards & Strong Passwords",
+                                fontSize = 11.sp,
+                                color = SubtitleText
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Open Password Manager",
+                        tint = BrightCyan,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
 
@@ -996,6 +1186,38 @@ fun SettingsScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Max Security Directives",
+                        subtitle = "Crucial rules for 100% unbreakable security",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "View Security Directives",
+                                tint = SubtitleText,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = { showMaxSecurityGuideDialog = true }
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
                                     imageVector = Icons.Default.Info,
                                     contentDescription = null,
                                     tint = BrightCyan,
@@ -1016,6 +1238,18 @@ fun SettingsScreen(
                         onClick = onHelpClick
                     )
                 }
+            }
+
+            if (showMaxSecurityGuideDialog) {
+                MaxSecurityGuideDialog(
+                    onDismiss = { showMaxSecurityGuideDialog = false }
+                )
+            }
+
+            if (showAntiTamperDialog) {
+                AntiTamperReportDialog(
+                    onDismiss = { showAntiTamperDialog = false }
+                )
             }
 
             if (showChangeKillPinDialog) {

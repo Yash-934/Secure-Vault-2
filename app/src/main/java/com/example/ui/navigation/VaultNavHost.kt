@@ -30,6 +30,7 @@ import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.IntruderLogsScreen
 import com.example.ui.screens.LockScreen
 import com.example.ui.screens.MediaViewerScreen
+import com.example.ui.screens.PasswordManagerScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.viewmodel.SettingsViewModel
 
@@ -250,6 +251,7 @@ fun VaultNavHost(
                 },
                 onNavigateToSettings = { navController.navigate(NavRoutes.Settings.route) },
                 onNavigateToAbout = { navController.navigate(NavRoutes.About.route) },
+                onNavigateToPasswords = { navController.navigate(NavRoutes.PasswordManager.route) },
                 onClearStatusMessage = { vaultViewModel.clearStatusMessage() }
             )
 
@@ -297,6 +299,9 @@ fun VaultNavHost(
                 },
                 onExtractStegoClick = {
                     stegoExtractLauncher.launch(arrayOf("image/jpeg"))
+                },
+                onNavigateToPasswords = {
+                    navController.navigate(NavRoutes.PasswordManager.route)
                 },
                 onHelpClick = {
                     navController.navigate(NavRoutes.Help.route)
@@ -404,6 +409,14 @@ fun VaultNavHost(
                     }
                 )
             }
+        }
+
+        // 9. Password Manager Screen
+        composable(NavRoutes.PasswordManager.route) {
+            PasswordManagerScreen(
+                isDecoy = vaultMode == VaultMode.DECOY,
+                onNavigateBack = { navController.popBackStack() }
+            )
         }
     }
 

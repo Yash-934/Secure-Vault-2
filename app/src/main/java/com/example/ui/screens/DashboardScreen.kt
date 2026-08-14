@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircle
@@ -130,6 +131,7 @@ fun DashboardScreen(
     onLockClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToAbout: () -> Unit,
+    onNavigateToPasswords: () -> Unit = {},
     onClearStatusMessage: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -295,6 +297,17 @@ fun DashboardScreen(
                         }
 
                         IconButton(
+                            onClick = onNavigateToPasswords,
+                            modifier = Modifier.testTag("password_manager_nav_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Key,
+                                contentDescription = "Password Manager",
+                                tint = BrightCyan
+                            )
+                        }
+
+                        IconButton(
                             onClick = onNavigateToSettings,
                             modifier = Modifier.testTag("settings_nav_button")
                         ) {
@@ -450,6 +463,74 @@ fun DashboardScreen(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                // Password Vault Quick-Access Bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF0C1420))
+                        .border(1.dp, BrightCyan.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                        .clickable { onNavigateToPasswords() }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .testTag("dashboard_password_vault_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "PASSWORD & SECRET VAULT",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 0.5.sp
+                                )
+                                Text(
+                                    text = "Store Logins, Bank Details & Strong Keys",
+                                    fontSize = 10.sp,
+                                    color = MutedText
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(BrightCyan.copy(alpha = 0.2f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "OPEN",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = BrightCyan,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 AnimatedVisibility(visible = isSearchActive) {
                     OutlinedTextField(

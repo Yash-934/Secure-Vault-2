@@ -24,7 +24,7 @@ class SecurityAuditEngine @Inject constructor(
 ) {
 
     /**
-     * Performs a 5-point security diagnostic audit of the local Android environment.
+     * Performs an 8-point deep security & anti-tamper diagnostic audit of the local Android environment.
      *
      * @return AuditResult containing PASS/FAIL status, individual check results, and timestamp.
      */
@@ -35,6 +35,9 @@ class SecurityAuditEngine @Inject constructor(
         val biometricCheck = checkBiometricAvailability()
         val storageCheck = checkPrivateStoragePath()
         val rootEnvironmentCheck = !RootDetectionManager.isDeviceRooted(context)
+        val antiDebugCheck = !AntiTamperManager.isDebuggerAttached()
+        val antiHookCheck = !AntiTamperManager.isHookFrameworkDetected() && !AntiTamperManager.isMemoryMapsTampered()
+        val (sigValid, _) = AntiTamperManager.verifyAppSignature(context)
 
         val checkResults = mapOf(
             "Internet Permission Denied (Network Isolation)" to internetCheck,
@@ -42,7 +45,10 @@ class SecurityAuditEngine @Inject constructor(
             "AES-256-GCM Buffer Encryption Test" to cryptoCheck,
             "Biometric Hardware & Prompt Availability" to biometricCheck,
             "App-Private Storage Path Isolation" to storageCheck,
-            "Root / Custom ROM Tamper Protection" to rootEnvironmentCheck
+            "Root / Custom ROM Tamper Protection" to rootEnvironmentCheck,
+            "Anti-Debugger & Ptrace Shield" to antiDebugCheck,
+            "Anti-Hooking (Frida / Xposed Injection Shield)" to antiHookCheck,
+            "APK Signature & Recompilation Integrity" to sigValid
         )
 
         val allPassed = checkResults.values.all { it }
