@@ -93,28 +93,34 @@ fun VaultNavHost(
         }
     }
 
+    var suggestedStegoOutputName by remember { mutableStateOf("covert_carrier_backup.mp4") }
+    var suggestedStegoMimeType by remember { mutableStateOf("*/*") }
     var triggerStegoOutput by remember { mutableStateOf(false) }
 
     val stegoOutputLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/jpeg")
+        contract = ActivityResultContracts.CreateDocument(suggestedStegoMimeType)
     ) { uri ->
         if (uri != null) {
             stegoOutputUri = uri
             showStegoEmbedPasswordDialog = true
         }
     }
+
     val stegoCoverLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             stegoCoverUri = uri
+            val info = com.example.security.SteganographyManager.resolveCarrierFileInfo(context, uri)
+            suggestedStegoOutputName = "covert_${info.baseName}.${info.extension}"
+            suggestedStegoMimeType = info.mimeType
             triggerStegoOutput = true
         }
     }
 
     if (triggerStegoOutput) {
-        androidx.compose.runtime.LaunchedEffect(Unit) {
-            stegoOutputLauncher.launch("stego_vault_backup_${System.currentTimeMillis()}.jpg")
+        androidx.compose.runtime.LaunchedEffect(triggerStegoOutput) {
+            stegoOutputLauncher.launch(suggestedStegoOutputName)
             triggerStegoOutput = false
         }
     }
@@ -295,10 +301,10 @@ fun VaultNavHost(
                 onChangeDeadManDays = { settingsViewModel.setDeadManDays(it) },
                 onExecuteSelfDestructClick = { vaultViewModel.executeSelfDestruct(context) },
                 onEmbedStegoClick = {
-                    stegoCoverLauncher.launch(arrayOf("image/jpeg"))
+                    stegoCoverLauncher.launch(arrayOf("video/*", "application/pdf", "image/*", "audio/*", "*/*"))
                 },
                 onExtractStegoClick = {
-                    stegoExtractLauncher.launch(arrayOf("image/jpeg"))
+                    stegoExtractLauncher.launch(arrayOf("video/*", "application/pdf", "image/*", "audio/*", "*/*"))
                 },
                 onNavigateToPasswords = {
                     navController.navigate(NavRoutes.PasswordManager.route)
@@ -466,8 +472,8 @@ fun VaultNavHost(
         // Stego Embed Password Prompt
         if (showStegoEmbedPasswordDialog && stegoCoverUri != null && stegoOutputUri != null) {
             BackupPasswordDialog(
-                title = "Encrypt Stego Backup",
-                subtitle = "Enter a password to encrypt the backup before hiding it in the JPEG.",
+                title = "Encrypt Multi-Carrier Stego",
+                subtitle = "Enter a password to encrypt your vault before concealing it inside the cover video, PDF, or image.",
                 onDismiss = {
                     showStegoEmbedPasswordDialog = false
                     stegoCoverUri = null
@@ -485,8 +491,8 @@ fun VaultNavHost(
         // Stego Extract Password Prompt
         if (showStegoExtractPasswordDialog && stegoExtractUri != null) {
             BackupPasswordDialog(
-                title = "Decrypt Stego Backup",
-                subtitle = "Enter the password to decrypt the backup extracted from the JPEG.",
+                title = "Decrypt Multi-Carrier Stego",
+                subtitle = "Enter the password to extract and restore the vault hidden inside this carrier file.",
                 onDismiss = {
                     showStegoExtractPasswordDialog = false
                     stegoExtractUri = null

@@ -1052,7 +1052,7 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
 
-                    // 3. Steganography (File Hiding in JPEG)
+                    // 3. Universal Multi-Carrier Steganography (Videos, PDFs, Photos)
                     SettingRowItem(
                         icon = {
                             Box(
@@ -1063,15 +1063,15 @@ fun SettingsScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Image,
+                                    imageVector = Icons.Default.Security,
                                     contentDescription = null,
                                     tint = BrightCyan,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         },
-                        title = "Steganography Engine",
-                        subtitle = "Embed/extract encrypted vault files hidden inside normal JPEG photos",
+                        title = "Multi-Carrier Steganography",
+                        subtitle = "Conceal large vault files (up to 5GB+) inside Videos (MP4), PDFs or Photos without breaking playback",
                         trailing = {
                             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 Text(

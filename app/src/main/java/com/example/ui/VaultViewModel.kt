@@ -153,56 +153,70 @@ class VaultViewModel(
         return false
     }
 
-    fun hideItemInStegoJpeg(context: Context, item: VaultItem, coverJpegInputStream: java.io.InputStream, outputStream: java.io.OutputStream) {
+    fun hideItemInStegoCarrier(context: Context, item: VaultItem, coverInputStream: java.io.InputStream, outputStream: java.io.OutputStream) {
         _isProcessing.value = true
         viewModelScope.launch {
+            val tempItemFile = java.io.File(context.cacheDir, "temp_stego_item_${System.currentTimeMillis()}.bin")
             try {
                 val decryptedVaultBytes = repository.decryptFileToByteArray(context, item)
                 if (decryptedVaultBytes == null) {
-                    _statusMessage.value = "Failed to decrypt vault file for steganography embedding."
+                    _statusMessage.value = "Failed to decrypt vault file for steganography."
                     _isProcessing.value = false
                     return@launch
                 }
+                tempItemFile.writeBytes(decryptedVaultBytes)
+                decryptedVaultBytes.fill(0)
 
-                val coverBytes = coverJpegInputStream.readBytes()
-                val stegoBytes = com.example.security.SteganographyManager.embedPayloadInJpeg(coverBytes, decryptedVaultBytes)
-                outputStream.write(stegoBytes)
-                outputStream.flush()
-                outputStream.close()
+                tempItemFile.inputStream().buffered(65536).use { payloadIn ->
+                    coverInputStream.buffered(65536).use { coverIn ->
+                        outputStream.buffered(65536).use { out ->
+                            com.example.security.SteganographyManager.embedPayloadStream(coverIn, payloadIn, out)
+                        }
+                    }
+                }
 
-                _statusMessage.value = "Vault item embedded inside JPEG via Steganography!"
+                _statusMessage.value = "Vault item concealed inside carrier file via Steganography!"
             } catch (e: Exception) {
                 _statusMessage.value = "Steganography embedding failed: ${e.localizedMessage}"
             } finally {
+                if (tempItemFile.exists()) tempItemFile.delete()
                 _isProcessing.value = false
             }
         }
     }
 
-    fun extractItemFromStegoJpeg(context: Context, stegoJpegInputStream: java.io.InputStream) {
+    fun extractItemFromStegoCarrier(context: Context, stegoInputStream: java.io.InputStream) {
         _isProcessing.value = true
         viewModelScope.launch {
+            val tempStegoFile = java.io.File(context.cacheDir, "temp_stego_in_${System.currentTimeMillis()}.tmp")
+            val tempExtractedFile = java.io.File(context.cacheDir, "temp_stego_out_${System.currentTimeMillis()}.bin")
             try {
-                val stegoBytes = stegoJpegInputStream.readBytes()
-                val extractedBytes = com.example.security.SteganographyManager.extractPayloadFromJpeg(stegoBytes)
+                stegoInputStream.buffered(65536).use { input ->
+                    tempStegoFile.outputStream().buffered(65536).use { output ->
+                        input.copyTo(output, 65536)
+                    }
+                }
 
-                if (extractedBytes != null) {
-                    val tempFile = java.io.File(context.cacheDir, "stego_extracted_${System.currentTimeMillis()}.bin")
-                    tempFile.writeBytes(extractedBytes)
-                    val uri = Uri.fromFile(tempFile)
+                val extractResult = tempExtractedFile.outputStream().buffered(65536).use { out ->
+                    com.example.security.SteganographyManager.extractPayloadFromFile(tempStegoFile, out)
+                }
 
+                if (extractResult.isSuccess) {
+                    val uri = Uri.fromFile(tempExtractedFile)
                     val result = repository.encryptAndImportFile(context, uri, true)
                     result.onSuccess {
-                        _statusMessage.value = "Steganography payload extracted & imported into Vault!"
+                        _statusMessage.value = "Steganography payload extracted & secured into Vault!"
                     }.onFailure {
-                        _statusMessage.value = "Failed to import extracted steganography payload."
+                        _statusMessage.value = "Failed to import extracted steganography file."
                     }
                 } else {
-                    _statusMessage.value = "No valid Steganography payload found in selected JPEG image."
+                    _statusMessage.value = extractResult.exceptionOrNull()?.message ?: "No valid Steganography payload found in carrier file."
                 }
             } catch (e: Exception) {
                 _statusMessage.value = "Steganography extraction failed: ${e.localizedMessage}"
             } finally {
+                if (tempStegoFile.exists()) tempStegoFile.delete()
+                if (tempExtractedFile.exists()) tempExtractedFile.delete()
                 _isProcessing.value = false
             }
         }
@@ -238,36 +252,41 @@ class VaultViewModel(
     fun exportStegoBackup(context: Context, masterPassword: String, coverUri: android.net.Uri, outputUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
+            val tempBackupFile = java.io.File(context.cacheDir, "temp_stego_backup_${System.currentTimeMillis()}.bin")
             try {
-                val tempBackupFile = java.io.File(context.cacheDir, "temp_stego_backup.bin")
-                val tempOut = java.io.FileOutputStream(tempBackupFile)
+                // 1. Export encrypted vault backup into temp file
+                val tempOut = java.io.FileOutputStream(tempBackupFile).buffered(65536)
                 val backupResult = com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, tempOut, repository)
+                tempOut.flush()
                 tempOut.close()
 
                 if (backupResult.isSuccess) {
-                    val backupBytes = tempBackupFile.readBytes()
-                    val coverBytes = context.contentResolver.openInputStream(coverUri)?.readBytes()
-                    if (coverBytes != null) {
-                        val stegoBytes = com.example.security.SteganographyManager.embedPayloadInJpeg(coverBytes, backupBytes)
-                        val outStream = context.contentResolver.openOutputStream(outputUri)
-                        if (outStream != null) {
-                            outStream.write(stegoBytes)
-                            outStream.flush()
-                            outStream.close()
-                            _statusMessage.value = "Steganography Vault Backup embedded in JPEG!"
-                        } else {
-                            _statusMessage.value = "Failed to open output stream."
+                    val coverInputStream = context.contentResolver.openInputStream(coverUri)?.buffered(65536)
+                    val payloadInputStream = java.io.FileInputStream(tempBackupFile).buffered(65536)
+                    val outStream = context.contentResolver.openOutputStream(outputUri)?.buffered(65536)
+
+                    if (coverInputStream != null && outStream != null) {
+                        coverInputStream.use { cIn ->
+                            payloadInputStream.use { pIn ->
+                                outStream.use { oOut ->
+                                    com.example.security.SteganographyManager.embedPayloadStream(cIn, pIn, oOut)
+                                }
+                            }
                         }
+                        val carrierInfo = com.example.security.SteganographyManager.resolveCarrierFileInfo(context, coverUri)
+                        _statusMessage.value = "Zero-Trust Vault concealed inside ${carrierInfo.extension.uppercase()} carrier file!"
                     } else {
-                        _statusMessage.value = "Failed to read cover image."
+                        _statusMessage.value = "Failed to access carrier or destination file."
                     }
                 } else {
-                    _statusMessage.value = "Failed to create backup for Steganography."
+                    _statusMessage.value = "Failed to create encrypted backup container."
                 }
-                tempBackupFile.delete()
             } catch (e: Exception) {
                 _statusMessage.value = "Steganography failed: ${e.message}"
             } finally {
+                if (tempBackupFile.exists()) {
+                    tempBackupFile.delete()
+                }
                 _isProcessing.value = false
             }
         }
@@ -276,27 +295,41 @@ class VaultViewModel(
     fun importStegoBackup(context: Context, masterPassword: String, stegoUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
+            val tempStegoFile = java.io.File(context.cacheDir, "temp_incoming_stego_${System.currentTimeMillis()}.tmp")
+            val tempExtractedBackupFile = java.io.File(context.cacheDir, "temp_extracted_backup_${System.currentTimeMillis()}.bin")
             try {
-                val stegoBytes = context.contentResolver.openInputStream(stegoUri)?.readBytes()
-                if (stegoBytes != null) {
-                    val backupBytes = com.example.security.SteganographyManager.extractPayloadFromJpeg(stegoBytes)
-                    if (backupBytes != null) {
-                        val tempIn = java.io.ByteArrayInputStream(backupBytes)
-                        val result = com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, tempIn, repository)
-                        result.onSuccess { count ->
-                            _statusMessage.value = "Steganography Restore complete! Restored $count items."
-                        }.onFailure {
-                            _statusMessage.value = "Restore failed: Invalid password or corrupt stego payload."
-                        }
-                    } else {
-                        _statusMessage.value = "No Steganography payload found in this JPEG."
+                // 1. Copy incoming stego URI stream to temp cache file
+                context.contentResolver.openInputStream(stegoUri)?.buffered(65536).use { input ->
+                    if (input == null) throw IllegalStateException("Cannot read selected file.")
+                    tempStegoFile.outputStream().buffered(65536).use { output ->
+                        input.copyTo(output, 65536)
+                    }
+                }
+
+                // 2. Extract payload from file using SteganographyManager
+                val extractOut = tempExtractedBackupFile.outputStream().buffered(65536)
+                val extractResult = extractOut.use { out ->
+                    com.example.security.SteganographyManager.extractPayloadFromFile(tempStegoFile, out)
+                }
+
+                if (extractResult.isSuccess) {
+                    val backupInputStream = tempExtractedBackupFile.inputStream().buffered(65536)
+                    val result = backupInputStream.use { inStream ->
+                        com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, inStream, repository)
+                    }
+                    result.onSuccess { count ->
+                        _statusMessage.value = "Steganography Restore complete! Restored $count vault item(s)."
+                    }.onFailure {
+                        _statusMessage.value = "Restore failed: Invalid password or corrupted payload."
                     }
                 } else {
-                    _statusMessage.value = "Failed to read stego image."
+                    _statusMessage.value = extractResult.exceptionOrNull()?.message ?: "No steganography payload found in this file."
                 }
             } catch (e: Exception) {
-                _statusMessage.value = "Steganography extraction failed: ${e.message}"
+                _statusMessage.value = "Extraction failed: ${e.message}"
             } finally {
+                if (tempStegoFile.exists()) tempStegoFile.delete()
+                if (tempExtractedBackupFile.exists()) tempExtractedBackupFile.delete()
                 _isProcessing.value = false
             }
         }
