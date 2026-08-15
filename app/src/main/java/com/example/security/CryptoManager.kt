@@ -65,9 +65,15 @@ object CryptoManager {
 
     /**
      * Encrypts the provided InputStream and writes the IV (12 bytes) + Ciphertext to the OutputStream.
-     * Stream-based chunk processing prevents OutOfMemory errors on large photos/videos.
+     * Stream-based 64KB chunk processing prevents OutOfMemory errors on large photos/videos (even multi-GB).
+     * Provides live progress reporting.
      */
-    fun encryptStream(inputStream: InputStream, outputStream: OutputStream) {
+    fun encryptStream(
+        inputStream: InputStream,
+        outputStream: OutputStream,
+        totalBytes: Long = -1L,
+        onProgress: ((bytesProcessed: Long, totalBytes: Long) -> Unit)? = null
+    ) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getSecretKey())
 
@@ -75,21 +81,36 @@ object CryptoManager {
         val iv = cipher.iv
         outputStream.write(iv)
 
-        // 2. Encrypt the data in chunks using CipherOutputStream
-        javax.crypto.CipherOutputStream(outputStream, cipher).use { cipherOut ->
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
+        // 2. Encrypt data in 64KB streaming chunks with live progress callbacks
+        val buffer = ByteArray(BUFFER_SIZE)
+        var bytesRead: Int
+        var totalProcessed = 0L
+
+        try {
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                cipherOut.write(buffer, 0, bytesRead)
+                val encryptedChunk = cipher.update(buffer, 0, bytesRead)
+                if (encryptedChunk != null && encryptedChunk.isNotEmpty()) {
+                    outputStream.write(encryptedChunk)
+                }
+                totalProcessed += bytesRead
+                onProgress?.invoke(totalProcessed, totalBytes)
             }
+
+            val finalChunk = cipher.doFinal()
+            if (finalChunk != null && finalChunk.isNotEmpty()) {
+                outputStream.write(finalChunk)
+            }
+            outputStream.flush()
+        } finally {
+            buffer.fill(0)
         }
     }
 
     /**
      * Decrypts an encrypted input stream (reading the leading 12-byte IV) and returns the plaintext ByteArray in memory.
-     * Perfect for in-memory temporary preview without writing decrypted files back to disk.
+     * Guarded with a strict 30MB size limit to prevent OutOfMemory crashes on large files/videos.
      */
-    fun decryptStreamToByteArray(inputStream: InputStream): ByteArray {
+    fun decryptStreamToByteArray(inputStream: InputStream, maxSizeBytes: Long = 30 * 1024 * 1024L): ByteArray {
         // 1. Read the 12-byte IV prepended during encryption
         val iv = ByteArray(IV_SIZE_BYTES)
         val ivBytesRead = inputStream.read(iv)
@@ -102,15 +123,42 @@ object CryptoManager {
         val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv)
         cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), gcmSpec)
 
-        // 3. Read encrypted payload into buffer and perform decryption
-        val encryptedData = inputStream.readBytes()
-        return cipher.doFinal(encryptedData)
+        // 3. Read encrypted payload into buffer and perform decryption safely
+        val buffer = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(BUFFER_SIZE)
+        var bytesRead: Int
+        var totalRead = 0L
+
+        try {
+            while (inputStream.read(chunk).also { bytesRead = it } != -1) {
+                totalRead += bytesRead
+                if (totalRead > maxSizeBytes) {
+                    throw IllegalStateException("File exceeds maximum in-memory preview size (${maxSizeBytes / (1024 * 1024)}MB). Streaming player must be used.")
+                }
+                val decryptedChunk = cipher.update(chunk, 0, bytesRead)
+                if (decryptedChunk != null && decryptedChunk.isNotEmpty()) {
+                    buffer.write(decryptedChunk)
+                }
+            }
+            val finalChunk = cipher.doFinal()
+            if (finalChunk != null && finalChunk.isNotEmpty()) {
+                buffer.write(finalChunk)
+            }
+            return buffer.toByteArray()
+        } finally {
+            chunk.fill(0)
+        }
     }
 
     /**
-     * Decrypts an encrypted stream and writes plaintext to an OutputStream (e.g. for temporary cache or export).
+     * Decrypts an encrypted stream and writes plaintext to an OutputStream with live progress reporting.
      */
-    fun decryptStreamToOutputStream(inputStream: InputStream, outputStream: OutputStream) {
+    fun decryptStreamToOutputStream(
+        inputStream: InputStream,
+        outputStream: OutputStream,
+        totalBytes: Long = -1L,
+        onProgress: ((bytesProcessed: Long, totalBytes: Long) -> Unit)? = null
+    ) {
         val iv = ByteArray(IV_SIZE_BYTES)
         val ivBytesRead = inputStream.read(iv)
         if (ivBytesRead < IV_SIZE_BYTES) {
@@ -123,22 +171,26 @@ object CryptoManager {
 
         val buffer = ByteArray(BUFFER_SIZE)
         var bytesRead: Int
+        var totalProcessed = 0L
+
         try {
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 val decryptedBytes = cipher.update(buffer, 0, bytesRead)
-                if (decryptedBytes != null) {
+                if (decryptedBytes != null && decryptedBytes.isNotEmpty()) {
                     outputStream.write(decryptedBytes)
                 }
+                totalProcessed += bytesRead
+                onProgress?.invoke(totalProcessed, totalBytes)
             }
-        } finally {
-            buffer.zeroize()
-        }
 
-        val finalBytes = cipher.doFinal()
-        if (finalBytes != null) {
-            outputStream.write(finalBytes)
+            val finalBytes = cipher.doFinal()
+            if (finalBytes != null && finalBytes.isNotEmpty()) {
+                outputStream.write(finalBytes)
+            }
+            outputStream.flush()
+        } finally {
+            buffer.fill(0)
         }
-        outputStream.flush()
     }
 
     /**

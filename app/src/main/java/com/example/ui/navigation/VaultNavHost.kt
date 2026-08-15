@@ -21,6 +21,7 @@ import com.example.domain.model.VaultMode
 import com.example.ui.VaultViewModel
 import com.example.ui.components.BackupPasswordDialog
 import com.example.ui.components.ChangePinDialog
+import com.example.ui.components.EncryptionProgressDialog
 import com.example.ui.components.ImportPromptDialog
 import com.example.ui.components.StealthModeDialog
 import com.example.ui.screens.AboutScreen
@@ -47,6 +48,7 @@ fun VaultNavHost(
     val vaultItems by vaultViewModel.vaultItems.collectAsStateWithLifecycle()
     val filterTab by vaultViewModel.filterTab.collectAsStateWithLifecycle()
     val isProcessing by vaultViewModel.isProcessing.collectAsStateWithLifecycle()
+    val importProgress by vaultViewModel.importProgress.collectAsStateWithLifecycle()
     val isLoading by vaultViewModel.isLoading.collectAsStateWithLifecycle()
     val statusMessage by vaultViewModel.statusMessage.collectAsStateWithLifecycle()
     val pendingImportUris by vaultViewModel.pendingImportUris.collectAsStateWithLifecycle()
@@ -270,6 +272,11 @@ fun VaultNavHost(
                         vaultViewModel.importPendingFiles(context, deleteOriginal)
                     }
                 )
+            }
+
+            // Real-Time Hardware Encryption Progress HUD
+            if (importProgress.isImporting) {
+                EncryptionProgressDialog(progressState = importProgress)
             }
         }
 

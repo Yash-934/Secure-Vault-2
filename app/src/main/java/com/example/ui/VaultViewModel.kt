@@ -20,6 +20,16 @@ import kotlinx.coroutines.launch
 
 enum class VaultFilterTab { ALL, PHOTOS, VIDEOS, DOCUMENTS }
 
+data class ImportProgressState(
+    val isImporting: Boolean = false,
+    val currentFileIndex: Int = 0,
+    val totalFiles: Int = 0,
+    val currentFileName: String = "",
+    val bytesProcessed: Long = 0L,
+    val totalBytes: Long = 0L,
+    val overallProgress: Float = 0f
+)
+
 class VaultViewModel(
     private val realRepository: VaultRepository,
     private val decoyRepository: VaultRepository
@@ -65,6 +75,10 @@ class VaultViewModel(
 
     private val _isProcessing = MutableStateFlow(false)
     val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
+
+    // Import Live Progress State
+    private val _importProgress = MutableStateFlow(ImportProgressState())
+    val importProgress: StateFlow<ImportProgressState> = _importProgress.asStateFlow()
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
@@ -460,53 +474,110 @@ class VaultViewModel(
             var failCount = 0
             val urisToDelete = mutableListOf<android.net.Uri>()
             var fallbackIntentSender: android.content.IntentSender? = null
+            val totalFiles = urisToImport.size
 
-            for (uri in urisToImport) {
-                val result = repository.encryptAndImportFile(context, uri, deleteOriginal, targetFolder = targetFolder)
-                result.onSuccess { importRes ->
-                    successCount++
-                    if (importRes.mediaStoreUriToDelete != null) {
-                        urisToDelete.add(importRes.mediaStoreUriToDelete)
-                    } else if (importRes.deleteIntentSender != null) {
-                        fallbackIntentSender = importRes.deleteIntentSender
+            _importProgress.value = ImportProgressState(
+                isImporting = true,
+                currentFileIndex = 1,
+                totalFiles = totalFiles,
+                currentFileName = "Preparing files...",
+                bytesProcessed = 0L,
+                totalBytes = 0L,
+                overallProgress = 0f
+            )
+
+            try {
+                for ((index, uri) in urisToImport.withIndex()) {
+                    val fileIndex = index + 1
+                    val result = repository.encryptAndImportFile(
+                        context = context,
+                        sourceUri = uri,
+                        deleteOriginal = deleteOriginal,
+                        targetFolder = targetFolder,
+                        onProgress = { processed, total, fileName ->
+                            val currentFileFraction = if (total > 0) processed.toFloat() / total.toFloat() else 0f
+                            val totalBatchProgress = ((index.toFloat() + currentFileFraction) / totalFiles.toFloat()).coerceIn(0f, 1f)
+                            _importProgress.value = ImportProgressState(
+                                isImporting = true,
+                                currentFileIndex = fileIndex,
+                                totalFiles = totalFiles,
+                                currentFileName = fileName,
+                                bytesProcessed = processed,
+                                totalBytes = total,
+                                overallProgress = totalBatchProgress
+                            )
+                        }
+                    )
+
+                    result.onSuccess { importRes ->
+                        successCount++
+                        if (importRes.mediaStoreUriToDelete != null) {
+                            urisToDelete.add(importRes.mediaStoreUriToDelete)
+                        } else if (importRes.deleteIntentSender != null) {
+                            fallbackIntentSender = importRes.deleteIntentSender
+                        }
+                    }.onFailure {
+                        failCount++
                     }
-                }.onFailure {
-                    failCount++
                 }
-            }
 
-            if (urisToDelete.isNotEmpty() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                try {
-                    val deleteRequest = android.provider.MediaStore.createDeleteRequest(context.contentResolver, urisToDelete)
-                    _deleteIntentSender.value = deleteRequest.intentSender
-                } catch (e: Exception) {
+                if (urisToDelete.isNotEmpty() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    try {
+                        val deleteRequest = android.provider.MediaStore.createDeleteRequest(context.contentResolver, urisToDelete)
+                        _deleteIntentSender.value = deleteRequest.intentSender
+                    } catch (e: Exception) {
+                        _deleteIntentSender.value = fallbackIntentSender
+                    }
+                } else if (fallbackIntentSender != null) {
                     _deleteIntentSender.value = fallbackIntentSender
                 }
-            } else if (fallbackIntentSender != null) {
-                _deleteIntentSender.value = fallbackIntentSender
-            }
 
-            _isProcessing.value = false
-            if (failCount == 0) {
-                _statusMessage.value = "Successfully encrypted $successCount file(s) into vault."
-            } else {
-                _statusMessage.value = "Imported $successCount file(s). $failCount failed."
+                if (failCount == 0) {
+                    _statusMessage.value = "Successfully encrypted $successCount file(s) into vault."
+                } else {
+                    _statusMessage.value = "Imported $successCount file(s). $failCount failed."
+                }
+            } catch (e: Exception) {
+                _statusMessage.value = "Import error: ${e.message}"
+            } finally {
+                _isProcessing.value = false
+                _importProgress.value = ImportProgressState(isImporting = false)
             }
         }
     }
 
     fun openViewer(context: Context, item: VaultItem) {
         _selectedVaultItem.value = item
-        _isProcessing.value = true
 
-        viewModelScope.launch {
-            val bytes = repository.decryptFileToByteArray(context, item)
+        val mime = item.mimeType.lowercase()
+        val isStreamableType = item.isVideo ||
+                mime.startsWith("video/") ||
+                mime.startsWith("audio/") ||
+                mime == "application/pdf" ||
+                mime.contains("zip") ||
+                item.sizeBytes > 30 * 1024 * 1024L
+
+        if (isStreamableType) {
+            // For streaming media (large videos up to multi-GB, audio, pdf), do not load in-memory byte array.
+            // Dedicated streaming players handle decrypted streaming directly from sandbox storage.
+            _decryptedBytes.value = null
             _isProcessing.value = false
-            if (bytes != null) {
-                _decryptedBytes.value = bytes
-            } else {
-                _statusMessage.value = "Failed to decrypt file."
-                _selectedVaultItem.value = null
+            return
+        }
+
+        _isProcessing.value = true
+        viewModelScope.launch {
+            try {
+                val bytes = repository.decryptFileToByteArray(context, item)
+                _isProcessing.value = false
+                if (bytes != null) {
+                    _decryptedBytes.value = bytes
+                } else {
+                    _decryptedBytes.value = null
+                }
+            } catch (e: Throwable) {
+                _isProcessing.value = false
+                _decryptedBytes.value = null
             }
         }
     }

@@ -43,6 +43,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -121,6 +122,8 @@ fun EncryptedVideoPlayer(
 
     var tempDecryptedFile by remember { mutableStateOf<File?>(null) }
     var isDecrypting by remember { mutableStateOf(true) }
+    var decryptedBytesCount by remember { mutableLongStateOf(0L) }
+    var totalBytesCount by remember { mutableLongStateOf(0L) }
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
 
     // Playback state
@@ -147,10 +150,12 @@ fun EncryptedVideoPlayer(
         tempDecryptedFile = null
     }
 
-    // 1. Background Decryption
+    // 1. Background Decryption with Live Progress
     LaunchedEffect(encryptedFile) {
         withContext(Dispatchers.IO) {
             isDecrypting = true
+            decryptedBytesCount = 0L
+            totalBytesCount = encryptedFile.length()
             try {
                 if (!encryptedFile.exists()) {
                     throw IllegalStateException("Encrypted media file not found on disk.")
@@ -158,15 +163,23 @@ fun EncryptedVideoPlayer(
                 val tempFile = File(context.cacheDir, "temp_video_${UUID.randomUUID()}.mp4")
                 encryptedFile.inputStream().buffered(65536).use { input ->
                     tempFile.outputStream().buffered(65536).use { output ->
-                        CryptoManager.decryptStreamToOutputStream(input, output)
+                        CryptoManager.decryptStreamToOutputStream(
+                            inputStream = input,
+                            outputStream = output,
+                            totalBytes = totalBytesCount,
+                            onProgress = { processed, total ->
+                                decryptedBytesCount = processed
+                                totalBytesCount = total
+                            }
+                        )
                     }
                 }
                 tempDecryptedFile = tempFile
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 e.printStackTrace()
                 shredTempFile()
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Error decrypting video stream.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Error decrypting video: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 isDecrypting = false
@@ -286,15 +299,68 @@ fun EncryptedVideoPlayer(
         contentAlignment = Alignment.Center
     ) {
         if (isDecrypting) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(color = VaultPrimaryCyan)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Decrypting stream in RAM...",
-                    fontSize = 12.sp,
-                    color = Color.White,
-                    fontFamily = FontFamily.Monospace
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth(0.85f)
+                    .padding(24.dp)
+            ) {
+                CircularProgressIndicator(
+                    color = VaultPrimaryCyan,
+                    modifier = Modifier.size(44.dp),
+                    strokeWidth = 3.5.dp
                 )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "DECRYPTING MEDIA STREAM",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val progressFraction = if (totalBytesCount > 0) {
+                    (decryptedBytesCount.toFloat() / totalBytesCount.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                val percent = (progressFraction * 100).toInt().coerceIn(0, 100)
+
+                LinearProgressIndicator(
+                    progress = { progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = VaultPrimaryCyan,
+                    trackColor = Color(0xFF1E293B)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = if (totalBytesCount > 0) {
+                            "${formatBytes(decryptedBytesCount)} / ${formatBytes(totalBytesCount)}"
+                        } else {
+                            "Initializing cipher..."
+                        },
+                        fontSize = 11.sp,
+                        color = Color(0xFF94A3B8),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "$percent%",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = VaultPrimaryCyan,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         } else if (exoPlayer != null) {
             // ExoPlayer View

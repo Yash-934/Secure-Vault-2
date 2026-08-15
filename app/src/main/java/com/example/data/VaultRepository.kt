@@ -106,12 +106,14 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
     /**
      * Encrypts the user-selected file from public gallery and stores it in app-private storage (filesDir/vault/).
      * Option to delete original source Uri using MediaStore APIs.
+     * Supports live progress callback.
      */
     suspend fun encryptAndImportFile(
         context: Context,
         sourceUri: Uri,
         deleteOriginal: Boolean,
-        targetFolder: String = "Root"
+        targetFolder: String = "Root",
+        onProgress: ((bytesProcessed: Long, totalBytes: Long, fileName: String) -> Unit)? = null
     ): Result<ImportResult> = withContext(Dispatchers.IO) {
         try {
             val contentResolver = context.contentResolver
@@ -167,11 +169,18 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             val encryptedFileName = "enc_${UUID.randomUUID()}.bin"
             val targetEncryptedFile = File(vaultDir, encryptedFileName)
 
-            // 3. Encrypt file using AES-256-GCM via CryptoManager
-            contentResolver.openInputStream(sourceUri).use { inputStream ->
+            // 3. Encrypt file using AES-256-GCM via CryptoManager with progress callback
+            contentResolver.openInputStream(sourceUri)?.buffered(65536).use { inputStream ->
                 requireNotNull(inputStream) { "Unable to open input stream from selected file." }
-                FileOutputStream(targetEncryptedFile).use { outputStream ->
-                    CryptoManager.encryptStream(inputStream, outputStream)
+                FileOutputStream(targetEncryptedFile).buffered(65536).use { outputStream ->
+                    CryptoManager.encryptStream(
+                        inputStream = inputStream,
+                        outputStream = outputStream,
+                        totalBytes = sizeBytes,
+                        onProgress = { processed, total ->
+                            onProgress?.invoke(processed, total, originalName)
+                        }
+                    )
                 }
             }
 
@@ -348,17 +357,22 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
     /**
      * Decrypts encrypted vault file directly in-memory to a ByteArray for viewing.
      * Keeps decrypted content transient in memory.
+     * Guarded with size & type limits to prevent OutOfMemory on videos and large files.
      */
     suspend fun decryptFileToByteArray(context: Context, item: VaultItem): ByteArray? = withContext(Dispatchers.IO) {
         try {
+            if (item.isVideo || item.sizeBytes > 30 * 1024 * 1024L) {
+                return@withContext null
+            }
             val vaultDir = File(context.filesDir, vaultDirName)
             val encryptedFile = File(vaultDir, item.encryptedFileName)
             if (!encryptedFile.exists()) return@withContext null
+            if (encryptedFile.length() > 30 * 1024 * 1024L) return@withContext null
 
-            FileInputStream(encryptedFile).use { inputStream ->
-                CryptoManager.decryptStreamToByteArray(inputStream)
+            FileInputStream(encryptedFile).buffered(65536).use { inputStream ->
+                CryptoManager.decryptStreamToByteArray(inputStream, maxSizeBytes = 30 * 1024 * 1024L)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
             null
         }
