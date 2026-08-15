@@ -230,14 +230,26 @@ object CryptoManager {
                 throw IllegalArgumentException("Corrupted legacy encrypted file: Incomplete IV header.")
             }
 
+            // Legacy V1 format: Stream chunk by chunk using cipher.update to avoid huge heap allocations
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
-            val encryptedPayload = inputStream.readBytes()
-            val decryptedData = cipher.doFinal(encryptedPayload)
-            outputStream.write(decryptedData)
+            val chunkBuffer = ByteArray(65536)
+            var bytesRead: Int
+            var totalProcessed = 0L
+            while (inputStream.read(chunkBuffer).also { bytesRead = it } != -1) {
+                val decrypted = cipher.update(chunkBuffer, 0, bytesRead)
+                if (decrypted != null && decrypted.isNotEmpty()) {
+                    outputStream.write(decrypted)
+                }
+                totalProcessed += bytesRead
+                onProgress?.invoke(totalProcessed, totalBytes)
+            }
+            val finalBytes = cipher.doFinal()
+            if (finalBytes != null && finalBytes.isNotEmpty()) {
+                outputStream.write(finalBytes)
+            }
             outputStream.flush()
-            onProgress?.invoke(totalBytes, totalBytes)
         }
     }
 
