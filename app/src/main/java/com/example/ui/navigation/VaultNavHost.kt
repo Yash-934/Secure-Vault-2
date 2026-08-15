@@ -287,6 +287,7 @@ fun VaultNavHost(
 
             SettingsScreen(
                 settings = settings,
+                statusMessage = statusMessage,
                 auditResult = auditResult,
                 isAuditing = isAuditing,
                 onRunAudit = { settingsViewModel.runSecurityAudit() },

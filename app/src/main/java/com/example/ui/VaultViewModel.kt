@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.VaultItem
 import com.example.data.VaultRepository
 import com.example.domain.model.VaultMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -263,6 +264,15 @@ class VaultViewModel(
         }
     }
 
+    private fun showUserFeedback(context: Context, message: String) {
+        _statusMessage.value = message
+        viewModelScope.launch(Dispatchers.Main) {
+            try {
+                android.widget.Toast.makeText(context.applicationContext, message, android.widget.Toast.LENGTH_LONG).show()
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun exportStegoBackup(context: Context, masterPassword: String, coverUri: android.net.Uri, outputUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
@@ -287,16 +297,16 @@ class VaultViewModel(
                             }
                         }
                         val carrierInfo = com.example.security.SteganographyManager.resolveCarrierFileInfo(context, coverUri)
-                        _statusMessage.value = "Zero-Trust Vault concealed inside ${carrierInfo.extension.uppercase()} carrier file!"
+                        showUserFeedback(context, "Zero-Trust Vault concealed inside ${carrierInfo.extension.uppercase()} carrier file!")
                     } else {
-                        _statusMessage.value = "Failed to access carrier or destination file."
+                        showUserFeedback(context, "Failed to access carrier or destination file.")
                     }
                 } else {
                     val err = backupResult.exceptionOrNull()?.localizedMessage ?: "Vault backup creation failed."
-                    _statusMessage.value = "Backup failed: $err"
+                    showUserFeedback(context, "Backup failed: $err")
                 }
             } catch (e: Exception) {
-                _statusMessage.value = "Steganography failed: ${e.message}"
+                showUserFeedback(context, "Steganography failed: ${e.message}")
             } finally {
                 if (tempBackupFile.exists()) {
                     tempBackupFile.delete()
@@ -330,15 +340,15 @@ class VaultViewModel(
                         com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, inStream, repository)
                     }
                     result.onSuccess { count ->
-                        _statusMessage.value = "Steganography Restore complete! Restored $count vault item(s)."
+                        showUserFeedback(context, "Steganography Restore complete! Restored $count vault item(s).")
                     }.onFailure {
-                        _statusMessage.value = "Restore failed: Invalid password or corrupted payload."
+                        showUserFeedback(context, "Restore failed: Invalid password or corrupted payload.")
                     }
                 } else {
-                    _statusMessage.value = extractResult.exceptionOrNull()?.message ?: "No steganography payload found in this file."
+                    showUserFeedback(context, extractResult.exceptionOrNull()?.message ?: "No steganography payload found in this file.")
                 }
             } catch (e: Exception) {
-                _statusMessage.value = "Extraction failed: ${e.message}"
+                showUserFeedback(context, "Extraction failed: ${e.message}")
             } finally {
                 if (tempStegoFile.exists()) tempStegoFile.delete()
                 if (tempExtractedBackupFile.exists()) tempExtractedBackupFile.delete()
@@ -353,7 +363,7 @@ class VaultViewModel(
             try {
                 val outputStream = context.contentResolver.openOutputStream(targetUri)
                 if (outputStream == null) {
-                    _statusMessage.value = "Failed to open destination file."
+                    showUserFeedback(context, "Failed to open destination file.")
                     _isProcessing.value = false
                     return@launch
                 }
@@ -362,13 +372,13 @@ class VaultViewModel(
                 }
                 _isProcessing.value = false
                 result.onSuccess {
-                    _statusMessage.value = "Master Encrypted Backup exported successfully!"
+                    showUserFeedback(context, "Master Encrypted Backup exported successfully!")
                 }.onFailure { err ->
-                    _statusMessage.value = "Backup failed: ${err.localizedMessage ?: "Unknown error"}"
+                    showUserFeedback(context, "Backup failed: ${err.localizedMessage ?: "Unknown error"}")
                 }
             } catch (e: Exception) {
                 _isProcessing.value = false
-                _statusMessage.value = "Backup failed: ${e.localizedMessage ?: "Unknown error"}"
+                showUserFeedback(context, "Backup failed: ${e.localizedMessage ?: "Unknown error"}")
             }
         }
     }
@@ -379,7 +389,7 @@ class VaultViewModel(
             try {
                 val inputStream = context.contentResolver.openInputStream(sourceUri)
                 if (inputStream == null) {
-                    _statusMessage.value = "Failed to open backup file."
+                    showUserFeedback(context, "Failed to open backup file.")
                     _isProcessing.value = false
                     return@launch
                 }
@@ -388,13 +398,13 @@ class VaultViewModel(
                 }
                 _isProcessing.value = false
                 result.onSuccess { restoredCount ->
-                    _statusMessage.value = "Disaster Recovery complete! Restored $restoredCount item(s)."
+                    showUserFeedback(context, "Disaster Recovery complete! Restored $restoredCount item(s).")
                 }.onFailure { err ->
-                    _statusMessage.value = "Restore failed: Invalid password or corrupt backup."
+                    showUserFeedback(context, "Restore failed: Invalid password or corrupt backup.")
                 }
             } catch (e: Exception) {
                 _isProcessing.value = false
-                _statusMessage.value = "Restore failed: ${e.localizedMessage ?: "Unknown error"}"
+                showUserFeedback(context, "Restore failed: ${e.localizedMessage ?: "Unknown error"}")
             }
         }
     }

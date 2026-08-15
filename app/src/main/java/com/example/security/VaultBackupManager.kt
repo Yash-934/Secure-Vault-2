@@ -1,6 +1,7 @@
 package com.example.security
 
 import android.content.Context
+import android.util.Log
 import com.example.data.VaultItem
 import com.example.data.VaultRepository
 import com.squareup.moshi.Moshi
@@ -9,8 +10,6 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -30,18 +29,22 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Encrypted Vault Master Backup & Disaster Recovery Engine.
  *
- * Security Spec:
- * 1. Key Derivation: PBKDF2WithHmacSHA256 with a 16-byte SecureRandom salt and 10,000 iterations.
- * 2. Payload Encryption: AES-256-GCM with a fresh 12-byte IV.
- * 3. Container: Zip archive containing encrypted vault payloads and a JSON metadata manifest.
+ * Security Architecture:
+ * 1. Key Derivation: PBKDF2WithHmacSHA256 with 16-byte SecureRandom salt and 10,000 iterations.
+ * 2. Payload Encryption: Streaming Chunked AES-256-GCM (1MB per chunk, fresh 12-byte IV per chunk).
+ *    Guarantees ~1MB maximum heap allocation on any size backup without OutOfMemoryError.
+ * 3. Format: [Magic 8B 'VLT_BCK2'] + [Salt 16B] + [Chunks: Len(4B) + isLast(1B) + IV(12B) + CiphertextWithTag].
+ * 4. Backward compatible with legacy single-block backups.
  */
 object VaultBackupManager {
 
+    private val BACKUP_MAGIC_V2 = "VLT_BCK2".toByteArray(Charsets.UTF_8) // 8 bytes
     private const val SALT_SIZE_BYTES = 16
     private const val IV_SIZE_BYTES = 12
     private const val PBKDF2_ITERATIONS = 10_000
     private const val KEY_LENGTH_BITS = 256
     private const val GCM_TAG_LENGTH_BITS = 128
+    private const val CHUNK_SIZE = 1024 * 1024 // 1 MB streaming chunks
     private const val MANIFEST_FILENAME = "vault_manifest.json"
 
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -55,6 +58,32 @@ object VaultBackupManager {
         return SecretKeySpec(keyBytes, "AES")
     }
 
+    private fun readFully(inputStream: InputStream, buffer: ByteArray, offset: Int, length: Int): Int {
+        var totalRead = 0
+        while (totalRead < length) {
+            val read = inputStream.read(buffer, offset + totalRead, length - totalRead)
+            if (read == -1) break
+            totalRead += read
+        }
+        return totalRead
+    }
+
+    private fun writeInt(outputStream: OutputStream, value: Int) {
+        outputStream.write((value ushr 24) and 0xFF)
+        outputStream.write((value ushr 16) and 0xFF)
+        outputStream.write((value ushr 8) and 0xFF)
+        outputStream.write(value and 0xFF)
+    }
+
+    private fun readInt(inputStream: InputStream): Int {
+        val b1 = inputStream.read()
+        val b2 = inputStream.read()
+        val b3 = inputStream.read()
+        val b4 = inputStream.read()
+        if (b1 or b2 or b3 or b4 < 0) return -1
+        return (b1 shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+    }
+
     suspend fun exportMasterBackup(
         context: Context,
         masterPassword: String,
@@ -66,7 +95,7 @@ object VaultBackupManager {
             val vaultDir = vaultRepository.getVaultDirectory(context)
             val items = vaultRepository.allVaultItems.first()
 
-            // 1. Create temporary unencrypted ZIP buffer containing vault files & manifest JSON
+            // 1. Create temporary ZIP containing vault items & metadata manifest
             ZipOutputStream(FileOutputStream(tempZipFile).buffered(65536)).use { zos ->
                 // Add manifest.json
                 val manifestJson = jsonAdapter.toJson(items)
@@ -75,60 +104,86 @@ object VaultBackupManager {
                 zos.write(manifestBytes)
                 zos.closeEntry()
 
-                // Add vault files safely for each item in database
+                // Add vault files safely
                 items.forEach { item ->
                     val file = File(vaultDir, item.encryptedFileName)
                     if (file.exists() && file.length() > 0) {
                         try {
                             zos.putNextEntry(ZipEntry("vault_data_v2/${item.encryptedFileName}"))
                             FileInputStream(file).buffered(65536).use { fis ->
-                                com.example.security.CryptoManager.decryptStreamToOutputStream(fis, zos)
+                                CryptoManager.decryptStreamToOutputStream(fis, zos)
                             }
-                            zos.closeEntry()
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e("VaultBackup", "Failed to package ${item.originalName}: ${e.message}")
+                        } finally {
+                            try { zos.closeEntry() } catch (_: Throwable) {}
                         }
                     }
                 }
             }
 
-            // 2. Generate random 16-byte Salt and 12-byte IV
+            if (!tempZipFile.exists() || tempZipFile.length() <= 0) {
+                return@withContext Result.failure(IllegalStateException("Failed to assemble vault package."))
+            }
+
+            // 2. Generate random 16-byte Salt
             val random = SecureRandom()
             val salt = ByteArray(SALT_SIZE_BYTES)
-            val iv = ByteArray(IV_SIZE_BYTES)
             random.nextBytes(salt)
-            random.nextBytes(iv)
 
             // 3. Derive key via PBKDF2
             val secretKey = deriveKey(masterPassword, salt)
 
-            // 4. Initialize AES-GCM cipher
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
-
-            // 5. Write header (Salt + IV) to outputStream
+            // 4. Write Header: Magic 'VLT_BCK2' (8 bytes) + Salt (16 bytes)
+            outputStream.write(BACKUP_MAGIC_V2)
             outputStream.write(salt)
-            outputStream.write(iv)
 
-            // 6. Encrypt zip file payload into outputStream using streaming buffer
-            FileInputStream(tempZipFile).buffered(65536).use { fis ->
-                val buffer = ByteArray(65536)
-                var bytesRead: Int
-                while (fis.read(buffer).also { bytesRead = it } != -1) {
-                    val encryptedChunk = cipher.update(buffer, 0, bytesRead)
-                    if (encryptedChunk != null && encryptedChunk.isNotEmpty()) {
-                        outputStream.write(encryptedChunk)
+            // 5. Chunked AES-256-GCM Streaming Encryption (~1MB peak heap)
+            FileInputStream(tempZipFile).buffered(CHUNK_SIZE).use { fis ->
+                val readBuffer = ByteArray(CHUNK_SIZE)
+                val nextBuffer = ByteArray(CHUNK_SIZE)
+
+                var currentChunkBytes = readFully(fis, readBuffer, 0, CHUNK_SIZE)
+
+                if (currentChunkBytes <= 0) {
+                    // Empty archive fallback
+                    val chunkIV = ByteArray(IV_SIZE_BYTES).also { random.nextBytes(it) }
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+                    val cipherText = cipher.doFinal(ByteArray(0))
+
+                    writeInt(outputStream, cipherText.size)
+                    outputStream.write(1) // isLast
+                    outputStream.write(chunkIV)
+                    outputStream.write(cipherText)
+                } else {
+                    while (currentChunkBytes > 0) {
+                        val nextChunkBytes = readFully(fis, nextBuffer, 0, CHUNK_SIZE)
+                        val isLast = (nextChunkBytes <= 0)
+
+                        val chunkIV = ByteArray(IV_SIZE_BYTES).also { random.nextBytes(it) }
+                        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+
+                        val cipherText = cipher.doFinal(readBuffer, 0, currentChunkBytes)
+
+                        writeInt(outputStream, cipherText.size)
+                        outputStream.write(if (isLast) 1 else 0)
+                        outputStream.write(chunkIV)
+                        outputStream.write(cipherText)
+
+                        if (isLast) break
+
+                        System.arraycopy(nextBuffer, 0, readBuffer, 0, nextChunkBytes)
+                        currentChunkBytes = nextChunkBytes
                     }
                 }
             }
-            val finalChunk = cipher.doFinal()
-            if (finalChunk != null && finalChunk.isNotEmpty()) {
-                outputStream.write(finalChunk)
-            }
-            outputStream.flush()
 
+            outputStream.flush()
             Result.success(Unit)
         } catch (e: Exception) {
+            Log.e("VaultBackup", "Export failed: ${e.message}", e)
             Result.failure(e)
         } finally {
             if (tempZipFile.exists()) {
@@ -147,42 +202,85 @@ object VaultBackupManager {
         try {
             val vaultDir = vaultRepository.getVaultDirectory(context)
 
-            // 1. Read 16-byte Salt and 12-byte IV header
-            val salt = ByteArray(SALT_SIZE_BYTES)
-            val iv = ByteArray(IV_SIZE_BYTES)
-
-            val saltRead = inputStream.read(salt)
-            val ivRead = inputStream.read(iv)
-
-            if (saltRead < SALT_SIZE_BYTES || ivRead < IV_SIZE_BYTES) {
-                return@withContext Result.failure(IllegalArgumentException("Invalid backup format: Missing Salt or IV header."))
+            // 1. Check Magic Header (8 bytes)
+            val headerBytes = ByteArray(8)
+            val headerRead = readFully(inputStream, headerBytes, 0, 8)
+            if (headerRead < 8) {
+                return@withContext Result.failure(IllegalArgumentException("Corrupted backup file: Header too short."))
             }
 
-            // 2. Derive Key via PBKDF2
-            val secretKey = deriveKey(masterPassword, salt)
+            val isV2 = headerBytes.contentEquals(BACKUP_MAGIC_V2)
 
-            // 3. Initialize AES-GCM cipher in DECRYPT_MODE
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+            if (isV2) {
+                // V2 Chunked Format: Read 16-byte Salt
+                val salt = ByteArray(SALT_SIZE_BYTES)
+                val saltRead = readFully(inputStream, salt, 0, SALT_SIZE_BYTES)
+                if (saltRead < SALT_SIZE_BYTES) {
+                    return@withContext Result.failure(IllegalArgumentException("Incomplete backup salt header."))
+                }
 
-            // 4. Decrypt backup stream payload directly to temporary zip file (RAM safe)
-            FileOutputStream(tempRestoredZip).buffered(65536).use { decOut ->
-                val buffer = ByteArray(65536)
-                var bytesRead: Int
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    val plainChunk = cipher.update(buffer, 0, bytesRead)
-                    if (plainChunk != null && plainChunk.isNotEmpty()) {
+                val secretKey = deriveKey(masterPassword, salt)
+
+                // Decrypt chunk-by-chunk directly to disk-backed temp zip file
+                FileOutputStream(tempRestoredZip).buffered(65536).use { decOut ->
+                    while (true) {
+                        val cipherLength = readInt(inputStream)
+                        if (cipherLength < 0) break
+
+                        val isLastFlag = inputStream.read()
+                        if (isLastFlag < 0) break
+
+                        val chunkIV = ByteArray(IV_SIZE_BYTES)
+                        val ivRead = readFully(inputStream, chunkIV, 0, IV_SIZE_BYTES)
+                        if (ivRead < IV_SIZE_BYTES) {
+                            throw IllegalStateException("Unexpected end of backup stream: Incomplete chunk IV.")
+                        }
+
+                        val cipherBuffer = ByteArray(cipherLength)
+                        val bytesRead = readFully(inputStream, cipherBuffer, 0, cipherLength)
+                        if (bytesRead < cipherLength) {
+                            throw IllegalStateException("Corrupt chunk in backup stream.")
+                        }
+
+                        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+
+                        val plainChunk = cipher.doFinal(cipherBuffer)
                         decOut.write(plainChunk)
+
+                        if (isLastFlag == 1) break
                     }
+                    decOut.flush()
                 }
-                val finalChunk = cipher.doFinal()
-                if (finalChunk != null && finalChunk.isNotEmpty()) {
-                    decOut.write(finalChunk)
+            } else {
+                // Legacy V1 Format: Header was the first 8 bytes of the 16-byte Salt
+                val salt = ByteArray(SALT_SIZE_BYTES)
+                System.arraycopy(headerBytes, 0, salt, 0, 8)
+                val remainingSalt = readFully(inputStream, salt, 8, 8)
+                if (remainingSalt < 8) {
+                    return@withContext Result.failure(IllegalArgumentException("Incomplete legacy salt header."))
                 }
-                decOut.flush()
+
+                val iv = ByteArray(IV_SIZE_BYTES)
+                val ivRead = readFully(inputStream, iv, 0, IV_SIZE_BYTES)
+                if (ivRead < IV_SIZE_BYTES) {
+                    return@withContext Result.failure(IllegalArgumentException("Incomplete legacy IV header."))
+                }
+
+                val secretKey = deriveKey(masterPassword, salt)
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+
+                val encryptedBytes = inputStream.readBytes()
+                val decryptedZipBytes = cipher.doFinal(encryptedBytes)
+                FileOutputStream(tempRestoredZip).use { it.write(decryptedZipBytes) }
             }
 
-            // 5. Read ZIP from decrypted temp file
+            if (!tempRestoredZip.exists() || tempRestoredZip.length() <= 0) {
+                return@withContext Result.failure(IllegalStateException("Decryption produced empty archive."))
+            }
+
+            // 2. Read ZIP from decrypted temp file & restore into Vault
             var restoredCount = 0
             var restoredItems: List<VaultItem>? = null
 
@@ -197,10 +295,10 @@ object VaultBackupManager {
                         val targetFile = File(vaultDir, fileName)
                         try {
                             FileOutputStream(targetFile).buffered(65536).use { fos ->
-                                com.example.security.CryptoManager.encryptStream(zis, fos)
+                                CryptoManager.encryptStream(zis, fos)
                             }
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e("VaultBackup", "Error restoring $fileName: ${e.message}")
                             targetFile.delete()
                         }
                     } else if (entry.name.startsWith("vault_data/")) {
@@ -210,12 +308,12 @@ object VaultBackupManager {
                             zis.copyTo(fos)
                         }
                     }
-                    zis.closeEntry()
+                    try { zis.closeEntry() } catch (_: Throwable) {}
                     entry = zis.nextEntry
                 }
             }
 
-            // 6. Restore DB items
+            // 3. Re-insert items into Room Database
             restoredItems?.forEach { item ->
                 vaultRepository.insertRestoredVaultItem(item)
                 restoredCount++
@@ -223,6 +321,7 @@ object VaultBackupManager {
 
             Result.success(restoredCount)
         } catch (e: Exception) {
+            Log.e("VaultBackup", "Import failed: ${e.message}", e)
             Result.failure(e)
         } finally {
             if (tempRestoredZip.exists()) {

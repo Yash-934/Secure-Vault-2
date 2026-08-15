@@ -55,6 +55,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -62,6 +64,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -103,6 +106,7 @@ private val SubtitleText = Color(0xFF6C7A8E)
 @Composable
 fun SettingsScreen(
     settings: VaultSettings,
+    statusMessage: String? = null,
     auditResult: AuditResult? = null,
     isAuditing: Boolean = false,
     onRunAudit: () -> Unit = {},
@@ -128,11 +132,18 @@ fun SettingsScreen(
     onNavigateToPasswords: () -> Unit = {},
     onHelpClick: () -> Unit = {}
 ) {
+    val snackbarHostState = remember { SnackbarHostState() }
     var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
     var showChangeKillPinDialog by remember { mutableStateOf(false) }
     var showMaxSecurityGuideDialog by remember { mutableStateOf(false) }
     var showAntiTamperDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    LaunchedEffect(statusMessage) {
+        if (!statusMessage.isNullOrEmpty()) {
+            snackbarHostState.showSnackbar(statusMessage)
+        }
+    }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -146,6 +157,7 @@ fun SettingsScreen(
     }
     Scaffold(
         containerColor = DarkNavyBg,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
