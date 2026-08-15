@@ -61,13 +61,13 @@ object VaultBackupManager {
         outputStream: OutputStream,
         vaultRepository: VaultRepository
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        val tempZipFile = File(context.cacheDir, "temp_backup_${System.currentTimeMillis()}.zip")
         try {
-            val vaultDir = File(context.filesDir, "vault")
+            val vaultDir = vaultRepository.getVaultDirectory(context)
             val items = vaultRepository.allVaultItems.first()
 
             // 1. Create temporary unencrypted ZIP buffer containing vault files & manifest JSON
-            val tempZipFile = File(context.cacheDir, "temp_backup_${System.currentTimeMillis()}.zip")
-            ZipOutputStream(FileOutputStream(tempZipFile)).use { zos ->
+            ZipOutputStream(FileOutputStream(tempZipFile).buffered(65536)).use { zos ->
                 // Add manifest.json
                 val manifestJson = jsonAdapter.toJson(items)
                 val manifestBytes = manifestJson.toByteArray(Charsets.UTF_8)
@@ -75,19 +75,18 @@ object VaultBackupManager {
                 zos.write(manifestBytes)
                 zos.closeEntry()
 
-                // Add vault files
-                if (vaultDir.exists()) {
-                    vaultDir.listFiles()?.forEach { file ->
-                        if (file.isFile) {
-                            zos.putNextEntry(ZipEntry("vault_data_v2/${file.name}"))
-                            FileInputStream(file).use { fis ->
-                                try {
-                                    com.example.security.CryptoManager.decryptStreamToOutputStream(fis, zos)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
+                // Add vault files safely for each item in database
+                items.forEach { item ->
+                    val file = File(vaultDir, item.encryptedFileName)
+                    if (file.exists() && file.length() > 0) {
+                        try {
+                            zos.putNextEntry(ZipEntry("vault_data_v2/${item.encryptedFileName}"))
+                            FileInputStream(file).buffered(65536).use { fis ->
+                                com.example.security.CryptoManager.decryptStreamToOutputStream(fis, zos)
                             }
                             zos.closeEntry()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
                     }
                 }
@@ -111,9 +110,9 @@ object VaultBackupManager {
             outputStream.write(salt)
             outputStream.write(iv)
 
-            // 6. Encrypt zip file payload into outputStream
-            FileInputStream(tempZipFile).use { fis ->
-                val buffer = ByteArray(8192)
+            // 6. Encrypt zip file payload into outputStream using streaming buffer
+            FileInputStream(tempZipFile).buffered(65536).use { fis ->
+                val buffer = ByteArray(65536)
                 var bytesRead: Int
                 while (fis.read(buffer).also { bytesRead = it } != -1) {
                     val encryptedChunk = cipher.update(buffer, 0, bytesRead)
@@ -128,12 +127,13 @@ object VaultBackupManager {
             }
             outputStream.flush()
 
-            // Clean temp zip
-            tempZipFile.delete()
-
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            if (tempZipFile.exists()) {
+                tempZipFile.delete()
+            }
         }
     }
 
@@ -143,8 +143,9 @@ object VaultBackupManager {
         inputStream: InputStream,
         vaultRepository: VaultRepository
     ): Result<Int> = withContext(Dispatchers.IO) {
+        val tempRestoredZip = File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
         try {
-            val vaultDir = File(context.filesDir, "vault").apply { if (!exists()) mkdirs() }
+            val vaultDir = vaultRepository.getVaultDirectory(context)
 
             // 1. Read 16-byte Salt and 12-byte IV header
             val salt = ByteArray(SALT_SIZE_BYTES)
@@ -164,15 +165,28 @@ object VaultBackupManager {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
-            // 4. Decrypt backup stream payload
-            val encryptedBytes = inputStream.readBytes()
-            val decryptedZipBytes = cipher.doFinal(encryptedBytes)
+            // 4. Decrypt backup stream payload directly to temporary zip file (RAM safe)
+            FileOutputStream(tempRestoredZip).buffered(65536).use { decOut ->
+                val buffer = ByteArray(65536)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    val plainChunk = cipher.update(buffer, 0, bytesRead)
+                    if (plainChunk != null && plainChunk.isNotEmpty()) {
+                        decOut.write(plainChunk)
+                    }
+                }
+                val finalChunk = cipher.doFinal()
+                if (finalChunk != null && finalChunk.isNotEmpty()) {
+                    decOut.write(finalChunk)
+                }
+                decOut.flush()
+            }
 
-            // 5. Read ZIP from decrypted bytes
+            // 5. Read ZIP from decrypted temp file
             var restoredCount = 0
             var restoredItems: List<VaultItem>? = null
 
-            ZipInputStream(ByteArrayInputStream(decryptedZipBytes)).use { zis ->
+            ZipInputStream(FileInputStream(tempRestoredZip).buffered(65536)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
                 while (entry != null) {
                     if (entry.name == MANIFEST_FILENAME) {
@@ -182,7 +196,7 @@ object VaultBackupManager {
                         val fileName = File(entry.name).name
                         val targetFile = File(vaultDir, fileName)
                         try {
-                            FileOutputStream(targetFile).use { fos ->
+                            FileOutputStream(targetFile).buffered(65536).use { fos ->
                                 com.example.security.CryptoManager.encryptStream(zis, fos)
                             }
                         } catch (e: Exception) {
@@ -192,7 +206,7 @@ object VaultBackupManager {
                     } else if (entry.name.startsWith("vault_data/")) {
                         val fileName = File(entry.name).name
                         val targetFile = File(vaultDir, fileName)
-                        FileOutputStream(targetFile).use { fos ->
+                        FileOutputStream(targetFile).buffered(65536).use { fos ->
                             zis.copyTo(fos)
                         }
                     }
@@ -210,6 +224,10 @@ object VaultBackupManager {
             Result.success(restoredCount)
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            if (tempRestoredZip.exists()) {
+                tempRestoredZip.delete()
+            }
         }
     }
 }

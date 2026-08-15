@@ -269,12 +269,11 @@ class VaultViewModel(
             val tempBackupFile = java.io.File(context.cacheDir, "temp_stego_backup_${System.currentTimeMillis()}.bin")
             try {
                 // 1. Export encrypted vault backup into temp file
-                val tempOut = java.io.FileOutputStream(tempBackupFile).buffered(65536)
-                val backupResult = com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, tempOut, repository)
-                tempOut.flush()
-                tempOut.close()
+                val backupResult = java.io.FileOutputStream(tempBackupFile).buffered(65536).use { tempOut ->
+                    com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, tempOut, repository)
+                }
 
-                if (backupResult.isSuccess) {
+                if (backupResult.isSuccess && tempBackupFile.length() > 0) {
                     val coverInputStream = context.contentResolver.openInputStream(coverUri)?.buffered(65536)
                     val payloadInputStream = java.io.FileInputStream(tempBackupFile).buffered(65536)
                     val outStream = context.contentResolver.openOutputStream(outputUri)?.buffered(65536)
@@ -293,7 +292,8 @@ class VaultViewModel(
                         _statusMessage.value = "Failed to access carrier or destination file."
                     }
                 } else {
-                    _statusMessage.value = "Failed to create encrypted backup container."
+                    val err = backupResult.exceptionOrNull()?.localizedMessage ?: "Vault backup creation failed."
+                    _statusMessage.value = "Backup failed: $err"
                 }
             } catch (e: Exception) {
                 _statusMessage.value = "Steganography failed: ${e.message}"
@@ -321,14 +321,12 @@ class VaultViewModel(
                 }
 
                 // 2. Extract payload from file using SteganographyManager
-                val extractOut = tempExtractedBackupFile.outputStream().buffered(65536)
-                val extractResult = extractOut.use { out ->
+                val extractResult = tempExtractedBackupFile.outputStream().buffered(65536).use { out ->
                     com.example.security.SteganographyManager.extractPayloadFromFile(tempStegoFile, out)
                 }
 
-                if (extractResult.isSuccess) {
-                    val backupInputStream = tempExtractedBackupFile.inputStream().buffered(65536)
-                    val result = backupInputStream.use { inStream ->
+                if (extractResult.isSuccess && tempExtractedBackupFile.length() > 0) {
+                    val result = tempExtractedBackupFile.inputStream().buffered(65536).use { inStream ->
                         com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, inStream, repository)
                     }
                     result.onSuccess { count ->
@@ -349,28 +347,54 @@ class VaultViewModel(
         }
     }
 
-    fun exportMasterBackup(context: Context, masterPassword: String, outputStream: java.io.OutputStream) {
+    fun exportMasterBackup(context: Context, masterPassword: String, targetUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
-            val result = com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, outputStream, repository)
-            _isProcessing.value = false
-            result.onSuccess {
-                _statusMessage.value = "Master Encrypted Backup exported successfully!"
-            }.onFailure { err ->
-                _statusMessage.value = "Backup failed: ${err.localizedMessage ?: "Unknown error"}"
+            try {
+                val outputStream = context.contentResolver.openOutputStream(targetUri)
+                if (outputStream == null) {
+                    _statusMessage.value = "Failed to open destination file."
+                    _isProcessing.value = false
+                    return@launch
+                }
+                val result = outputStream.buffered(65536).use { stream ->
+                    com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, stream, repository)
+                }
+                _isProcessing.value = false
+                result.onSuccess {
+                    _statusMessage.value = "Master Encrypted Backup exported successfully!"
+                }.onFailure { err ->
+                    _statusMessage.value = "Backup failed: ${err.localizedMessage ?: "Unknown error"}"
+                }
+            } catch (e: Exception) {
+                _isProcessing.value = false
+                _statusMessage.value = "Backup failed: ${e.localizedMessage ?: "Unknown error"}"
             }
         }
     }
 
-    fun importMasterBackup(context: Context, masterPassword: String, inputStream: java.io.InputStream) {
+    fun importMasterBackup(context: Context, masterPassword: String, sourceUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
-            val result = com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, inputStream, repository)
-            _isProcessing.value = false
-            result.onSuccess { restoredCount ->
-                _statusMessage.value = "Disaster Recovery complete! Restored $restoredCount item(s)."
-            }.onFailure { err ->
-                _statusMessage.value = "Restore failed: Invalid password or corrupt backup."
+            try {
+                val inputStream = context.contentResolver.openInputStream(sourceUri)
+                if (inputStream == null) {
+                    _statusMessage.value = "Failed to open backup file."
+                    _isProcessing.value = false
+                    return@launch
+                }
+                val result = inputStream.buffered(65536).use { stream ->
+                    com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, stream, repository)
+                }
+                _isProcessing.value = false
+                result.onSuccess { restoredCount ->
+                    _statusMessage.value = "Disaster Recovery complete! Restored $restoredCount item(s)."
+                }.onFailure { err ->
+                    _statusMessage.value = "Restore failed: Invalid password or corrupt backup."
+                }
+            } catch (e: Exception) {
+                _isProcessing.value = false
+                _statusMessage.value = "Restore failed: ${e.localizedMessage ?: "Unknown error"}"
             }
         }
     }

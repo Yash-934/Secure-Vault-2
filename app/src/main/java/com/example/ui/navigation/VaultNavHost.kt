@@ -447,10 +447,7 @@ fun VaultNavHost(
                     showExportPasswordDialog = false
                     val uri = exportTargetUri ?: return@BackupPasswordDialog
                     exportTargetUri = null
-                    val outputStream = context.contentResolver.openOutputStream(uri)
-                    if (outputStream != null) {
-                        vaultViewModel.exportMasterBackup(context, password, outputStream)
-                    }
+                    vaultViewModel.exportMasterBackup(context, password, uri)
                 }
             )
         }
@@ -468,10 +465,7 @@ fun VaultNavHost(
                     showImportPasswordDialog = false
                     val uri = importSourceUri ?: return@BackupPasswordDialog
                     importSourceUri = null
-                    val inputStream = context.contentResolver.openInputStream(uri)
-                    if (inputStream != null) {
-                        vaultViewModel.importMasterBackup(context, password, inputStream)
-                    }
+                    vaultViewModel.importMasterBackup(context, password, uri)
                 }
             )
         }

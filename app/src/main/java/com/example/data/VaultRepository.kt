@@ -29,6 +29,8 @@ data class ImportResult(
 
 class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: String = "vault") {
 
+    fun getVaultDirectory(context: Context): File = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
+
     val allVaultItems: Flow<List<VaultItem>> = vaultDao.getAllVaultItems()
     val photos: Flow<List<VaultItem>> = vaultDao.getPhotos()
     val videos: Flow<List<VaultItem>> = vaultDao.getVideos()
