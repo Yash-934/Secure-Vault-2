@@ -39,6 +39,18 @@ class VaultViewModel(
     private val _vaultMode = MutableStateFlow(VaultMode.LOCKED)
     val vaultMode: StateFlow<VaultMode> = _vaultMode.asStateFlow()
 
+    @Volatile
+    var isSystemPickerActive: Boolean = false
+        private set
+
+    fun onSystemPickerLaunched() {
+        isSystemPickerActive = true
+    }
+
+    fun onSystemPickerFinished() {
+        isSystemPickerActive = false
+    }
+
     val repository: VaultRepository get() = if (vaultMode.value == VaultMode.DECOY) decoyRepository else realRepository
 
     private val _isUnlocked = MutableStateFlow(false)

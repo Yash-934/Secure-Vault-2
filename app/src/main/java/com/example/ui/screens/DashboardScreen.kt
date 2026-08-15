@@ -134,6 +134,8 @@ fun DashboardScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToAbout: () -> Unit,
     onNavigateToPasswords: () -> Unit = {},
+    onPickerLaunched: () -> Unit = {},
+    onPickerFinished: () -> Unit = {},
     onClearStatusMessage: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -170,6 +172,7 @@ fun DashboardScreen(
     val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris ->
+        onPickerFinished()
         if (uris.isNotEmpty()) {
             onFilesSelected(uris)
         }
@@ -178,6 +181,7 @@ fun DashboardScreen(
     val docPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
+        onPickerFinished()
         if (uris.isNotEmpty()) {
             onFilesSelected(uris)
         }
@@ -790,6 +794,7 @@ fun DashboardScreen(
                                 .border(1.dp, CapsuleBorder, RoundedCornerShape(12.dp))
                                 .clickable {
                                     showImportDialog = false
+                                    onPickerLaunched()
                                     mediaPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                     )
@@ -837,6 +842,7 @@ fun DashboardScreen(
                                 .border(1.dp, CapsuleBorder, RoundedCornerShape(12.dp))
                                 .clickable {
                                     showImportDialog = false
+                                    onPickerLaunched()
                                     docPickerLauncher.launch(arrayOf("*/*"))
                                 }
                                 .padding(14.dp)

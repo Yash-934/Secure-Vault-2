@@ -104,6 +104,8 @@ fun VaultHomeScreen(
     onDeleteItem: (VaultItem) -> Unit,
     onExportItem: (VaultItem) -> Unit,
     onLockClick: () -> Unit,
+    onPickerLaunched: () -> Unit = {},
+    onPickerFinished: () -> Unit = {},
     onClearStatusMessage: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -119,6 +121,7 @@ fun VaultHomeScreen(
     val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris ->
+        onPickerFinished()
         if (uris.isNotEmpty()) {
             onFilesSelected(uris)
         }
@@ -186,6 +189,7 @@ fun VaultHomeScreen(
                     .clip(RoundedCornerShape(18.dp))
                     .background(CyberNeonGradient)
                     .clickable {
+                        onPickerLaunched()
                         mediaPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                         )
@@ -304,6 +308,7 @@ fun VaultHomeScreen(
             // Main Content Area
             if (vaultItems.isEmpty()) {
                 EmptyVaultView(onImportClick = {
+                    onPickerLaunched()
                     mediaPickerLauncher.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                     )

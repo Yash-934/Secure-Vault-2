@@ -125,12 +125,14 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
-                // Lifecycle Observer: Locks vault when app is backgrounded
+                // Lifecycle Observer: Locks vault when app is backgrounded (ignoring transient system pickers)
                 DisposableEffect(lifecycle) {
                     val observer = LifecycleEventObserver { _, event ->
                         when (event) {
                             Lifecycle.Event.ON_STOP -> {
-                                vaultViewModel.lockVault()
+                                if (!vaultViewModel.isSystemPickerActive) {
+                                    vaultViewModel.lockVault()
+                                }
                             }
                             else -> {}
                         }
