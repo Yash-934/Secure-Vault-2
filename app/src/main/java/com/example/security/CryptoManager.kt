@@ -145,6 +145,7 @@ object CryptoManager {
     /**
      * Encrypts the provided InputStream using Chunked AES-256-GCM streaming.
      * Peak memory consumption is capped at ~1MB regardless of whether the file is 100MB or 10GB.
+     * Compatible with AndroidKeyStore's randomized encryption requirement (hardware generates random IV per chunk).
      * Zeroes all intermediate memory buffers immediately after use.
      */
     fun encryptStream(
@@ -154,34 +155,48 @@ object CryptoManager {
         onProgress: ((bytesProcessed: Long, totalBytes: Long) -> Unit)? = null
     ) {
         val secretKey = getSecretKey()
-        val baseIV = generateRandomIV()
 
-        // 1. Write Header: Magic + Base IV
+        // 1. Write Header: Magic VLT2
         outputStream.write(V2_MAGIC)
-        outputStream.write(baseIV)
 
         val readBuffer = ByteArray(CHUNK_SIZE)
         var nextBuffer = ByteArray(CHUNK_SIZE)
-        var chunkIndex = 0L
         var totalProcessed = 0L
 
         try {
             var currentChunkBytes = readFully(inputStream, readBuffer, 0, CHUNK_SIZE)
 
+            // Handle empty (0-byte) files safely
+            if (currentChunkBytes <= 0) {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+                val iv = cipher.iv
+                val cipherText = cipher.doFinal(ByteArray(0))
+
+                writeInt(outputStream, cipherText.size)
+                outputStream.write(1) // isLast
+                outputStream.write(iv)
+                outputStream.write(cipherText)
+                outputStream.flush()
+                onProgress?.invoke(0L, totalBytes)
+                return
+            }
+
             while (currentChunkBytes > 0) {
                 val nextChunkBytes = readFully(inputStream, nextBuffer, 0, CHUNK_SIZE)
                 val isLast = (nextChunkBytes <= 0)
 
-                // Encrypt current chunk with GCM
-                val chunkIV = computeChunkIV(baseIV, chunkIndex)
+                // AndroidKeyStore requires hardware-generated IV in ENCRYPT_MODE
                 val cipher = Cipher.getInstance(TRANSFORMATION)
-                cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+                val chunkIV = cipher.iv
 
                 val cipherText = cipher.doFinal(readBuffer, 0, currentChunkBytes)
 
-                // Write chunk header: length (4 bytes) + isLast flag (1 byte)
+                // Chunk layout: Length (4 bytes) + isLast (1 byte) + IV (12 bytes) + CipherText
                 writeInt(outputStream, cipherText.size)
                 outputStream.write(if (isLast) 1 else 0)
+                outputStream.write(chunkIV)
                 outputStream.write(cipherText)
 
                 totalProcessed += currentChunkBytes
@@ -191,7 +206,6 @@ object CryptoManager {
 
                 System.arraycopy(nextBuffer, 0, readBuffer, 0, nextChunkBytes)
                 currentChunkBytes = nextChunkBytes
-                chunkIndex++
             }
 
             outputStream.flush()
@@ -282,31 +296,29 @@ object CryptoManager {
 
         if (isV2) {
             // V2 Chunked AEAD Streaming Decryption (Constant ~1MB RAM)
-            val baseIV = ByteArray(IV_SIZE_BYTES)
-            val ivRead = readFully(inputStream, baseIV, 0, IV_SIZE_BYTES)
-            if (ivRead < IV_SIZE_BYTES) {
-                throw IllegalArgumentException("Corrupted encrypted file: Missing Base IV.")
-            }
-
-            var chunkIndex = 0L
             var totalProcessed = 0L
 
             while (true) {
                 val cipherLength = readInt(inputStream)
-                if (cipherLength <= 0) break
+                if (cipherLength < 0) break
 
                 val isLastFlag = inputStream.read()
                 if (isLastFlag < 0) break
+
+                val chunkIV = ByteArray(IV_SIZE_BYTES)
+                val ivRead = readFully(inputStream, chunkIV, 0, IV_SIZE_BYTES)
+                if (ivRead < IV_SIZE_BYTES) {
+                    throw IllegalStateException("Unexpected end of encrypted stream: Incomplete chunk IV.")
+                }
 
                 val cipherBuffer = ByteArray(cipherLength)
                 var plainChunk: ByteArray? = null
                 try {
                     val bytesRead = readFully(inputStream, cipherBuffer, 0, cipherLength)
                     if (bytesRead < cipherLength) {
-                        throw IllegalStateException("Unexpected end of encrypted stream in chunk $chunkIndex.")
+                        throw IllegalStateException("Unexpected end of encrypted stream.")
                     }
 
-                    val chunkIV = computeChunkIV(baseIV, chunkIndex)
                     val cipher = Cipher.getInstance(TRANSFORMATION)
                     cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
 
@@ -318,10 +330,10 @@ object CryptoManager {
                 } finally {
                     wipeByteArray(cipherBuffer)
                     wipeByteArray(plainChunk)
+                    wipeByteArray(chunkIV)
                 }
 
                 if (isLastFlag == 1) break
-                chunkIndex++
             }
             outputStream.flush()
         } else {
