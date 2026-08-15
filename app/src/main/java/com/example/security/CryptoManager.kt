@@ -109,8 +109,39 @@ object CryptoManager {
     }
 
     /**
+     * Securely zeroes out a direct or heap ByteBuffer to prevent Memory Remanence & RAM scraping attacks.
+     * Overwrites the memory with 0x00 bytes.
+     */
+    private fun wipeDirectBuffer(buffer: ByteBuffer?) {
+        if (buffer == null) return
+        try {
+            buffer.clear()
+            val zeroArray = ByteArray(minOf(65536, buffer.capacity()))
+            while (buffer.hasRemaining()) {
+                val toPut = minOf(buffer.remaining(), zeroArray.size)
+                buffer.put(zeroArray, 0, toPut)
+            }
+        } catch (_: Throwable) {
+            // Best effort memory clearing
+        }
+    }
+
+    /**
+     * Securely zeroes out a ByteArray to prevent plaintext remnants in heap memory.
+     */
+    private fun wipeByteArray(array: ByteArray?) {
+        if (array == null) return
+        try {
+            array.fill(0)
+        } catch (_: Throwable) {
+            // Best effort
+        }
+    }
+
+    /**
      * Encrypts the provided InputStream using Chunked AES-256-GCM streaming.
      * Peak memory consumption is capped at ~1MB regardless of whether the file is 100MB or 10GB.
+     * Zeroes all intermediate memory buffers immediately after use.
      */
     fun encryptStream(
         inputStream: InputStream,
@@ -126,45 +157,50 @@ object CryptoManager {
         outputStream.write(baseIV)
 
         val readBuffer = ByteArray(CHUNK_SIZE)
+        var nextBuffer = ByteArray(CHUNK_SIZE)
         var chunkIndex = 0L
         var totalProcessed = 0L
 
-        // We use a lookahead mechanism to determine if the current chunk is the last one
-        var currentChunkBytes = readFully(inputStream, readBuffer, 0, CHUNK_SIZE)
+        try {
+            var currentChunkBytes = readFully(inputStream, readBuffer, 0, CHUNK_SIZE)
 
-        while (currentChunkBytes > 0) {
-            val nextBuffer = ByteArray(CHUNK_SIZE)
-            val nextChunkBytes = readFully(inputStream, nextBuffer, 0, CHUNK_SIZE)
-            val isLast = (nextChunkBytes <= 0)
+            while (currentChunkBytes > 0) {
+                val nextChunkBytes = readFully(inputStream, nextBuffer, 0, CHUNK_SIZE)
+                val isLast = (nextChunkBytes <= 0)
 
-            // Encrypt current chunk with GCM
-            val chunkIV = computeChunkIV(baseIV, chunkIndex)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+                // Encrypt current chunk with GCM
+                val chunkIV = computeChunkIV(baseIV, chunkIndex)
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
 
-            val cipherText = cipher.doFinal(readBuffer, 0, currentChunkBytes)
+                val cipherText = cipher.doFinal(readBuffer, 0, currentChunkBytes)
 
-            // Write chunk header: length (4 bytes) + isLast flag (1 byte)
-            writeInt(outputStream, cipherText.size)
-            outputStream.write(if (isLast) 1 else 0)
-            outputStream.write(cipherText)
+                // Write chunk header: length (4 bytes) + isLast flag (1 byte)
+                writeInt(outputStream, cipherText.size)
+                outputStream.write(if (isLast) 1 else 0)
+                outputStream.write(cipherText)
 
-            totalProcessed += currentChunkBytes
-            onProgress?.invoke(totalProcessed, totalBytes)
+                totalProcessed += currentChunkBytes
+                onProgress?.invoke(totalProcessed, totalBytes)
 
-            if (isLast) break
+                if (isLast) break
 
-            System.arraycopy(nextBuffer, 0, readBuffer, 0, nextChunkBytes)
-            currentChunkBytes = nextChunkBytes
-            chunkIndex++
+                System.arraycopy(nextBuffer, 0, readBuffer, 0, nextChunkBytes)
+                currentChunkBytes = nextChunkBytes
+                chunkIndex++
+            }
+
+            outputStream.flush()
+        } finally {
+            wipeByteArray(readBuffer)
+            wipeByteArray(nextBuffer)
         }
-
-        outputStream.flush()
     }
 
     /**
      * Decrypts an encrypted input stream to plaintext OutputStream with live progress reporting.
      * Handles both V2 Chunked AEAD streaming (constant ~1MB RAM) and V1 legacy formats.
+     * Enforces mandatory memory wiping (zeroization) on Direct ByteBuffers and ByteArray buffers.
      */
     fun decryptStreamToOutputStream(
         inputStream: InputStream,
@@ -202,20 +238,26 @@ object CryptoManager {
                 if (isLastFlag < 0) break
 
                 val cipherBuffer = ByteArray(cipherLength)
-                val bytesRead = readFully(inputStream, cipherBuffer, 0, cipherLength)
-                if (bytesRead < cipherLength) {
-                    throw IllegalStateException("Unexpected end of encrypted stream in chunk $chunkIndex.")
+                var plainChunk: ByteArray? = null
+                try {
+                    val bytesRead = readFully(inputStream, cipherBuffer, 0, cipherLength)
+                    if (bytesRead < cipherLength) {
+                        throw IllegalStateException("Unexpected end of encrypted stream in chunk $chunkIndex.")
+                    }
+
+                    val chunkIV = computeChunkIV(baseIV, chunkIndex)
+                    val cipher = Cipher.getInstance(TRANSFORMATION)
+                    cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+
+                    plainChunk = cipher.doFinal(cipherBuffer, 0, cipherLength)
+                    outputStream.write(plainChunk)
+
+                    totalProcessed += cipherLength
+                    onProgress?.invoke(totalProcessed, totalBytes)
+                } finally {
+                    wipeByteArray(cipherBuffer)
+                    wipeByteArray(plainChunk)
                 }
-
-                val chunkIV = computeChunkIV(baseIV, chunkIndex)
-                val cipher = Cipher.getInstance(TRANSFORMATION)
-                cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
-
-                val plainChunk = cipher.doFinal(cipherBuffer, 0, cipherLength)
-                outputStream.write(plainChunk)
-
-                totalProcessed += cipherLength
-                onProgress?.invoke(totalProcessed, totalBytes)
 
                 if (isLastFlag == 1) break
                 chunkIndex++
@@ -241,37 +283,49 @@ object CryptoManager {
                 inputStream.available().coerceAtLeast(1024 * 1024)
             }
 
-            var inDirect = ByteBuffer.allocateDirect(payloadSize.coerceAtLeast(1024 * 1024))
+            var inDirect: ByteBuffer? = ByteBuffer.allocateDirect(payloadSize.coerceAtLeast(1024 * 1024))
+            var outDirect: ByteBuffer? = null
             val tempBuffer = ByteArray(65536)
-            var bytesRead: Int
-            var totalRead = 0L
-
-            while (inputStream.read(tempBuffer).also { bytesRead = it } != -1) {
-                if (inDirect.remaining() < bytesRead) {
-                    val newCapacity = (inDirect.capacity() + bytesRead + 16 * 1024 * 1024)
-                    val newDirect = ByteBuffer.allocateDirect(newCapacity)
-                    inDirect.flip()
-                    newDirect.put(inDirect)
-                    inDirect = newDirect
-                }
-                inDirect.put(tempBuffer, 0, bytesRead)
-                totalRead += bytesRead
-                onProgress?.invoke(totalRead, totalBytes)
-            }
-
-            inDirect.flip()
-            val outDirect = ByteBuffer.allocateDirect(inDirect.remaining())
-            cipher.doFinal(inDirect, outDirect)
-            outDirect.flip()
-
             val writeBuf = ByteArray(65536)
-            while (outDirect.hasRemaining()) {
-                val toWrite = minOf(writeBuf.size, outDirect.remaining())
-                outDirect.get(writeBuf, 0, toWrite)
-                outputStream.write(writeBuf, 0, toWrite)
+
+            try {
+                var bytesRead: Int
+                var totalRead = 0L
+
+                while (inputStream.read(tempBuffer).also { bytesRead = it } != -1) {
+                    val currentIn = inDirect!!
+                    if (currentIn.remaining() < bytesRead) {
+                        val newCapacity = (currentIn.capacity() + bytesRead + 16 * 1024 * 1024)
+                        val newDirect = ByteBuffer.allocateDirect(newCapacity)
+                        currentIn.flip()
+                        newDirect.put(currentIn)
+                        wipeDirectBuffer(currentIn) // wipe old native direct buffer before replacing
+                        inDirect = newDirect
+                    }
+                    inDirect!!.put(tempBuffer, 0, bytesRead)
+                    totalRead += bytesRead
+                    onProgress?.invoke(totalRead, totalBytes)
+                }
+
+                inDirect!!.flip()
+                outDirect = ByteBuffer.allocateDirect(inDirect!!.remaining())
+                cipher.doFinal(inDirect, outDirect)
+                outDirect.flip()
+
+                while (outDirect.hasRemaining()) {
+                    val toWrite = minOf(writeBuf.size, outDirect.remaining())
+                    outDirect.get(writeBuf, 0, toWrite)
+                    outputStream.write(writeBuf, 0, toWrite)
+                }
+                outputStream.flush()
+                onProgress?.invoke(totalBytes, totalBytes)
+            } finally {
+                // Securely wipe all direct native buffers and intermediate heap buffers from RAM
+                wipeDirectBuffer(inDirect)
+                wipeDirectBuffer(outDirect)
+                wipeByteArray(tempBuffer)
+                wipeByteArray(writeBuf)
             }
-            outputStream.flush()
-            onProgress?.invoke(totalBytes, totalBytes)
         }
     }
 
