@@ -86,6 +86,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.Locale
 import java.util.UUID
 
@@ -140,10 +141,27 @@ fun EncryptedVideoPlayer(
     var sliderDragPosition by remember { mutableFloatStateOf(0f) }
     var showSpeedMenu by remember { mutableStateOf(false) }
 
-    // Shredder function
+    // Secure Shredder function: Zero-overwrites file content before unlinking
     val shredTempFile = {
         tempDecryptedFile?.let { file ->
-            if (file.exists()) {
+            try {
+                if (file.exists()) {
+                    val length = file.length()
+                    if (length > 0) {
+                        RandomAccessFile(file, "rws").use { raf ->
+                            raf.seek(0)
+                            val zeroBuf = ByteArray(minOf(65536, length.toInt().coerceAtLeast(1024)))
+                            var written = 0L
+                            while (written < length) {
+                                val toWrite = minOf(zeroBuf.size.toLong(), length - written).toInt()
+                                raf.write(zeroBuf, 0, toWrite)
+                                written += toWrite
+                            }
+                        }
+                    }
+                    file.delete()
+                }
+            } catch (_: Throwable) {
                 file.delete()
             }
         }
