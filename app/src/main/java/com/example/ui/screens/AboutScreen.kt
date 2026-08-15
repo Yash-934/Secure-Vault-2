@@ -82,7 +82,7 @@ fun AboutScreen(onBackClick: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.app_logo),
+                    painter = painterResource(id = R.drawable.quantum_logo),
                     contentDescription = "App Logo",
                     modifier = Modifier.size(56.dp)
                 )

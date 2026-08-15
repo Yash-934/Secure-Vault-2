@@ -20,6 +20,7 @@ import com.example.data.local.VaultSettings
 import com.example.domain.model.VaultMode
 import com.example.ui.VaultViewModel
 import com.example.ui.components.BackupPasswordDialog
+import com.example.ui.components.BackupRestoreProgressDialog
 import com.example.ui.components.ChangePinDialog
 import com.example.ui.components.EncryptionProgressDialog
 import com.example.ui.components.ImportPromptDialog
@@ -49,6 +50,7 @@ fun VaultNavHost(
     val filterTab by vaultViewModel.filterTab.collectAsStateWithLifecycle()
     val isProcessing by vaultViewModel.isProcessing.collectAsStateWithLifecycle()
     val importProgress by vaultViewModel.importProgress.collectAsStateWithLifecycle()
+    val backupRestoreProgress by vaultViewModel.backupRestoreProgress.collectAsStateWithLifecycle()
     val isLoading by vaultViewModel.isLoading.collectAsStateWithLifecycle()
     val statusMessage by vaultViewModel.statusMessage.collectAsStateWithLifecycle()
     val pendingImportUris by vaultViewModel.pendingImportUris.collectAsStateWithLifecycle()
@@ -522,6 +524,14 @@ fun VaultNavHost(
                     vaultViewModel.pendingStegoExtractUri = null
                     vaultViewModel.importStegoBackup(context, password, uri)
                 }
+            )
+        }
+
+        // Master Backup & Disaster Recovery Live Progress Bar HUD
+        if (backupRestoreProgress.isActive) {
+            BackupRestoreProgressDialog(
+                state = backupRestoreProgress,
+                onDismiss = { vaultViewModel.dismissBackupRestoreProgress() }
             )
         }
     }

@@ -238,11 +238,14 @@ object VaultBackupManager {
         context: Context,
         masterPassword: String,
         outputStream: OutputStream,
-        vaultRepository: VaultRepository
+        vaultRepository: VaultRepository,
+        onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)? = null
     ): Result<Long> = withContext(Dispatchers.IO) {
         try {
             val vaultDir = vaultRepository.getVaultDirectory(context)
             val items = vaultRepository.allVaultItems.first()
+
+            onProgress?.invoke(0, items.size, "Deriving AES-256 PBKDF2 Key...", 0L)
 
             // 1. Generate random 16-byte Salt
             val random = SecureRandom()
@@ -279,6 +282,8 @@ object VaultBackupManager {
             ZipOutputStream(chunkedGcmOut.buffered(65536)).use { zos ->
                 zos.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
 
+                onProgress?.invoke(0, items.size, "Writing Vault Metadata Manifest...", totalBytesWritten)
+
                 // Add manifest.json
                 val manifestJson = jsonAdapter.toJson(items)
                 val manifestBytes = manifestJson.toByteArray(Charsets.UTF_8)
@@ -287,7 +292,8 @@ object VaultBackupManager {
                 zos.closeEntry()
 
                 // Add each vault file directly decrypted on-the-fly into the encrypted ZIP stream
-                items.forEach { item ->
+                items.forEachIndexed { index, item ->
+                    onProgress?.invoke(index + 1, items.size, item.originalName, totalBytesWritten)
                     val file = File(vaultDir, item.encryptedFileName)
                     if (file.exists() && file.length() > 0) {
                         try {
@@ -306,6 +312,8 @@ object VaultBackupManager {
             }
             outputStream.flush()
 
+            onProgress?.invoke(items.size, items.size, "Backup Finalized", totalBytesWritten)
+
             Result.success(totalBytesWritten)
         } catch (e: Exception) {
             Log.e("VaultBackup", "Export failed: ${e.message}", e)
@@ -320,10 +328,12 @@ object VaultBackupManager {
         context: Context,
         masterPassword: String,
         inputStream: InputStream,
-        vaultRepository: VaultRepository
+        vaultRepository: VaultRepository,
+        onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)? = null
     ): Result<Int> = withContext(Dispatchers.IO) {
         try {
             val vaultDir = vaultRepository.getVaultDirectory(context)
+            onProgress?.invoke(0, 0, "Validating Master Backup Header...", 0L)
 
             // 1. Check Magic Header (8 bytes)
             val headerBytes = ByteArray(8)
@@ -334,6 +344,7 @@ object VaultBackupManager {
 
             val isV2 = headerBytes.contentEquals(BACKUP_MAGIC_V2)
             var restoredCount = 0
+            var totalBytesRestored = 0L
 
             if (isV2) {
                 // V2 Chunked Format: Read 16-byte Salt
@@ -342,6 +353,8 @@ object VaultBackupManager {
                 if (saltRead < SALT_SIZE_BYTES) {
                     return@withContext Result.failure(IllegalArgumentException("Incomplete backup salt header."))
                 }
+
+                onProgress?.invoke(0, 0, "Deriving AES-256 Key & Decrypting Manifest...", 0L)
 
                 val secretKey = deriveKey(masterPassword, salt)
                 val chunkedGcmIn = ChunkedGcmInputStream(inputStream, secretKey)
@@ -353,13 +366,21 @@ object VaultBackupManager {
                         if (entry.name == MANIFEST_FILENAME) {
                             val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
                             restoredItems = jsonAdapter.fromJson(manifestJson)
+                            onProgress?.invoke(0, restoredItems?.size ?: 0, "Loaded metadata records", totalBytesRestored)
                         } else if (entry.name.startsWith("vault_data_v2/")) {
                             val fileName = File(entry.name).name
                             val targetFile = File(vaultDir, fileName)
+                            val itemObj = restoredItems?.find { it.encryptedFileName == fileName }
+                            val displayName = itemObj?.originalName ?: fileName
+                            val totalExpected = restoredItems?.size ?: 0
+
+                            onProgress?.invoke(restoredCount + 1, totalExpected, "Restoring: $displayName", totalBytesRestored)
+
                             try {
                                 FileOutputStream(targetFile).buffered(65536).use { fos ->
                                     CryptoManager.encryptStream(zis, fos)
                                 }
+                                totalBytesRestored += targetFile.length()
                             } catch (e: Exception) {
                                 Log.e("VaultBackup", "Error restoring $fileName: ${e.message}")
                                 targetFile.delete()
@@ -368,13 +389,16 @@ object VaultBackupManager {
                             val fileName = File(entry.name).name
                             val targetFile = File(vaultDir, fileName)
                             FileOutputStream(targetFile).buffered(65536).use { fos ->
-                                zis.copyTo(fos)
+                                val copied = zis.copyTo(fos)
+                                totalBytesRestored += copied
                             }
                         }
                         try { zis.closeEntry() } catch (_: Throwable) {}
                         entry = zis.nextEntry
                     }
                 }
+
+                onProgress?.invoke(restoredItems?.size ?: 0, restoredItems?.size ?: 0, "Rebuilding Vault Database...", totalBytesRestored)
 
                 // Insert metadata records into Room DB
                 restoredItems?.forEach { item ->
@@ -395,6 +419,8 @@ object VaultBackupManager {
                 if (ivRead < IV_SIZE_BYTES) {
                     return@withContext Result.failure(IllegalArgumentException("Incomplete legacy IV header."))
                 }
+
+                onProgress?.invoke(0, 0, "Decrypting Legacy Backup Archive...", 0L)
 
                 val secretKey = deriveKey(masterPassword, salt)
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -444,6 +470,8 @@ object VaultBackupManager {
                     if (tempRestoredZip.exists()) tempRestoredZip.delete()
                 }
             }
+
+            onProgress?.invoke(restoredCount, restoredCount, "Restoration Complete ($restoredCount files)", totalBytesRestored)
 
             Result.success(restoredCount)
         } catch (e: Exception) {

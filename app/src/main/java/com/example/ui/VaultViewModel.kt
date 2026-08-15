@@ -21,6 +21,28 @@ import kotlinx.coroutines.launch
 
 enum class VaultFilterTab { ALL, PHOTOS, VIDEOS, DOCUMENTS }
 
+enum class BackupRestoreType {
+    BACKUP,
+    RESTORE,
+    STEGO_BACKUP,
+    STEGO_RESTORE
+}
+
+data class BackupRestoreProgressState(
+    val isActive: Boolean = false,
+    val type: BackupRestoreType = BackupRestoreType.BACKUP,
+    val title: String = "",
+    val subtitle: String = "",
+    val currentStep: String = "",
+    val currentItemIndex: Int = 0,
+    val totalItems: Int = 0,
+    val bytesProcessed: Long = 0L,
+    val progress: Float = 0f,
+    val isComplete: Boolean = false,
+    val isSuccess: Boolean = true,
+    val resultSummary: String? = null
+)
+
 data class ImportProgressState(
     val isImporting: Boolean = false,
     val currentFileIndex: Int = 0,
@@ -101,6 +123,14 @@ class VaultViewModel(
     // Import Live Progress State
     private val _importProgress = MutableStateFlow(ImportProgressState())
     val importProgress: StateFlow<ImportProgressState> = _importProgress.asStateFlow()
+
+    // Backup & Restore Live Progress State
+    private val _backupRestoreProgress = MutableStateFlow(BackupRestoreProgressState())
+    val backupRestoreProgress: StateFlow<BackupRestoreProgressState> = _backupRestoreProgress.asStateFlow()
+
+    fun dismissBackupRestoreProgress() {
+        _backupRestoreProgress.value = BackupRestoreProgressState(isActive = false)
+    }
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
@@ -296,6 +326,14 @@ class VaultViewModel(
 
     fun exportStegoBackup(context: Context, masterPassword: String, coverUri: android.net.Uri, outputUri: android.net.Uri) {
         _isProcessing.value = true
+        _backupRestoreProgress.value = BackupRestoreProgressState(
+            isActive = true,
+            type = BackupRestoreType.STEGO_BACKUP,
+            title = "STEGANOGRAPHY BACKUP",
+            subtitle = "Concealing Zero-Knowledge Archive in Carrier",
+            currentStep = "Streaming cover carrier media...",
+            progress = 0.1f
+        )
         viewModelScope.launch {
             try {
                 // 1. Open destination SAF document stream
@@ -306,14 +344,22 @@ class VaultViewModel(
                 }
 
                 if (outputStream == null) {
-                    showUserFeedback(context, "Failed to open destination file.")
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = "Failed to open destination file."
+                    )
                     _isProcessing.value = false
                     return@launch
                 }
 
                 val coverInputStream = context.contentResolver.openInputStream(coverUri)
                 if (coverInputStream == null) {
-                    showUserFeedback(context, "Failed to read cover carrier file.")
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = "Failed to read cover carrier file."
+                    )
                     _isProcessing.value = false
                     return@launch
                 }
@@ -330,6 +376,12 @@ class VaultViewModel(
                             totalBytesWritten += read
                         }
                     }
+
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        currentStep = "Embedding encrypted vault payload...",
+                        bytesProcessed = totalBytesWritten,
+                        progress = 0.25f
+                    )
 
                     // 3. Directly stream encrypted backup payload into destination
                     var payloadSize = 0L
@@ -351,12 +403,27 @@ class VaultViewModel(
                         context,
                         masterPassword,
                         payloadCountingStream,
-                        repository
+                        repository,
+                        onProgress = { current, total, name, bytes ->
+                            val subProg = if (total > 0) (current.toFloat() / total.toFloat()) else 0.5f
+                            val scaledProg = 0.25f + (subProg * 0.65f)
+                            _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                                currentStep = name,
+                                currentItemIndex = current,
+                                totalItems = total,
+                                bytesProcessed = totalBytesWritten + bytes,
+                                progress = scaledProg
+                            )
+                        }
                     )
 
                     if (!backupResult.isSuccess || payloadSize <= 0) {
                         val err = backupResult.exceptionOrNull()?.localizedMessage ?: "Vault backup creation failed."
-                        showUserFeedback(context, "Backup failed: $err")
+                        _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                            isComplete = true,
+                            isSuccess = false,
+                            resultSummary = "Backup failed: $err"
+                        )
                         _isProcessing.value = false
                         return@launch
                     }
@@ -372,9 +439,22 @@ class VaultViewModel(
 
                 val carrierInfo = com.example.security.SteganographyManager.resolveCarrierFileInfo(context, coverUri)
                 val sizeKb = (totalBytesWritten + 1023) / 1024
+                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                    isComplete = true,
+                    isSuccess = true,
+                    progress = 1f,
+                    currentStep = "Steganography Export Complete!",
+                    resultSummary = "Concealed encrypted vault payload inside ${carrierInfo.extension.uppercase()} carrier ($sizeKb KB)."
+                )
                 showUserFeedback(context, "Zero-Trust Vault concealed inside ${carrierInfo.extension.uppercase()} carrier! ($sizeKb KB)")
             } catch (e: Exception) {
-                showUserFeedback(context, "Steganography failed: ${e.message}")
+                val err = e.localizedMessage ?: "Unknown error"
+                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                    isComplete = true,
+                    isSuccess = false,
+                    resultSummary = "Steganography failed: $err"
+                )
+                showUserFeedback(context, "Steganography failed: $err")
             } finally {
                 _isProcessing.value = false
             }
@@ -383,6 +463,14 @@ class VaultViewModel(
 
     fun importStegoBackup(context: Context, masterPassword: String, stegoUri: android.net.Uri) {
         _isProcessing.value = true
+        _backupRestoreProgress.value = BackupRestoreProgressState(
+            isActive = true,
+            type = BackupRestoreType.STEGO_RESTORE,
+            title = "STEGO DISASTER RECOVERY",
+            subtitle = "Extracting Concealed Vault Payload",
+            currentStep = "Reading cover file stream...",
+            progress = 0.1f
+        )
         viewModelScope.launch {
             val tempStegoFile = java.io.File(context.cacheDir, "temp_incoming_stego_${System.currentTimeMillis()}.tmp")
             val tempExtractedBackupFile = java.io.File(context.cacheDir, "temp_extracted_backup_${System.currentTimeMillis()}.bin")
@@ -395,25 +483,74 @@ class VaultViewModel(
                     }
                 }
 
+                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                    currentStep = "Extracting hidden cryptographic payload...",
+                    progress = 0.35f
+                )
+
                 // 2. Extract payload from file using SteganographyManager
                 val extractResult = tempExtractedBackupFile.outputStream().buffered(65536).use { out ->
                     com.example.security.SteganographyManager.extractPayloadFromFile(tempStegoFile, out)
                 }
 
                 if (extractResult.isSuccess && tempExtractedBackupFile.length() > 0) {
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        currentStep = "Decrypting & restoring vault files...",
+                        progress = 0.5f
+                    )
                     val result = tempExtractedBackupFile.inputStream().buffered(65536).use { inStream ->
-                        com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, inStream, repository)
+                        com.example.security.VaultBackupManager.importMasterBackup(
+                            context,
+                            masterPassword,
+                            inStream,
+                            repository,
+                            onProgress = { current, total, name, bytes ->
+                                val subProg = if (total > 0) (current.toFloat() / total.toFloat()) else 0.5f
+                                val scaledProg = 0.5f + (subProg * 0.45f)
+                                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                                    currentStep = name,
+                                    currentItemIndex = current,
+                                    totalItems = total,
+                                    bytesProcessed = bytes,
+                                    progress = scaledProg
+                                )
+                            }
+                        )
                     }
                     result.onSuccess { count ->
+                        _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                            isComplete = true,
+                            isSuccess = true,
+                            progress = 1f,
+                            currentStep = "Restore Completed!",
+                            resultSummary = "Steganography Restore complete! Restored $count vault item(s)."
+                        )
                         showUserFeedback(context, "Steganography Restore complete! Restored $count vault item(s).")
                     }.onFailure {
+                        _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                            isComplete = true,
+                            isSuccess = false,
+                            resultSummary = "Restore failed: Invalid password or corrupted payload."
+                        )
                         showUserFeedback(context, "Restore failed: Invalid password or corrupted payload.")
                     }
                 } else {
-                    showUserFeedback(context, extractResult.exceptionOrNull()?.message ?: "No steganography payload found in this file.")
+                    val errMsg = extractResult.exceptionOrNull()?.message ?: "No steganography payload found in this file."
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = errMsg
+                    )
+                    showUserFeedback(context, errMsg)
                 }
             } catch (e: Exception) {
-                showUserFeedback(context, "Extraction failed: ${e.message}")
+                val err = e.localizedMessage ?: "Unknown error"
+                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                    isComplete = true,
+                    isSuccess = false,
+                    resultSummary = "Extraction failed: $err"
+                )
+                showUserFeedback(context, "Extraction failed: $err")
             } finally {
                 if (tempStegoFile.exists()) tempStegoFile.delete()
                 if (tempExtractedBackupFile.exists()) tempExtractedBackupFile.delete()
@@ -424,6 +561,14 @@ class VaultViewModel(
 
     fun exportMasterBackup(context: Context, masterPassword: String, targetUri: android.net.Uri) {
         _isProcessing.value = true
+        _backupRestoreProgress.value = BackupRestoreProgressState(
+            isActive = true,
+            type = BackupRestoreType.BACKUP,
+            title = "MASTER ENCRYPTED BACKUP",
+            subtitle = "Zero-Knowledge AES-256-GCM Streaming",
+            currentStep = "Initializing master backup...",
+            progress = 0f
+        )
         viewModelScope.launch {
             try {
                 // 1. Open standard compatible write stream for SAF document
@@ -434,7 +579,11 @@ class VaultViewModel(
                 }
 
                 if (outputStream == null) {
-                    showUserFeedback(context, "Failed to open destination file.")
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = "Failed to open destination file."
+                    )
                     _isProcessing.value = false
                     return@launch
                 }
@@ -445,18 +594,47 @@ class VaultViewModel(
                         context,
                         masterPassword,
                         safeOutStream,
-                        repository
+                        repository,
+                        onProgress = { current, total, name, bytes ->
+                            val prog = if (total > 0) (current.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+                            _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                                currentStep = name,
+                                currentItemIndex = current,
+                                totalItems = total,
+                                bytesProcessed = bytes,
+                                progress = prog
+                            )
+                        }
                     )
                 }
 
                 backupResult.onSuccess { totalBytesWritten ->
                     val sizeKb = (totalBytesWritten + 1023) / 1024
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = true,
+                        progress = 1f,
+                        currentStep = "Master Backup Complete!",
+                        resultSummary = "Master Encrypted Backup exported successfully! ($sizeKb KB)"
+                    )
                     showUserFeedback(context, "Master Encrypted Backup exported successfully! ($sizeKb KB)")
                 }.onFailure { err ->
-                    showUserFeedback(context, "Export error: ${err.localizedMessage ?: "Unknown error"}")
+                    val msg = err.localizedMessage ?: "Unknown error"
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = "Export error: $msg"
+                    )
+                    showUserFeedback(context, "Export error: $msg")
                 }
             } catch (e: Exception) {
-                showUserFeedback(context, "Export error: ${e.localizedMessage ?: "Unknown error"}")
+                val msg = e.localizedMessage ?: "Unknown error"
+                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                    isComplete = true,
+                    isSuccess = false,
+                    resultSummary = "Export error: $msg"
+                )
+                showUserFeedback(context, "Export error: $msg")
             } finally {
                 _isProcessing.value = false
             }
@@ -465,26 +643,71 @@ class VaultViewModel(
 
     fun importMasterBackup(context: Context, masterPassword: String, sourceUri: android.net.Uri) {
         _isProcessing.value = true
+        _backupRestoreProgress.value = BackupRestoreProgressState(
+            isActive = true,
+            type = BackupRestoreType.RESTORE,
+            title = "DISASTER RECOVERY RESTORE",
+            subtitle = "Decrypting & Rebuilding Vault Database",
+            currentStep = "Validating backup archive header...",
+            progress = 0f
+        )
         viewModelScope.launch {
             try {
                 val inputStream = context.contentResolver.openInputStream(sourceUri)
                 if (inputStream == null) {
-                    showUserFeedback(context, "Failed to open backup file.")
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = "Failed to open backup file."
+                    )
                     _isProcessing.value = false
                     return@launch
                 }
                 val result = inputStream.buffered(65536).use { stream ->
-                    com.example.security.VaultBackupManager.importMasterBackup(context, masterPassword, stream, repository)
+                    com.example.security.VaultBackupManager.importMasterBackup(
+                        context,
+                        masterPassword,
+                        stream,
+                        repository,
+                        onProgress = { current, total, name, bytes ->
+                            val prog = if (total > 0) (current.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+                            _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                                currentStep = name,
+                                currentItemIndex = current,
+                                totalItems = total,
+                                bytesProcessed = bytes,
+                                progress = prog
+                            )
+                        }
+                    )
                 }
                 _isProcessing.value = false
                 result.onSuccess { restoredCount ->
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = true,
+                        progress = 1f,
+                        currentStep = "Restoration Complete!",
+                        resultSummary = "Disaster Recovery complete! Restored $restoredCount item(s)."
+                    )
                     showUserFeedback(context, "Disaster Recovery complete! Restored $restoredCount item(s).")
                 }.onFailure { err ->
+                    _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                        isComplete = true,
+                        isSuccess = false,
+                        resultSummary = "Restore failed: Invalid password or corrupt backup."
+                    )
                     showUserFeedback(context, "Restore failed: Invalid password or corrupt backup.")
                 }
             } catch (e: Exception) {
                 _isProcessing.value = false
-                showUserFeedback(context, "Restore failed: ${e.localizedMessage ?: "Unknown error"}")
+                val msg = e.localizedMessage ?: "Unknown error"
+                _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
+                    isComplete = true,
+                    isSuccess = false,
+                    resultSummary = "Restore failed: $msg"
+                )
+                showUserFeedback(context, "Restore failed: $msg")
             }
         }
     }
