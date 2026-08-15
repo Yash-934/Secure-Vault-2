@@ -64,15 +64,9 @@ fun VaultNavHost(
     var pinErrorMessage by remember { mutableStateOf<String?>(null) }
     var pinErrorTrigger by remember { androidx.compose.runtime.mutableIntStateOf(0) }
 
-    // Backup & Restore SAF dialog states
-    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
-    var importSourceUri by remember { mutableStateOf<Uri?>(null) }
     var showExportPasswordDialog by remember { mutableStateOf(false) }
     var showImportPasswordDialog by remember { mutableStateOf(false) }
 
-    var pendingStegoPassword by remember { mutableStateOf<String?>(null) }
-    var stegoCoverUri by remember { mutableStateOf<Uri?>(null) }
-    var stegoExtractUri by remember { mutableStateOf<Uri?>(null) }
     var showStegoEmbedPasswordDialog by remember { mutableStateOf(false) }
     var showStegoExtractPasswordDialog by remember { mutableStateOf(false) }
 
@@ -84,10 +78,16 @@ fun VaultNavHost(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
         vaultViewModel.onSystemPickerFinished()
-        if (uri != null && pendingExportPassword != null) {
-            vaultViewModel.exportMasterBackup(context, pendingExportPassword!!, uri)
+        val pwd = vaultViewModel.pendingExportPassword
+        vaultViewModel.pendingExportPassword = null
+        if (uri != null) {
+            if (!pwd.isNullOrBlank()) {
+                vaultViewModel.exportMasterBackup(context, pwd, uri)
+            } else {
+                vaultViewModel.pendingExportUri = uri
+                showExportPasswordDialog = true
+            }
         }
-        pendingExportPassword = null
     }
 
     val importBackupLauncher = rememberLauncherForActivityResult(
@@ -95,7 +95,7 @@ fun VaultNavHost(
     ) { uri ->
         vaultViewModel.onSystemPickerFinished()
         if (uri != null) {
-            importSourceUri = uri
+            vaultViewModel.pendingImportUri = uri
             showImportPasswordDialog = true
         }
     }
@@ -104,18 +104,20 @@ fun VaultNavHost(
         contract = ActivityResultContracts.CreateDocument(suggestedStegoMimeType)
     ) { uri ->
         vaultViewModel.onSystemPickerFinished()
-        if (uri != null && stegoCoverUri != null && pendingStegoPassword != null) {
-            vaultViewModel.exportStegoBackup(context, pendingStegoPassword!!, stegoCoverUri!!, uri)
+        val pwd = vaultViewModel.pendingStegoPassword
+        val coverUri = vaultViewModel.pendingStegoCoverUri
+        vaultViewModel.pendingStegoPassword = null
+        vaultViewModel.pendingStegoCoverUri = null
+        if (uri != null && coverUri != null && !pwd.isNullOrBlank()) {
+            vaultViewModel.exportStegoBackup(context, pwd, coverUri, uri)
         }
-        pendingStegoPassword = null
-        stegoCoverUri = null
     }
 
     val stegoCoverLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            stegoCoverUri = uri
+            vaultViewModel.pendingStegoCoverUri = uri
             val info = com.example.security.SteganographyManager.resolveCarrierFileInfo(context, uri)
             suggestedStegoOutputName = "covert_${info.baseName}.${info.extension}"
             suggestedStegoMimeType = info.mimeType
@@ -123,7 +125,7 @@ fun VaultNavHost(
             stegoOutputLauncher.launch(suggestedStegoOutputName)
         } else {
             vaultViewModel.onSystemPickerFinished()
-            pendingStegoPassword = null
+            vaultViewModel.pendingStegoPassword = null
         }
     }
 
@@ -132,7 +134,7 @@ fun VaultNavHost(
     ) { uri ->
         vaultViewModel.onSystemPickerFinished()
         if (uri != null) {
-            stegoExtractUri = uri
+            vaultViewModel.pendingStegoExtractUri = uri
             showStegoExtractPasswordDialog = true
         }
     }
@@ -447,30 +449,37 @@ fun VaultNavHost(
                 subtitle = "Enter a password to derive an AES-256 key via PBKDF2 for this backup.",
                 onDismiss = {
                     showExportPasswordDialog = false
-                    pendingExportPassword = null
+                    vaultViewModel.pendingExportPassword = null
+                    vaultViewModel.pendingExportUri = null
                 },
                 onConfirm = { password ->
                     showExportPasswordDialog = false
-                    pendingExportPassword = password
-                    vaultViewModel.onSystemPickerLaunched()
-                    exportBackupLauncher.launch("vault_master_backup_${System.currentTimeMillis()}.bin")
+                    val pendingUri = vaultViewModel.pendingExportUri
+                    if (pendingUri != null) {
+                        vaultViewModel.pendingExportUri = null
+                        vaultViewModel.exportMasterBackup(context, password, pendingUri)
+                    } else {
+                        vaultViewModel.pendingExportPassword = password
+                        vaultViewModel.onSystemPickerLaunched()
+                        exportBackupLauncher.launch("vault_master_backup_${System.currentTimeMillis()}.bin")
+                    }
                 }
             )
         }
 
         // Import Backup Password Prompt
-        if (showImportPasswordDialog && importSourceUri != null) {
+        if (showImportPasswordDialog && vaultViewModel.pendingImportUri != null) {
             BackupPasswordDialog(
                 title = "Decrypt Master Backup",
                 subtitle = "Enter the password used when creating this backup file.",
                 onDismiss = {
                     showImportPasswordDialog = false
-                    importSourceUri = null
+                    vaultViewModel.pendingImportUri = null
                 },
                 onConfirm = { password ->
                     showImportPasswordDialog = false
-                    val uri = importSourceUri ?: return@BackupPasswordDialog
-                    importSourceUri = null
+                    val uri = vaultViewModel.pendingImportUri ?: return@BackupPasswordDialog
+                    vaultViewModel.pendingImportUri = null
                     vaultViewModel.importMasterBackup(context, password, uri)
                 }
             )
@@ -483,12 +492,12 @@ fun VaultNavHost(
                 subtitle = "Enter a password to encrypt your vault before concealing it inside the cover video, PDF, or image.",
                 onDismiss = {
                     showStegoEmbedPasswordDialog = false
-                    pendingStegoPassword = null
-                    stegoCoverUri = null
+                    vaultViewModel.pendingStegoPassword = null
+                    vaultViewModel.pendingStegoCoverUri = null
                 },
                 onConfirm = { password ->
                     showStegoEmbedPasswordDialog = false
-                    pendingStegoPassword = password
+                    vaultViewModel.pendingStegoPassword = password
                     vaultViewModel.onSystemPickerLaunched()
                     stegoCoverLauncher.launch(arrayOf("video/*", "application/pdf", "image/*", "audio/*", "*/*"))
                 }
@@ -496,18 +505,18 @@ fun VaultNavHost(
         }
 
         // Stego Extract Password Prompt
-        if (showStegoExtractPasswordDialog && stegoExtractUri != null) {
+        if (showStegoExtractPasswordDialog && vaultViewModel.pendingStegoExtractUri != null) {
             BackupPasswordDialog(
                 title = "Decrypt Multi-Carrier Stego",
                 subtitle = "Enter the password to extract and restore the vault hidden inside this carrier file.",
                 onDismiss = {
                     showStegoExtractPasswordDialog = false
-                    stegoExtractUri = null
+                    vaultViewModel.pendingStegoExtractUri = null
                 },
                 onConfirm = { password ->
                     showStegoExtractPasswordDialog = false
-                    val uri = stegoExtractUri ?: return@BackupPasswordDialog
-                    stegoExtractUri = null
+                    val uri = vaultViewModel.pendingStegoExtractUri ?: return@BackupPasswordDialog
+                    vaultViewModel.pendingStegoExtractUri = null
                     vaultViewModel.importStegoBackup(context, password, uri)
                 }
             )

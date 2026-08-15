@@ -51,6 +51,15 @@ class VaultViewModel(
         isSystemPickerActive = false
     }
 
+    var pendingExportPassword: String? = null
+    var pendingExportUri: android.net.Uri? = null
+
+    var pendingStegoPassword: String? = null
+    var pendingStegoCoverUri: android.net.Uri? = null
+    var pendingStegoExtractUri: android.net.Uri? = null
+
+    var pendingImportUri: android.net.Uri? = null
+
     val repository: VaultRepository get() = if (vaultMode.value == VaultMode.DECOY) decoyRepository else realRepository
 
     private val _isUnlocked = MutableStateFlow(false)
@@ -298,7 +307,9 @@ class VaultViewModel(
                 if (backupResult.isSuccess && tempBackupFile.length() > 0) {
                     val coverInputStream = context.contentResolver.openInputStream(coverUri)?.buffered(65536)
                     val payloadInputStream = java.io.FileInputStream(tempBackupFile).buffered(65536)
-                    val outStream = context.contentResolver.openOutputStream(outputUri)?.buffered(65536)
+                    val rawOut = context.contentResolver.openOutputStream(outputUri, "wt") 
+                        ?: context.contentResolver.openOutputStream(outputUri)
+                    val outStream = rawOut?.buffered(65536)
 
                     if (coverInputStream != null && outStream != null) {
                         coverInputStream.use { cIn ->
@@ -373,7 +384,8 @@ class VaultViewModel(
         _isProcessing.value = true
         viewModelScope.launch {
             try {
-                val outputStream = context.contentResolver.openOutputStream(targetUri)
+                val outputStream = context.contentResolver.openOutputStream(targetUri, "wt")
+                    ?: context.contentResolver.openOutputStream(targetUri)
                 if (outputStream == null) {
                     showUserFeedback(context, "Failed to open destination file.")
                     _isProcessing.value = false
@@ -651,9 +663,9 @@ class VaultViewModel(
             val exportedUri = repository.exportVaultItemToGallery(context, item)
             _isProcessing.value = false
             if (exportedUri != null) {
-                _statusMessage.value = "File decrypted and restored to gallery!"
+                showUserFeedback(context, "File decrypted and restored to gallery!")
             } else {
-                _statusMessage.value = "Export failed."
+                showUserFeedback(context, "Export failed.")
             }
         }
     }
