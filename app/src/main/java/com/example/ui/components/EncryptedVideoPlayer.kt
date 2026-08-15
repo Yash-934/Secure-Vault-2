@@ -161,19 +161,14 @@ fun EncryptedVideoPlayer(
                     throw IllegalStateException("Encrypted media file not found on disk.")
                 }
                 val tempFile = File(context.cacheDir, "temp_video_${UUID.randomUUID()}.mp4")
-                encryptedFile.inputStream().buffered(65536).use { input ->
-                    tempFile.outputStream().buffered(65536).use { output ->
-                        CryptoManager.decryptStreamToOutputStream(
-                            inputStream = input,
-                            outputStream = output,
-                            totalBytes = totalBytesCount,
-                            onProgress = { processed, total ->
-                                decryptedBytesCount = processed
-                                totalBytesCount = total
-                            }
-                        )
+                CryptoManager.decryptFileToFile(
+                    encryptedFile = encryptedFile,
+                    destFile = tempFile,
+                    onProgress = { processed, total ->
+                        decryptedBytesCount = processed
+                        totalBytesCount = total
                     }
-                }
+                )
                 tempDecryptedFile = tempFile
             } catch (e: Throwable) {
                 e.printStackTrace()
