@@ -230,26 +230,48 @@ object CryptoManager {
                 throw IllegalArgumentException("Corrupted legacy encrypted file: Incomplete IV header.")
             }
 
-            // Legacy V1 format: Stream chunk by chunk using cipher.update to avoid huge heap allocations
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
-            val chunkBuffer = ByteArray(65536)
-            var bytesRead: Int
-            var totalProcessed = 0L
-            while (inputStream.read(chunkBuffer).also { bytesRead = it } != -1) {
-                val decrypted = cipher.update(chunkBuffer, 0, bytesRead)
-                if (decrypted != null && decrypted.isNotEmpty()) {
-                    outputStream.write(decrypted)
-                }
-                totalProcessed += bytesRead
-                onProgress?.invoke(totalProcessed, totalBytes)
+            // To avoid Conscrypt's 512MB JVM heap doubling crash on legacy single-block files,
+            // we read into Direct ByteBuffers in native C memory (completely outside the ART JVM heap).
+            val payloadSize = if (totalBytes > IV_SIZE_BYTES) {
+                (totalBytes - IV_SIZE_BYTES).toInt()
+            } else {
+                inputStream.available().coerceAtLeast(1024 * 1024)
             }
-            val finalBytes = cipher.doFinal()
-            if (finalBytes != null && finalBytes.isNotEmpty()) {
-                outputStream.write(finalBytes)
+
+            var inDirect = ByteBuffer.allocateDirect(payloadSize.coerceAtLeast(1024 * 1024))
+            val tempBuffer = ByteArray(65536)
+            var bytesRead: Int
+            var totalRead = 0L
+
+            while (inputStream.read(tempBuffer).also { bytesRead = it } != -1) {
+                if (inDirect.remaining() < bytesRead) {
+                    val newCapacity = (inDirect.capacity() + bytesRead + 16 * 1024 * 1024)
+                    val newDirect = ByteBuffer.allocateDirect(newCapacity)
+                    inDirect.flip()
+                    newDirect.put(inDirect)
+                    inDirect = newDirect
+                }
+                inDirect.put(tempBuffer, 0, bytesRead)
+                totalRead += bytesRead
+                onProgress?.invoke(totalRead, totalBytes)
+            }
+
+            inDirect.flip()
+            val outDirect = ByteBuffer.allocateDirect(inDirect.remaining())
+            cipher.doFinal(inDirect, outDirect)
+            outDirect.flip()
+
+            val writeBuf = ByteArray(65536)
+            while (outDirect.hasRemaining()) {
+                val toWrite = minOf(writeBuf.size, outDirect.remaining())
+                outDirect.get(writeBuf, 0, toWrite)
+                outputStream.write(writeBuf, 0, toWrite)
             }
             outputStream.flush()
+            onProgress?.invoke(totalBytes, totalBytes)
         }
     }
 
