@@ -297,42 +297,8 @@ class VaultViewModel(
     fun exportStegoBackup(context: Context, masterPassword: String, coverUri: android.net.Uri, outputUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
-            val tempBackupFile = java.io.File(context.cacheDir, "temp_stego_backup_${System.currentTimeMillis()}.bin")
-            val tempMergedFile = java.io.File(context.cacheDir, "temp_stego_merged_${System.currentTimeMillis()}.tmp")
             try {
-                // 1. Export encrypted vault backup into local temp staging file
-                val backupResult = java.io.FileOutputStream(tempBackupFile).buffered(65536).use { tempOut ->
-                    com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, tempOut, repository)
-                }
-
-                if (!backupResult.isSuccess || !tempBackupFile.exists() || tempBackupFile.length() <= 0) {
-                    val err = backupResult.exceptionOrNull()?.localizedMessage ?: "Vault backup creation failed."
-                    showUserFeedback(context, "Backup failed: $err")
-                    return@launch
-                }
-
-                // 2. Embed payload into local temporary merged file
-                val coverInputStream = context.contentResolver.openInputStream(coverUri)?.buffered(65536)
-                if (coverInputStream == null) {
-                    showUserFeedback(context, "Failed to read cover carrier file.")
-                    return@launch
-                }
-
-                coverInputStream.use { cIn ->
-                    java.io.FileInputStream(tempBackupFile).buffered(65536).use { pIn ->
-                        java.io.FileOutputStream(tempMergedFile).buffered(65536).use { mOut ->
-                            com.example.security.SteganographyManager.embedPayloadStream(cIn, pIn, mOut)
-                            mOut.flush()
-                        }
-                    }
-                }
-
-                if (!tempMergedFile.exists() || tempMergedFile.length() <= 0) {
-                    showUserFeedback(context, "Steganography embedding failed.")
-                    return@launch
-                }
-
-                // 3. Write merged file to destination SAF document using standard compatible mode
+                // 1. Open destination SAF document stream
                 val outputStream = try {
                     context.contentResolver.openOutputStream(outputUri, "w")
                 } catch (_: Throwable) {
@@ -341,30 +307,75 @@ class VaultViewModel(
 
                 if (outputStream == null) {
                     showUserFeedback(context, "Failed to open destination file.")
+                    _isProcessing.value = false
                     return@launch
                 }
 
-                var bytesWritten = 0L
+                val coverInputStream = context.contentResolver.openInputStream(coverUri)
+                if (coverInputStream == null) {
+                    showUserFeedback(context, "Failed to read cover carrier file.")
+                    _isProcessing.value = false
+                    return@launch
+                }
+
+                var totalBytesWritten = 0L
+
                 outputStream.buffered(65536).use { outStream ->
-                    java.io.FileInputStream(tempMergedFile).buffered(65536).use { inStream ->
+                    // 2. Stream cover carrier file first
+                    coverInputStream.buffered(65536).use { cIn ->
                         val buffer = ByteArray(65536)
-                        var bytes: Int
-                        while (inStream.read(buffer).also { bytes = it } != -1) {
-                            outStream.write(buffer, 0, bytes)
-                            bytesWritten += bytes
+                        var read: Int
+                        while (cIn.read(buffer).also { read = it } != -1) {
+                            outStream.write(buffer, 0, read)
+                            totalBytesWritten += read
                         }
-                        outStream.flush()
                     }
+
+                    // 3. Directly stream encrypted backup payload into destination
+                    var payloadSize = 0L
+                    val payloadCountingStream = object : java.io.OutputStream() {
+                        override fun write(b: Int) {
+                            outStream.write(b)
+                            payloadSize++
+                        }
+                        override fun write(b: ByteArray, off: Int, len: Int) {
+                            outStream.write(b, off, len)
+                            payloadSize += len
+                        }
+                        override fun flush() {
+                            outStream.flush()
+                        }
+                    }
+
+                    val backupResult = com.example.security.VaultBackupManager.exportMasterBackup(
+                        context,
+                        masterPassword,
+                        payloadCountingStream,
+                        repository
+                    )
+
+                    if (!backupResult.isSuccess || payloadSize <= 0) {
+                        val err = backupResult.exceptionOrNull()?.localizedMessage ?: "Vault backup creation failed."
+                        showUserFeedback(context, "Backup failed: $err")
+                        _isProcessing.value = false
+                        return@launch
+                    }
+
+                    // 4. Append 8-byte payload size header + VAULT_STEGO_V2 delimiter
+                    val sizeHeader = java.nio.ByteBuffer.allocate(8).putLong(payloadSize).array()
+                    outStream.write(sizeHeader)
+                    outStream.write("VAULT_STEGO_V2".toByteArray(Charsets.UTF_8))
+                    outStream.flush()
+
+                    totalBytesWritten += payloadSize + 8 + "VAULT_STEGO_V2".toByteArray(Charsets.UTF_8).size
                 }
 
                 val carrierInfo = com.example.security.SteganographyManager.resolveCarrierFileInfo(context, coverUri)
-                val sizeKb = (bytesWritten + 1023) / 1024
-                showUserFeedback(context, "Concealed in ${carrierInfo.extension.uppercase()} carrier! ($sizeKb KB)")
+                val sizeKb = (totalBytesWritten + 1023) / 1024
+                showUserFeedback(context, "Zero-Trust Vault concealed inside ${carrierInfo.extension.uppercase()} carrier! ($sizeKb KB)")
             } catch (e: Exception) {
                 showUserFeedback(context, "Steganography failed: ${e.message}")
             } finally {
-                if (tempBackupFile.exists()) tempBackupFile.delete()
-                if (tempMergedFile.exists()) tempMergedFile.delete()
                 _isProcessing.value = false
             }
         }
@@ -376,7 +387,7 @@ class VaultViewModel(
             val tempStegoFile = java.io.File(context.cacheDir, "temp_incoming_stego_${System.currentTimeMillis()}.tmp")
             val tempExtractedBackupFile = java.io.File(context.cacheDir, "temp_extracted_backup_${System.currentTimeMillis()}.bin")
             try {
-                // 1. Copy incoming stego URI stream to temp cache file
+                // 1. Copy incoming stego URI stream to temp cache file for reverse extraction
                 context.contentResolver.openInputStream(stegoUri)?.buffered(65536).use { input ->
                     if (input == null) throw IllegalStateException("Cannot read selected file.")
                     tempStegoFile.outputStream().buffered(65536).use { output ->
@@ -414,20 +425,8 @@ class VaultViewModel(
     fun exportMasterBackup(context: Context, masterPassword: String, targetUri: android.net.Uri) {
         _isProcessing.value = true
         viewModelScope.launch {
-            val tempBackupFile = java.io.File(context.cacheDir, "temp_master_backup_${System.currentTimeMillis()}.bin")
             try {
-                // 1. Assemble complete AES-256 encrypted backup into local staging cache first
-                val backupResult = java.io.FileOutputStream(tempBackupFile).buffered(65536).use { tempOut ->
-                    com.example.security.VaultBackupManager.exportMasterBackup(context, masterPassword, tempOut, repository)
-                }
-
-                if (!backupResult.isSuccess || !tempBackupFile.exists() || tempBackupFile.length() <= 0) {
-                    val errMsg = backupResult.exceptionOrNull()?.message ?: "Failed to assemble backup."
-                    showUserFeedback(context, "Export error: $errMsg")
-                    return@launch
-                }
-
-                // 2. Open standard compatible write stream for SAF document
+                // 1. Open standard compatible write stream for SAF document
                 val outputStream = try {
                     context.contentResolver.openOutputStream(targetUri, "w")
                 } catch (_: Throwable) {
@@ -436,31 +435,29 @@ class VaultViewModel(
 
                 if (outputStream == null) {
                     showUserFeedback(context, "Failed to open destination file.")
+                    _isProcessing.value = false
                     return@launch
                 }
 
-                // 3. High-speed block copy to SAF outputStream with explicit buffer flush
-                var bytesWritten = 0L
-                outputStream.buffered(65536).use { outStream ->
-                    java.io.FileInputStream(tempBackupFile).buffered(65536).use { inStream ->
-                        val buffer = ByteArray(65536)
-                        var bytes: Int
-                        while (inStream.read(buffer).also { bytes = it } != -1) {
-                            outStream.write(buffer, 0, bytes)
-                            bytesWritten += bytes
-                        }
-                        outStream.flush()
-                    }
+                // 2. Single-pass streaming directly to SAF document without intermediate disk staging
+                val backupResult = outputStream.buffered(65536).use { safeOutStream ->
+                    com.example.security.VaultBackupManager.exportMasterBackup(
+                        context,
+                        masterPassword,
+                        safeOutStream,
+                        repository
+                    )
                 }
 
-                val sizeKb = (bytesWritten + 1023) / 1024
-                showUserFeedback(context, "Master Encrypted Backup exported successfully! ($sizeKb KB)")
+                backupResult.onSuccess { totalBytesWritten ->
+                    val sizeKb = (totalBytesWritten + 1023) / 1024
+                    showUserFeedback(context, "Master Encrypted Backup exported successfully! ($sizeKb KB)")
+                }.onFailure { err ->
+                    showUserFeedback(context, "Export error: ${err.localizedMessage ?: "Unknown error"}")
+                }
             } catch (e: Exception) {
                 showUserFeedback(context, "Export error: ${e.localizedMessage ?: "Unknown error"}")
             } finally {
-                if (tempBackupFile.exists()) {
-                    tempBackupFile.delete()
-                }
                 _isProcessing.value = false
             }
         }
@@ -552,6 +549,20 @@ class VaultViewModel(
             repository.moveItemToFolder(itemId, destinationFolder)
             _statusMessage.value = "Moved file to '$destinationFolder'."
         }
+    }
+
+    fun moveItemsToFolder(itemIds: List<Long>, destinationFolder: String) {
+        viewModelScope.launch {
+            itemIds.forEach { id ->
+                repository.moveItemToFolder(id, destinationFolder)
+            }
+            _statusMessage.value = "Moved ${itemIds.size} file(s) to '$destinationFolder'."
+        }
+    }
+
+    @JvmName("moveVaultItemsToFolder")
+    fun moveItemsToFolder(items: List<VaultItem>, destinationFolder: String) {
+        moveItemsToFolder(items.map { it.id }, destinationFolder)
     }
 
     fun copyItemToFolder(context: Context, item: VaultItem, destinationFolder: String) {
@@ -716,6 +727,18 @@ class VaultViewModel(
         }
     }
 
+    fun deleteVaultItems(context: Context, items: List<VaultItem>) {
+        viewModelScope.launch {
+            items.forEach { item ->
+                repository.deleteVaultItem(context, item)
+                if (_selectedVaultItem.value?.id == item.id) {
+                    closeViewer()
+                }
+            }
+            _statusMessage.value = "Removed ${items.size} file(s) from Vault."
+        }
+    }
+
     fun exportVaultItem(context: Context, item: VaultItem) {
         _isProcessing.value = true
         viewModelScope.launch {
@@ -725,6 +748,23 @@ class VaultViewModel(
                 showUserFeedback(context, "File decrypted and restored to gallery!")
             } else {
                 showUserFeedback(context, "Export failed.")
+            }
+        }
+    }
+
+    fun exportVaultItems(context: Context, items: List<VaultItem>) {
+        _isProcessing.value = true
+        viewModelScope.launch {
+            var exportedCount = 0
+            items.forEach { item ->
+                val uri = repository.exportVaultItemToGallery(context, item)
+                if (uri != null) exportedCount++
+            }
+            _isProcessing.value = false
+            if (exportedCount > 0) {
+                showUserFeedback(context, "$exportedCount file(s) decrypted and restored to gallery!")
+            } else {
+                showUserFeedback(context, "Batch export failed.")
             }
         }
     }

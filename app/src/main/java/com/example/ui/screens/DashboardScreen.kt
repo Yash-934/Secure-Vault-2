@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,9 +39,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
@@ -52,9 +56,13 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -98,6 +106,7 @@ import com.example.ui.VaultFilterTab
 import com.example.ui.components.CreateFolderDialog
 import com.example.ui.components.MoveCopyDialog
 import com.example.ui.components.PlaceholderLoadingCard
+import com.example.ui.components.VaultItemThumbnail
 import com.example.ui.theme.VaultErrorRed
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -125,11 +134,14 @@ fun DashboardScreen(
     onDeleteFolder: (String) -> Unit = {},
     onRenameFolder: (oldName: String, newName: String) -> Unit = { _, _ -> },
     onMoveItem: (VaultItem, String) -> Unit = { _, _ -> },
+    onMoveItems: (List<VaultItem>, String) -> Unit = { _, _ -> },
     onCopyItem: (VaultItem, String) -> Unit = { _, _ -> },
     onFilesSelected: (List<Uri>) -> Unit,
     onItemClick: (VaultItem) -> Unit,
     onDeleteItem: (VaultItem) -> Unit,
+    onDeleteItems: (List<VaultItem>) -> Unit = {},
     onExportItem: (VaultItem) -> Unit,
+    onExportItems: (List<VaultItem>) -> Unit = {},
     onLockClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToAbout: () -> Unit,
@@ -149,6 +161,10 @@ fun DashboardScreen(
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var moveCopyTargetItem by remember { mutableStateOf<VaultItem?>(null) }
+    var selectedItemIds by remember { mutableStateOf(setOf<Long>()) }
+    var showBulkMoveDialog by remember { mutableStateOf(false) }
+    var showBulkDeleteDialog by remember { mutableStateOf(false) }
+    val isSelectionMode = selectedItemIds.isNotEmpty()
 
     LaunchedEffect(statusMessage) {
         if (!statusMessage.isNullOrEmpty()) {
@@ -228,7 +244,7 @@ fun DashboardScreen(
             containerColor = Color.Transparent,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             floatingActionButton = {
-                if (filteredItems.isNotEmpty()) {
+                if (filteredItems.isNotEmpty() && !isSelectionMode) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -271,80 +287,120 @@ fun DashboardScreen(
                 }
             },
             topBar = {
-                TopAppBar(
-                    title = {
-                        Text(
-                            text = "QUANTUM VAULT",
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = BrightCyan,
-                            fontFamily = FontFamily.Monospace,
-                            letterSpacing = 1.5.sp
-                        )
-                    },
-                    actions = {
-                        IconButton(onClick = { isSearchActive = !isSearchActive }) {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = "Search",
-                                tint = BrightCyan
+                if (isSelectionMode) {
+                    TopAppBar(
+                        title = {
+                            Text(
+                                text = "${selectedItemIds.size} SELECTED",
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = BrightCyan,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.2.sp
                             )
-                        }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = { selectedItemIds = emptySet() }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close Selection",
+                                    tint = Color.White
+                                )
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = {
+                                if (selectedItemIds.size == filteredItems.size) {
+                                    selectedItemIds = emptySet()
+                                } else {
+                                    selectedItemIds = filteredItems.map { it.id }.toSet()
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = if (selectedItemIds.size == filteredItems.size) Icons.Default.Deselect else Icons.Default.SelectAll,
+                                    contentDescription = "Select All / None",
+                                    tint = BrightCyan
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = PitchBlackBg.copy(alpha = 0.95f))
+                    )
+                } else {
+                    TopAppBar(
+                        title = {
+                            Text(
+                                text = "QUANTUM VAULT",
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = BrightCyan,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.5.sp
+                            )
+                        },
+                        actions = {
+                            IconButton(onClick = { isSearchActive = !isSearchActive }) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = BrightCyan
+                                )
+                            }
 
-                        IconButton(
-                            onClick = { isGridView = !isGridView },
-                            modifier = Modifier.testTag("toggle_grid_list_button")
-                        ) {
-                            Icon(
-                                imageVector = if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
-                                contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
-                                tint = BrightCyan
-                            )
-                        }
+                            IconButton(
+                                onClick = { isGridView = !isGridView },
+                                modifier = Modifier.testTag("toggle_grid_list_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
+                                    contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
+                                    tint = BrightCyan
+                                )
+                            }
 
-                        IconButton(
-                            onClick = onNavigateToSettings,
-                            modifier = Modifier.testTag("settings_nav_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = "Settings",
-                                tint = BrightCyan
-                            )
-                        }
+                            IconButton(
+                                onClick = onNavigateToSettings,
+                                modifier = Modifier.testTag("settings_nav_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Settings",
+                                    tint = BrightCyan
+                                )
+                            }
 
-                        IconButton(
-                            onClick = onNavigateToAbout,
-                            modifier = Modifier.testTag("about_nav_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "About",
-                                tint = BrightCyan
-                            )
-                        }
+                            IconButton(
+                                onClick = onNavigateToAbout,
+                                modifier = Modifier.testTag("about_nav_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "About",
+                                    tint = BrightCyan
+                                )
+                            }
 
-                        Box(
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(DarkCapsuleBg)
-                                .border(1.5.dp, BrightCyan, CircleShape)
-                                .clickable { onLockClick() }
-                                .testTag("lock_vault_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Lock Vault",
-                                tint = BrightCyan,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = PitchBlackBg.copy(alpha = 0.95f))
-                )
+                            Box(
+                                modifier = Modifier
+                                    .padding(end = 6.dp)
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(DarkCapsuleBg)
+                                    .border(1.5.dp, BrightCyan, CircleShape)
+                                    .clickable { onLockClick() }
+                                    .testTag("lock_vault_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Lock Vault",
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = PitchBlackBg.copy(alpha = 0.95f))
+                    )
+                }
             }
         ) { innerPadding ->
             Column(
@@ -689,14 +745,31 @@ fun DashboardScreen(
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(if (isGridView) 2 else 1),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 90.dp),
+                        contentPadding = PaddingValues(bottom = if (isSelectionMode) 130.dp else 90.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         items(filteredItems, key = { it.id }) { item ->
+                            val isSelected = selectedItemIds.contains(item.id)
                             if (isGridView) {
                                 VaultGridCard(
                                     item = item,
+                                    isSelectionMode = isSelectionMode,
+                                    isSelected = isSelected,
+                                    onToggleSelect = {
+                                        selectedItemIds = if (isSelected) {
+                                            selectedItemIds - item.id
+                                        } else {
+                                            selectedItemIds + item.id
+                                        }
+                                    },
+                                    onLongClick = {
+                                        selectedItemIds = if (isSelected) {
+                                            selectedItemIds - item.id
+                                        } else {
+                                            selectedItemIds + item.id
+                                        }
+                                    },
                                     onClick = { onItemClick(item) },
                                     onDelete = { onDeleteItem(item) },
                                     onExport = { onExportItem(item) },
@@ -705,6 +778,22 @@ fun DashboardScreen(
                             } else {
                                 VaultListCard(
                                     item = item,
+                                    isSelectionMode = isSelectionMode,
+                                    isSelected = isSelected,
+                                    onToggleSelect = {
+                                        selectedItemIds = if (isSelected) {
+                                            selectedItemIds - item.id
+                                        } else {
+                                            selectedItemIds + item.id
+                                        }
+                                    },
+                                    onLongClick = {
+                                        selectedItemIds = if (isSelected) {
+                                            selectedItemIds - item.id
+                                        } else {
+                                            selectedItemIds + item.id
+                                        }
+                                    },
                                     onClick = { onItemClick(item) },
                                     onDelete = { onDeleteItem(item) },
                                     onExport = { onExportItem(item) },
@@ -715,6 +804,172 @@ fun DashboardScreen(
                     }
                 }
             }
+        }
+
+        // Floating Cyber Bulk Action Bar
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp, start = 20.dp, end = 20.dp)
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xF5071422)),
+                border = BorderStroke(1.5.dp, BrightCyan)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Bulk Move Action
+                    TextButton(
+                        onClick = { showBulkMoveDialog = true },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.DriveFileMove,
+                                contentDescription = "Move Selected",
+                                tint = BrightCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "MOVE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = BrightCyan,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    // Bulk Restore / Export Action
+                    TextButton(
+                        onClick = {
+                            val itemsToExport = vaultItems.filter { it.id in selectedItemIds }
+                            onExportItems(itemsToExport)
+                            selectedItemIds = emptySet()
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.FileDownload,
+                                contentDescription = "Restore Selected",
+                                tint = BrightCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "RESTORE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = BrightCyan,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    // Bulk Delete Action
+                    TextButton(
+                        onClick = { showBulkDeleteDialog = true },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Selected",
+                                tint = VaultErrorRed,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "DELETE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = VaultErrorRed,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bulk Move Dialog
+        if (showBulkMoveDialog) {
+            val selectedItems = vaultItems.filter { it.id in selectedItemIds }
+            MoveCopyDialog(
+                item = selectedItems.firstOrNull(),
+                selectedCount = selectedItems.size,
+                availableFolders = folders,
+                onDismiss = { showBulkMoveDialog = false },
+                onMove = { dest ->
+                    onMoveItems(selectedItems, dest)
+                    showBulkMoveDialog = false
+                    selectedItemIds = emptySet()
+                },
+                onCopy = { dest ->
+                    selectedItems.forEach { item -> onCopyItem(item, dest) }
+                    showBulkMoveDialog = false
+                    selectedItemIds = emptySet()
+                },
+                onCreateNewFolder = { name ->
+                    onCreateFolder(name)
+                }
+            )
+        }
+
+        // Bulk Delete Confirm Dialog
+        if (showBulkDeleteDialog) {
+            AlertDialog(
+                onDismissRequest = { showBulkDeleteDialog = false },
+                containerColor = DarkCapsuleBg,
+                shape = RoundedCornerShape(20.dp),
+                title = {
+                    Text(
+                        text = "DELETE ${selectedItemIds.size} FILES?",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = VaultErrorRed,
+                        fontFamily = FontFamily.Monospace
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to permanently delete these ${selectedItemIds.size} encrypted files from the vault? This cannot be undone.",
+                        fontSize = 13.sp,
+                        color = Color.White,
+                        lineHeight = 18.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val itemsToDelete = vaultItems.filter { it.id in selectedItemIds }
+                            onDeleteItems(itemsToDelete)
+                            showBulkDeleteDialog = false
+                            selectedItemIds = emptySet()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = VaultErrorRed),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("DELETE ALL", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBulkDeleteDialog = false }) {
+                        Text("CANCEL", color = MutedText, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            )
         }
 
         if (showCreateFolderDialog) {
@@ -1119,16 +1374,21 @@ private fun EmptyVaultHologramView(onImportClick: () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun VaultGridCard(
     item: VaultItem,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {},
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
     onMoveCopy: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val (itemIcon, itemBadge) = remember(item.mimeType, item.isVideo) {
+    val (_, itemBadge) = remember(item.mimeType, item.isVideo) {
         getVaultItemIconAndBadge(item.mimeType, item.isVideo)
     }
 
@@ -1136,10 +1396,22 @@ private fun VaultGridCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick = {
+                    if (isSelectionMode) {
+                        onToggleSelect()
+                    } else {
+                        onClick()
+                    }
+                },
+                onLongClick = onLongClick
+            )
             .testTag("vault_item_card_${item.id}"),
-        colors = CardDefaults.cardColors(containerColor = DarkCapsuleBg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CapsuleBorder)
+        colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFF0C2436) else DarkCapsuleBg),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) BrightCyan else CapsuleBorder
+        )
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Box(
@@ -1149,13 +1421,12 @@ private fun VaultGridCard(
                     .background(Color(0xFF050E17)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = itemIcon,
-                    contentDescription = null,
-                    tint = BrightCyan,
-                    modifier = Modifier.size(42.dp)
+                VaultItemThumbnail(
+                    item = item,
+                    modifier = Modifier.fillMaxSize()
                 )
 
+                // Top badges (Type / Folder)
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -1182,7 +1453,7 @@ private fun VaultGridCard(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFF0E2235))
+                                .background(Color(0xFF0E2235).copy(alpha = 0.9f))
                                 .border(0.8.dp, BrightCyan.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
@@ -1191,6 +1462,29 @@ private fun VaultGridCard(
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = BrightCyan
+                            )
+                        }
+                    }
+                }
+
+                // Selection checkmark badge
+                if (isSelectionMode || isSelected) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(if (isSelected) BrightCyan else Color(0xAA04101A))
+                            .border(1.5.dp, if (isSelected) BrightCyan else Color.White.copy(alpha = 0.8f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = Color(0xFF03070C),
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -1217,66 +1511,68 @@ private fun VaultGridCard(
                         modifier = Modifier.weight(1f)
                     )
 
-                    Box {
-                        IconButton(
-                            onClick = { menuExpanded = true },
-                            modifier = Modifier.size(22.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Options",
-                                tint = MutedText,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
+                    if (!isSelectionMode) {
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Options",
+                                    tint = MutedText,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
 
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                            modifier = Modifier.background(DarkCapsuleBg)
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.DriveFileMove,
-                                        contentDescription = null,
-                                        tint = BrightCyan
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    onMoveCopy()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Restore to Gallery", fontSize = 12.sp, color = Color.White) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.FileDownload,
-                                        contentDescription = null,
-                                        tint = BrightCyan
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    onExport()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete from Vault", fontSize = 12.sp, color = VaultErrorRed) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = null,
-                                        tint = VaultErrorRed
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    onDelete()
-                                }
-                            )
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false },
+                                modifier = Modifier.background(DarkCapsuleBg)
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.DriveFileMove,
+                                            contentDescription = null,
+                                            tint = BrightCyan
+                                        )
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onMoveCopy()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Restore to Gallery", fontSize = 12.sp, color = Color.White) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.FileDownload,
+                                            contentDescription = null,
+                                            tint = BrightCyan
+                                        )
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onExport()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete from Vault", fontSize = 12.sp, color = VaultErrorRed) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = null,
+                                            tint = VaultErrorRed
+                                        )
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onDelete()
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -1303,27 +1599,41 @@ private fun VaultGridCard(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun VaultListCard(
     item: VaultItem,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {},
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
     onMoveCopy: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val (itemIcon, itemBadge) = remember(item.mimeType, item.isVideo) {
-        getVaultItemIconAndBadge(item.mimeType, item.isVideo)
-    }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick = {
+                    if (isSelectionMode) {
+                        onToggleSelect()
+                    } else {
+                        onClick()
+                    }
+                },
+                onLongClick = onLongClick
+            )
             .testTag("vault_item_list_card_${item.id}"),
-        colors = CardDefaults.cardColors(containerColor = DarkCapsuleBg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CapsuleBorder)
+        colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFF0C2436) else DarkCapsuleBg),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) BrightCyan else CapsuleBorder
+        )
     ) {
         Row(
             modifier = Modifier
@@ -1331,6 +1641,28 @@ private fun VaultListCard(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Selection indicator in list mode
+            if (isSelectionMode || isSelected) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(if (isSelected) BrightCyan else Color(0xAA04101A))
+                        .border(1.5.dp, if (isSelected) BrightCyan else Color.White.copy(alpha = 0.8f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected",
+                            tint = Color(0xFF03070C),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+            }
+
             Box(
                 modifier = Modifier
                     .size(54.dp)
@@ -1338,11 +1670,9 @@ private fun VaultListCard(
                     .background(Color(0xFF050E17)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = itemIcon,
-                    contentDescription = null,
-                    tint = BrightCyan,
-                    modifier = Modifier.size(28.dp)
+                VaultItemThumbnail(
+                    item = item,
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -1378,66 +1708,68 @@ private fun VaultListCard(
                 }
             }
 
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = MutedText,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            if (!isSelectionMode) {
+                Box {
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Options",
+                            tint = MutedText,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
 
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    modifier = Modifier.background(DarkCapsuleBg)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.DriveFileMove,
-                                contentDescription = null,
-                                tint = BrightCyan
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onMoveCopy()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Restore to Gallery", fontSize = 12.sp, color = Color.White) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.FileDownload,
-                                contentDescription = null,
-                                tint = BrightCyan
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onExport()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete from Vault", fontSize = 12.sp, color = VaultErrorRed) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = null,
-                                tint = VaultErrorRed
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onDelete()
-                        }
-                    )
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        modifier = Modifier.background(DarkCapsuleBg)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.DriveFileMove,
+                                    contentDescription = null,
+                                    tint = BrightCyan
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onMoveCopy()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Restore to Gallery", fontSize = 12.sp, color = Color.White) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.FileDownload,
+                                    contentDescription = null,
+                                    tint = BrightCyan
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onExport()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete from Vault", fontSize = 12.sp, color = VaultErrorRed) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = VaultErrorRed
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onDelete()
+                            }
+                        )
+                    }
                 }
             }
         }

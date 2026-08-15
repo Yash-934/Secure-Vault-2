@@ -248,6 +248,7 @@ fun VaultNavHost(
                 onDeleteFolder = { vaultViewModel.deleteFolder(it) },
                 onRenameFolder = { oldName, newName -> vaultViewModel.renameFolder(oldName, newName) },
                 onMoveItem = { item, destFolder -> vaultViewModel.moveItemToFolder(item.id, destFolder) },
+                onMoveItems = { items, destFolder -> vaultViewModel.moveItemsToFolder(items, destFolder) },
                 onCopyItem = { item, destFolder -> vaultViewModel.copyItemToFolder(context, item, destFolder) },
                 onFilesSelected = { vaultViewModel.onFilesSelected(it) },
                 onItemClick = { item ->
@@ -255,7 +256,9 @@ fun VaultNavHost(
                     navController.navigate(NavRoutes.MediaViewer.createRoute(item.id))
                 },
                 onDeleteItem = { vaultViewModel.deleteVaultItem(context, it) },
+                onDeleteItems = { vaultViewModel.deleteVaultItems(context, it) },
                 onExportItem = { vaultViewModel.exportVaultItem(context, it) },
+                onExportItems = { vaultViewModel.exportVaultItems(context, it) },
                 onLockClick = {
                     vaultViewModel.lockVault()
                     onLockApp()

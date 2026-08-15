@@ -81,12 +81,10 @@ fun AboutScreen(onBackClick: () -> Unit) {
                     .border(2.dp, BrightCyan.copy(alpha = 0.3f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                // Using the quantum_logo, fallback to shield if not possible, but user explicitly asked to use lock/shield icon placeholder for now
-                Icon(
-                    imageVector = Icons.Default.Shield,
+                Image(
+                    painter = painterResource(id = R.drawable.app_logo),
                     contentDescription = "App Logo",
-                    tint = BrightCyan,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(56.dp)
                 )
             }
             

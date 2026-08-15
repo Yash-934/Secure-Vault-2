@@ -24,7 +24,11 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.io.File
 import com.example.data.AppDatabase
 import com.example.data.VaultRepository
 import com.example.data.local.SettingsDataStore
@@ -61,6 +65,11 @@ class MainActivity : FragmentActivity() {
 
         biometricPromptManager = BiometricPromptManager(this)
         panicSensorManager = PanicSensorManager(this)
+
+        // Clear any leftover temporary files from previous sessions
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            cleanCacheDirectory(applicationContext)
+        }
 
         setContent {
             MyApplicationTheme {
@@ -179,6 +188,23 @@ class MainActivity : FragmentActivity() {
             }
         } else {
             // Devices without biometric hardware configured stay on the Lock Screen
+        }
+    }
+
+    companion object {
+        fun cleanCacheDirectory(context: android.content.Context) {
+            try {
+                val cacheDir = context.cacheDir ?: return
+                cacheDir.listFiles()?.forEach { file ->
+                    try {
+                        if (file.isDirectory) {
+                            file.deleteRecursively()
+                        } else {
+                            file.delete()
+                        }
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
         }
     }
 }

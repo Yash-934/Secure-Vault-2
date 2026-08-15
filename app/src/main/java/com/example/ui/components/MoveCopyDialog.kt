@@ -32,14 +32,16 @@ import com.example.ui.theme.*
 
 @Composable
 fun MoveCopyDialog(
-    item: VaultItem,
+    item: VaultItem? = null,
+    selectedCount: Int = 1,
     availableFolders: List<VaultFolder>,
     onDismiss: () -> Unit,
     onMove: (destinationFolder: String) -> Unit,
     onCopy: (destinationFolder: String) -> Unit,
     onCreateNewFolder: (folderName: String) -> Unit
 ) {
-    var selectedFolder by remember { mutableStateOf(item.folderName.ifEmpty { "Root" }) }
+    val initialFolder = item?.folderName?.ifEmpty { "Root" } ?: "Root"
+    var selectedFolder by remember { mutableStateOf(initialFolder) }
     var showCreateFolderInside by remember { mutableStateOf(false) }
 
     // Combine default "Root" with custom created folders
@@ -100,14 +102,14 @@ fun MoveCopyDialog(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "MOVE / COPY FILE",
+                            text = if (selectedCount > 1) "MOVE $selectedCount FILES" else "MOVE / COPY FILE",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color.White,
                             letterSpacing = 1.sp
                         )
                         Text(
-                            text = item.originalName,
+                            text = item?.originalName ?: "$selectedCount files selected",
                             fontSize = 12.sp,
                             color = VaultTextSecondary,
                             maxLines = 1,
