@@ -75,7 +75,7 @@ fun AboutScreen(onBackClick: () -> Unit) {
             // 1. App Identity Section
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(96.dp)
                     .clip(CircleShape)
                     .background(BrightCyan.copy(alpha = 0.15f))
                     .border(2.dp, BrightCyan.copy(alpha = 0.3f), CircleShape),
@@ -84,7 +84,7 @@ fun AboutScreen(onBackClick: () -> Unit) {
                 Image(
                     painter = painterResource(id = R.drawable.icon_logo),
                     contentDescription = "App Logo",
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(80.dp)
                 )
             }
             
