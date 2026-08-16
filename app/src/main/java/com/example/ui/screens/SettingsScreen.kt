@@ -89,6 +89,7 @@ import com.example.data.local.VaultSettings
 import com.example.security.AuditResult
 import com.example.ui.components.AntiTamperReportDialog
 import com.example.ui.components.ChangePinDialog
+import com.example.ui.components.SecurityArchitectureDialog
 import com.example.ui.components.MaxSecurityGuideDialog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -137,6 +138,7 @@ fun SettingsScreen(
     var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
     var showChangeKillPinDialog by remember { mutableStateOf(false) }
     var showMaxSecurityGuideDialog by remember { mutableStateOf(false) }
+    var showSecurityArchitectureDialog by remember { mutableStateOf(false) }
     var showAntiTamperDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
@@ -403,6 +405,69 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // SECURITY ARCHITECTURE CARD
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { showSecurityArchitectureDialog = true }
+                    .testTag("security_architecture_card"),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PassGreen.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(PassGreen.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                tint = PassGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Security Architecture Level",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Current Rating: ULTRA-HIGH (Military-Grade)",
+                                fontSize = 11.sp,
+                                color = PassGreen
+                            )
+                        }
+                    }
+
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "View Security Details",
+                        tint = PassGreen,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             // MAX SECURITY BEST PRACTICES ACTION CARD
             Card(
@@ -1260,6 +1325,12 @@ fun SettingsScreen(
             if (showMaxSecurityGuideDialog) {
                 MaxSecurityGuideDialog(
                     onDismiss = { showMaxSecurityGuideDialog = false }
+                )
+            }
+            
+            if (showSecurityArchitectureDialog) {
+                SecurityArchitectureDialog(
+                    onDismiss = { showSecurityArchitectureDialog = false }
                 )
             }
 

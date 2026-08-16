@@ -222,7 +222,6 @@ class VaultViewModel(
     fun hideItemInStegoCarrier(context: Context, item: VaultItem, coverInputStream: java.io.InputStream, outputStream: java.io.OutputStream) {
         _isProcessing.value = true
         viewModelScope.launch {
-            val tempItemFile = java.io.File(context.cacheDir, "temp_stego_item_${System.currentTimeMillis()}.bin")
             try {
                 val decryptedVaultBytes = repository.decryptFileToByteArray(context, item)
                 if (decryptedVaultBytes == null) {
@@ -230,22 +229,22 @@ class VaultViewModel(
                     _isProcessing.value = false
                     return@launch
                 }
-                tempItemFile.writeBytes(decryptedVaultBytes)
-                decryptedVaultBytes.fill(0)
-
-                tempItemFile.inputStream().buffered(65536).use { payloadIn ->
-                    coverInputStream.buffered(65536).use { coverIn ->
-                        outputStream.buffered(65536).use { out ->
-                            com.example.security.SteganographyManager.embedPayloadStream(coverIn, payloadIn, out)
+                
+                try {
+                    java.io.ByteArrayInputStream(decryptedVaultBytes).buffered(65536).use { payloadIn ->
+                        coverInputStream.buffered(65536).use { coverIn ->
+                            outputStream.buffered(65536).use { out ->
+                                com.example.security.SteganographyManager.embedPayloadStream(coverIn, payloadIn, out)
+                            }
                         }
                     }
+                    _statusMessage.value = "Vault item concealed inside carrier file via Steganography!"
+                } finally {
+                    decryptedVaultBytes.fill(0)
                 }
-
-                _statusMessage.value = "Vault item concealed inside carrier file via Steganography!"
             } catch (e: Exception) {
                 _statusMessage.value = "Steganography embedding failed: ${e.localizedMessage}"
             } finally {
-                if (tempItemFile.exists()) tempItemFile.delete()
                 _isProcessing.value = false
             }
         }
@@ -282,9 +281,29 @@ class VaultViewModel(
                 _statusMessage.value = "Steganography extraction failed: ${e.localizedMessage}"
             } finally {
                 if (tempStegoFile.exists()) tempStegoFile.delete()
-                if (tempExtractedFile.exists()) tempExtractedFile.delete()
+                securelyShredFile(tempExtractedFile)
                 _isProcessing.value = false
             }
+        }
+    }
+    
+    private fun securelyShredFile(file: java.io.File) {
+        if (!file.exists()) return
+        try {
+            val length = file.length()
+            if (length > 0) {
+                java.io.RandomAccessFile(file, "rws").use { raf ->
+                    val zeroBuf = ByteArray(minOf(65536, length.toInt()))
+                    var written = 0L
+                    while (written < length) {
+                        val toWrite = minOf(zeroBuf.size.toLong(), length - written).toInt()
+                        raf.write(zeroBuf, 0, toWrite)
+                        written += toWrite
+                    }
+                }
+            }
+        } catch (_: Throwable) {} finally {
+            file.delete()
         }
     }
 
@@ -553,7 +572,7 @@ class VaultViewModel(
                 showUserFeedback(context, "Extraction failed: $err")
             } finally {
                 if (tempStegoFile.exists()) tempStegoFile.delete()
-                if (tempExtractedBackupFile.exists()) tempExtractedBackupFile.delete()
+                securelyShredFile(tempExtractedBackupFile)
                 _isProcessing.value = false
             }
         }

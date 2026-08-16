@@ -428,13 +428,11 @@ object VaultBackupManager {
 
                 val encryptedBytes = inputStream.readBytes()
                 val decryptedZipBytes = cipher.doFinal(encryptedBytes)
-
-                val tempRestoredZip = File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
+                
                 try {
-                    FileOutputStream(tempRestoredZip).use { it.write(decryptedZipBytes) }
                     var restoredItems: List<VaultItem>? = null
-
-                    ZipInputStream(FileInputStream(tempRestoredZip).buffered(65536)).use { zis ->
+                    
+                    ZipInputStream(java.io.ByteArrayInputStream(decryptedZipBytes).buffered(65536)).use { zis ->
                         var entry: ZipEntry? = zis.nextEntry
                         while (entry != null) {
                             if (entry.name == MANIFEST_FILENAME) {
@@ -467,7 +465,7 @@ object VaultBackupManager {
                         restoredCount++
                     }
                 } finally {
-                    if (tempRestoredZip.exists()) tempRestoredZip.delete()
+                    decryptedZipBytes.fill(0)
                 }
             }
 
