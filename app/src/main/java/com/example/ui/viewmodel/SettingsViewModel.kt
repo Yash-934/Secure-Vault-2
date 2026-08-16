@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -138,6 +139,15 @@ class SettingsViewModel @Inject constructor(
     fun setScreenProtectionEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsDataStore.setScreenProtectionEnabled(enabled)
+        }
+    }
+
+    fun setThumbnailsEnabled(enabled: Boolean, context: Context? = null) {
+        viewModelScope.launch {
+            settingsDataStore.setThumbnailsEnabled(enabled)
+            if (!enabled) {
+                com.example.security.VaultThumbnailManager.clearCache(context)
+            }
         }
     }
 

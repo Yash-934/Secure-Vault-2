@@ -1,28 +1,4 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- Shield Outline -->
-    <path
-        android:fillColor="#00F5D4"
-        android:pathData="M54,20 L84,32 L84,56 C84,74.8 71.2,92 54,98 C36.8,92 24,74.8 24,56 L24,32 L54,20 Z" />
-    <!-- Inner Dark Shield -->
-    <path
-        android:fillColor="#0D131A"
-        android:pathData="M54,25 L79,35 L79,56 C79,71.5 68.3,85.6 54,90.8 C39.7,85.6 29,71.5 29,56 L29,35 L54,25 Z" />
-    <!-- Lock Body -->
-    <path
-        android:fillColor="#00B4D8"
-        android:pathData="M43,52 H65 V69 H43 Z" />
-    <!-- Lock Shackle -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#00F5D4"
-        android:strokeWidth="3.5"
-        android:pathData="M47,52 V44 C47,40.1 50.1,37 54,37 C57.9,37 61,40.1 61,44 V52" />
-    <!-- Keyhole -->
-    <path
-        android:fillColor="#0D131A"
-        android:pathData="M54,57 C55.1,57 56,57.9 56,59 C56,59.7 55.6,60.3 55,60.7 L55.5,65 H52.5 L53,60.7 C52.4,60.3 52,59.7 52,59 C52,57.9 52.9,57 54,57 Z" />
-</vector>
+<?xml version="1.0" encoding="utf-8"?>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/icon_logo"
+    android:inset="22dp" />

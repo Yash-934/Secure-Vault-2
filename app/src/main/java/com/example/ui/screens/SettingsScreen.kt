@@ -115,6 +115,7 @@ fun SettingsScreen(
     onChangeMasterPinClick: () -> Unit,
     onChangeDecoyPinClick: () -> Unit,
     onTogglePanicFlip: (Boolean) -> Unit,
+    onToggleThumbnails: (Boolean) -> Unit = {},
     onToggleCamouflage: (Boolean) -> Unit = {},
     onToggleScreenProtection: (Boolean) -> Unit = {},
     onExportBackupClick: () -> Unit = {},
@@ -674,6 +675,44 @@ fun SettingsScreen(
                         },
                         onClick = onChangeDecoyPinClick,
                         modifier = Modifier.testTag("change_decoy_pin_item")
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    // Item 4: File Thumbnail Previews
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Image,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "File Thumbnail Previews",
+                        subtitle = "Show image, video & PDF previews in vault (Disable for stealth)",
+                        trailing = {
+                            Switch(
+                                checked = settings.isThumbnailsEnabled,
+                                onCheckedChange = onToggleThumbnails,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DarkNavyBg,
+                                    checkedTrackColor = BrightCyan,
+                                    uncheckedThumbColor = SubtitleText,
+                                    uncheckedTrackColor = CardBg,
+                                    uncheckedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier.testTag("thumbnails_switch")
+                            )
+                        }
                     )
                 }
             }

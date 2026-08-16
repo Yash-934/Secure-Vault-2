@@ -415,6 +415,24 @@ object CryptoManager {
     }
 
     /**
+     * Encrypts a plaintext ByteArray into an AES-256-GCM encrypted ByteArray.
+     */
+    fun encryptByteArray(data: ByteArray): ByteArray {
+        val outStream = java.io.ByteArrayOutputStream()
+        val inStream = java.io.ByteArrayInputStream(data)
+        encryptStream(inStream, outStream, totalBytes = data.size.toLong())
+        return outStream.toByteArray()
+    }
+
+    /**
+     * Decrypts an AES-256-GCM encrypted ByteArray into a plaintext ByteArray.
+     */
+    fun decryptByteArray(encryptedData: ByteArray): ByteArray {
+        val inStream = java.io.ByteArrayInputStream(encryptedData)
+        return decryptStreamToByteArray(inStream)
+    }
+
+    /**
      * Decrypts a stream into javax.crypto.CipherInputStream for legacy stream consumers.
      */
     fun getDecryptedInputStream(inputStream: InputStream): InputStream {

@@ -60,6 +60,8 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -146,6 +148,8 @@ fun DashboardScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToAbout: () -> Unit,
     onNavigateToPasswords: () -> Unit = {},
+    isThumbnailsEnabled: Boolean = true,
+    onToggleThumbnails: () -> Unit = {},
     onPickerLaunched: () -> Unit = {},
     onPickerFinished: () -> Unit = {},
     onClearStatusMessage: () -> Unit
@@ -354,6 +358,17 @@ fun DashboardScreen(
                                     imageVector = if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
                                     contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
                                     tint = BrightCyan
+                                )
+                            }
+
+                            IconButton(
+                                onClick = onToggleThumbnails,
+                                modifier = Modifier.testTag("toggle_thumbnails_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isThumbnailsEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = if (isThumbnailsEnabled) "Thumbnails Visible (Tap to Hide)" else "Thumbnails Hidden (Tap to Show)",
+                                    tint = if (isThumbnailsEnabled) BrightCyan else Color(0xFF6C7A8E)
                                 )
                             }
 
@@ -756,6 +771,7 @@ fun DashboardScreen(
                                     item = item,
                                     isSelectionMode = isSelectionMode,
                                     isSelected = isSelected,
+                                    showThumbnails = isThumbnailsEnabled,
                                     onToggleSelect = {
                                         selectedItemIds = if (isSelected) {
                                             selectedItemIds - item.id
@@ -780,6 +796,7 @@ fun DashboardScreen(
                                     item = item,
                                     isSelectionMode = isSelectionMode,
                                     isSelected = isSelected,
+                                    showThumbnails = isThumbnailsEnabled,
                                     onToggleSelect = {
                                         selectedItemIds = if (isSelected) {
                                             selectedItemIds - item.id
@@ -1380,6 +1397,7 @@ private fun VaultGridCard(
     item: VaultItem,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
+    showThumbnails: Boolean = true,
     onToggleSelect: () -> Unit = {},
     onLongClick: () -> Unit = {},
     onClick: () -> Unit,
@@ -1423,6 +1441,7 @@ private fun VaultGridCard(
             ) {
                 VaultItemThumbnail(
                     item = item,
+                    showThumbnails = showThumbnails,
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -1605,6 +1624,7 @@ private fun VaultListCard(
     item: VaultItem,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
+    showThumbnails: Boolean = true,
     onToggleSelect: () -> Unit = {},
     onLongClick: () -> Unit = {},
     onClick: () -> Unit,
@@ -1672,6 +1692,7 @@ private fun VaultListCard(
             ) {
                 VaultItemThumbnail(
                     item = item,
+                    showThumbnails = showThumbnails,
                     modifier = Modifier.fillMaxSize()
                 )
             }

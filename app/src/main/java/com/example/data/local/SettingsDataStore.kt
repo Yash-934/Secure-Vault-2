@@ -28,7 +28,8 @@ data class VaultSettings(
     val isIntruderSelfieEnabled: Boolean = false,
     val isDeadManSwitchEnabled: Boolean = false,
     val deadManDays: Int = 30,
-    val lastLoginTimestamp: Long = System.currentTimeMillis()
+    val lastLoginTimestamp: Long = System.currentTimeMillis(),
+    val isThumbnailsEnabled: Boolean = true
 )
 
 class SettingsDataStore(private val context: Context) {
@@ -47,6 +48,7 @@ class SettingsDataStore(private val context: Context) {
         private val DEAD_MAN_SWITCH_ENABLED_KEY = booleanPreferencesKey("dead_man_switch_enabled")
         private val DEAD_MAN_DAYS_KEY = intPreferencesKey("dead_man_days")
         private val LAST_LOGIN_TIMESTAMP_KEY = longPreferencesKey("last_login_timestamp")
+        private val THUMBNAILS_ENABLED_KEY = booleanPreferencesKey("thumbnails_enabled")
     }
 
     val settingsFlow: Flow<VaultSettings> = context.dataStore.data.map { prefs ->
@@ -63,7 +65,8 @@ class SettingsDataStore(private val context: Context) {
             isIntruderSelfieEnabled = prefs[INTRUDER_SELFIE_ENABLED_KEY] ?: false,
             isDeadManSwitchEnabled = prefs[DEAD_MAN_SWITCH_ENABLED_KEY] ?: false,
             deadManDays = prefs[DEAD_MAN_DAYS_KEY] ?: 30,
-            lastLoginTimestamp = prefs[LAST_LOGIN_TIMESTAMP_KEY] ?: System.currentTimeMillis()
+            lastLoginTimestamp = prefs[LAST_LOGIN_TIMESTAMP_KEY] ?: System.currentTimeMillis(),
+            isThumbnailsEnabled = prefs[THUMBNAILS_ENABLED_KEY] ?: true
         )
     }
 
@@ -136,6 +139,12 @@ class SettingsDataStore(private val context: Context) {
     suspend fun setDeadManDays(days: Int) {
         context.dataStore.edit { prefs ->
             prefs[DEAD_MAN_DAYS_KEY] = days
+        }
+    }
+
+    suspend fun setThumbnailsEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[THUMBNAILS_ENABLED_KEY] = enabled
         }
     }
 

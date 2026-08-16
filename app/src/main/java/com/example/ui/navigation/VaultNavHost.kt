@@ -268,6 +268,8 @@ fun VaultNavHost(
                 onNavigateToSettings = { navController.navigate(NavRoutes.Settings.route) },
                 onNavigateToAbout = { navController.navigate(NavRoutes.About.route) },
                 onNavigateToPasswords = { navController.navigate(NavRoutes.PasswordManager.route) },
+                isThumbnailsEnabled = settings.isThumbnailsEnabled,
+                onToggleThumbnails = { settingsViewModel.setThumbnailsEnabled(!settings.isThumbnailsEnabled, context) },
                 onPickerLaunched = { vaultViewModel.onSystemPickerLaunched() },
                 onPickerFinished = { vaultViewModel.onSystemPickerFinished() },
                 onClearStatusMessage = { vaultViewModel.clearStatusMessage() }
@@ -306,6 +308,7 @@ fun VaultNavHost(
                 onChangeMasterPinClick = { showMasterPinDialog = true },
                 onChangeDecoyPinClick = { showDecoyPinDialog = true },
                 onTogglePanicFlip = { settingsViewModel.setPanicFlipEnabled(it) },
+                onToggleThumbnails = { settingsViewModel.setThumbnailsEnabled(it, context) },
                 onToggleCamouflage = { settingsViewModel.setCamouflageEnabled(context, it) },
                 onToggleScreenProtection = { settingsViewModel.setScreenProtectionEnabled(it) },
                 onExportBackupClick = { showExportPasswordDialog = true },

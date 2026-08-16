@@ -87,7 +87,8 @@ fun MediaViewerScreen(
 ) {
     val context = LocalContext.current
     val encryptedFile = remember(vaultItem) {
-        File(File(context.filesDir, "vault"), vaultItem.encryptedFileName)
+        val primary = File(File(context.filesDir, "vault"), vaultItem.encryptedFileName)
+        if (primary.exists()) primary else File(File(context.filesDir, "decoy_vault"), vaultItem.encryptedFileName)
     }
 
     var isVideoFullscreen by remember { mutableStateOf(false) }
