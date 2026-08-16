@@ -3,31 +3,29 @@ package com.example.security
 import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.datasource.BaseDataSource
-import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import java.io.File
-import java.io.FileInputStream
 import java.io.IOException
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
+import kotlin.concurrent.thread
 
 /**
- * Custom Media3 DataSource for "On-The-Fly" streaming decryption of AES-256-GCM encrypted media files.
- * Streams and decrypts chunks directly into ExoPlayer buffers without writing plaintext to disk,
- * supporting arbitrarily large video/audio files (1GB+) with zero memory overhead.
+ * Custom Media3 DataSource for "On-The-Fly" streaming decryption of encrypted media files.
+ * Streams and decrypts chunks directly into ExoPlayer buffers without writing plaintext to disk.
+ * Supports seeking by intelligently skipping decrypted bytes.
  */
 class CipherDataSource(
     private val encryptedFile: File
 ) : BaseDataSource(/* isNetwork = */ false) {
 
-    private var fileInputStream: FileInputStream? = null
-    private var cipher: Cipher? = null
+    private var pipedInputStream: PipedInputStream? = null
+    private var decryptThread: Thread? = null
     private var dataSpec: DataSpec? = null
-    private var bytesRemaining: Long = 0
-    private var totalDecryptedRead: Long = 0
-    private val buffer = ByteArray(8192)
+    private var bytesRemaining: Long = C.LENGTH_UNSET.toLong()
+    private var isOpened = false
 
     override fun open(dataSpec: DataSpec): Long {
         this.dataSpec = dataSpec
@@ -37,68 +35,67 @@ class CipherDataSource(
             throw IOException("Encrypted media file not found: ${encryptedFile.absolutePath}")
         }
 
-        val fis = FileInputStream(encryptedFile)
-        fileInputStream = fis
+        val pos = dataSpec.position
+        bytesRemaining = dataSpec.length
 
-        // 1. Read 12-byte IV header
-        val iv = ByteArray(12)
-        val ivRead = fis.read(iv)
-        if (ivRead < 12) {
-            throw IOException("Invalid encrypted media format: Missing IV header.")
-        }
+        val posInputStream = PipedInputStream(1024 * 1024) // 1MB buffer
+        val posOutputStream = PipedOutputStream(posInputStream)
+        pipedInputStream = posInputStream
 
-        // 2. Retrieve SecretKey from Keystore
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val secretKey = (keyStore.getEntry("SecureVaultAES256MasterKey", null) as? KeyStore.SecretKeyEntry)?.secretKey
-            ?: throw IOException("Keystore Master Key not found.")
+        isOpened = true
 
-        // 3. Initialize AES/GCM Cipher
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        val gcmSpec = GCMParameterSpec(128, iv)
-        c.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec)
-        cipher = c
+        decryptThread = thread {
+            try {
+                // We use a custom OutputStream that skips 'pos' bytes before writing to posOutputStream
+                val skippingStream = object : OutputStream() {
+                    var skipped = 0L
+                    var closed = false
+                    override fun write(b: Int) {
+                        if (closed) return
+                        if (skipped < pos) {
+                            skipped++
+                        } else {
+                            posOutputStream.write(b)
+                        }
+                    }
 
-        val totalFileLength = encryptedFile.length()
-        val encryptedDataLength = if (totalFileLength > 12) totalFileLength - 12 else 0
+                    override fun write(b: ByteArray, off: Int, len: Int) {
+                        if (closed) return
+                        if (skipped < pos) {
+                            val toSkip = minOf(pos - skipped, len.toLong()).toInt()
+                            skipped += toSkip
+                            if (toSkip < len) {
+                                posOutputStream.write(b, off + toSkip, len - toSkip)
+                            }
+                        } else {
+                            posOutputStream.write(b, off, len)
+                        }
+                    }
 
-        // Handle requested position offset
-        var seekPosition = dataSpec.position
-        totalDecryptedRead = 0
+                    override fun close() {
+                        closed = true
+                        posOutputStream.close()
+                    }
+                }
 
-        if (seekPosition > 0) {
-            var bytesToSkip = seekPosition
-            val skipBuffer = ByteArray(8192)
-            while (bytesToSkip > 0) {
-                val readLength = minOf(bytesToSkip, skipBuffer.size.toLong()).toInt()
-                val readEncrypted = fis.read(skipBuffer, 0, readLength)
-                if (readEncrypted == -1) break
-                val decrypted = c.update(skipBuffer, 0, readEncrypted)
-                val decLength = decrypted?.size ?: 0
-                bytesToSkip -= decLength
-                totalDecryptedRead += decLength
-            }
-        }
-
-        bytesRemaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
-            dataSpec.length
-        } else {
-            if (encryptedDataLength > totalDecryptedRead) {
-                encryptedDataLength - totalDecryptedRead
-            } else {
-                C.LENGTH_UNSET.toLong()
+                encryptedFile.inputStream().buffered(65536).use { fileIn ->
+                    CryptoManager.decryptStreamToOutputStream(fileIn, skippingStream)
+                }
+                skippingStream.close()
+            } catch (e: Exception) {
+                try { posOutputStream.close() } catch (ignored: Exception) {}
             }
         }
 
         transferStarted(dataSpec)
-        return if (dataSpec.length != C.LENGTH_UNSET.toLong()) dataSpec.length else (encryptedDataLength - totalDecryptedRead)
+        
+        // Return LENGTH_UNSET because we don't know the exact plaintext length quickly for V2
+        return C.LENGTH_UNSET.toLong()
     }
 
-    override fun read(targetBuffer: ByteArray, offset: Int, length: Int): Int {
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
-
-        val fis = fileInputStream ?: return C.RESULT_END_OF_INPUT
-        val c = cipher ?: return C.RESULT_END_OF_INPUT
 
         val bytesToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
             minOf(length.toLong(), bytesRemaining).toInt()
@@ -106,52 +103,36 @@ class CipherDataSource(
             length
         }
 
-        val readEncrypted = fis.read(buffer, 0, minOf(bytesToRead, buffer.size))
-        if (readEncrypted == -1) {
-            // End of stream -> finalize GCM tag
-            val finalBytes = try {
-                c.doFinal()
-            } catch (e: Exception) {
-                null
-            }
-            if (finalBytes != null && finalBytes.isNotEmpty()) {
-                val copyLen = minOf(finalBytes.size, length)
-                System.arraycopy(finalBytes, 0, targetBuffer, offset, copyLen)
-                bytesRemaining = 0
-                bytesTransferred(copyLen)
-                return copyLen
+        val read = pipedInputStream?.read(buffer, offset, bytesToRead) ?: -1
+        if (read == -1) {
+            if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) {
+                // Expected more bytes but reached EOF
+                return C.RESULT_END_OF_INPUT
             }
             return C.RESULT_END_OF_INPUT
         }
 
-        val decrypted = c.update(buffer, 0, readEncrypted)
-        if (decrypted != null && decrypted.isNotEmpty()) {
-            val copyLen = minOf(decrypted.size, length)
-            System.arraycopy(decrypted, 0, targetBuffer, offset, copyLen)
-            if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
-                bytesRemaining -= copyLen
-            }
-            totalDecryptedRead += copyLen
-            bytesTransferred(copyLen)
-            return copyLen
+        if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
+            bytesRemaining -= read
         }
-
-        return 0
+        bytesTransferred(read)
+        return read
     }
 
-    override fun getUri(): Uri? = dataSpec?.uri
+    override fun getUri(): Uri? = Uri.fromFile(encryptedFile)
 
     override fun close() {
+        isOpened = false
         try {
-            fileInputStream?.close()
-        } catch (_: Exception) {}
-        fileInputStream = null
-        cipher = null
-        dataSpec = null
+            pipedInputStream?.close()
+        } catch (e: Exception) {
+            // Ignore
+        }
+        pipedInputStream = null
+        
+        decryptThread?.interrupt()
+        decryptThread = null
+        
         transferEnded()
-    }
-
-    class Factory(private val file: File) : DataSource.Factory {
-        override fun createDataSource(): DataSource = CipherDataSource(file)
     }
 }

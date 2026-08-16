@@ -168,63 +168,38 @@ fun EncryptedVideoPlayer(
         tempDecryptedFile = null
     }
 
-    // 1. Background Decryption with Live Progress
+    // 1. Playback Preparation & Listener (Instant Streaming)
     LaunchedEffect(encryptedFile) {
         withContext(Dispatchers.IO) {
-            isDecrypting = true
-            decryptedBytesCount = 0L
             totalBytesCount = encryptedFile.length()
-            try {
-                if (!encryptedFile.exists()) {
-                    throw IllegalStateException("Encrypted media file not found on disk.")
-                }
-                val tempFile = File(context.cacheDir, "temp_video_${UUID.randomUUID()}.mp4")
-                CryptoManager.decryptFileToFile(
-                    encryptedFile = encryptedFile,
-                    destFile = tempFile,
-                    onProgress = { processed, total ->
-                        decryptedBytesCount = processed
-                        totalBytesCount = total
-                    }
-                )
-                tempDecryptedFile = tempFile
-            } catch (e: Throwable) {
-                e.printStackTrace()
-                shredTempFile()
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Error decrypting video: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                isDecrypting = false
-            }
         }
-    }
+        val factory = com.example.security.CipherDataSourceFactory(encryptedFile)
+        val player = ExoPlayer.Builder(context).build().apply {
+            val mediaItem = MediaItem.fromUri(Uri.fromFile(encryptedFile))
+            val mediaSource = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(factory)
+                .createMediaSource(mediaItem)
+            
+            setMediaSource(mediaSource)
+            prepare()
+            playWhenReady = true
+        }
 
-    // 2. Playback Preparation & Listener
-    LaunchedEffect(tempDecryptedFile) {
-        tempDecryptedFile?.let { file ->
-            val player = ExoPlayer.Builder(context).build().apply {
-                val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
-                setMediaItem(mediaItem)
-                prepare()
-                playWhenReady = true
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                isDecrypting = false // Once playing, hide decryption spinner
             }
 
-            player.addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(playing: Boolean) {
-                    isPlaying = playing
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isBuffering = (playbackState == Player.STATE_BUFFERING)
+                if (playbackState == Player.STATE_READY) {
+                    totalDuration = player.duration.coerceAtLeast(0L)
+                    isDecrypting = false
                 }
+            }
+        })
 
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    isBuffering = (playbackState == Player.STATE_BUFFERING)
-                    if (playbackState == Player.STATE_READY) {
-                        totalDuration = player.duration.coerceAtLeast(0L)
-                    }
-                }
-            })
-
-            exoPlayer = player
-        }
+        exoPlayer = player
     }
 
     // 3. Periodic Position Updater
