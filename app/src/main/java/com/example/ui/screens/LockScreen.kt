@@ -63,6 +63,11 @@ fun LockScreen(
     var enteredPin by remember { mutableStateOf("") }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
+    // Generate scrambled digits once per LockScreen composition
+    val scrambledDigits = remember {
+        (0..9).map { it.toString() }.shuffled()
+    }
+
     // Auto-clear PIN input when error occurs
     LaunchedEffect(errorTrigger) {
         if (errorTrigger > 0) {
@@ -240,105 +245,57 @@ fun LockScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 5. Numeric Keypad Grid (1-9, Fingerprint, 0, Backspace)
+            // 5. Numeric Keypad Grid (Scrambled 0-9, Fingerprint, Backspace)
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Row 1: 1, 2, 3
+                // Row 1
                 KeypadRow {
-                    NumberKey("1", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
+                    for (i in 0..2) {
+                        NumberKey(scrambledDigits[i], onDigitClick = { digit ->
+                            if (enteredPin.length < 4) {
+                                val newPin = enteredPin + digit
+                                enteredPin = newPin
+                                if (newPin.length == 4) {
+                                    onPinSubmit(newPin)
+                                }
                             }
-                        }
-                    })
-                    NumberKey("2", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
-                    NumberKey("3", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
+                        })
+                    }
                 }
 
-                // Row 2: 4, 5, 6
+                // Row 2
                 KeypadRow {
-                    NumberKey("4", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
+                    for (i in 3..5) {
+                        NumberKey(scrambledDigits[i], onDigitClick = { digit ->
+                            if (enteredPin.length < 4) {
+                                val newPin = enteredPin + digit
+                                enteredPin = newPin
+                                if (newPin.length == 4) {
+                                    onPinSubmit(newPin)
+                                }
                             }
-                        }
-                    })
-                    NumberKey("5", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
-                    NumberKey("6", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
+                        })
+                    }
                 }
 
-                // Row 3: 7, 8, 9
+                // Row 3
                 KeypadRow {
-                    NumberKey("7", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
+                    for (i in 6..8) {
+                        NumberKey(scrambledDigits[i], onDigitClick = { digit ->
+                            if (enteredPin.length < 4) {
+                                val newPin = enteredPin + digit
+                                enteredPin = newPin
+                                if (newPin.length == 4) {
+                                    onPinSubmit(newPin)
+                                }
                             }
-                        }
-                    })
-                    NumberKey("8", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
-                    NumberKey("9", onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
+                        })
+                    }
                 }
 
-                // Row 4: Fingerprint, 0, Backspace
+                // Row 4: Fingerprint, Remaining Digit, Backspace
                 KeypadRow {
                     // Fingerprint Key
                     Box(
@@ -360,8 +317,8 @@ fun LockScreen(
                         )
                     }
 
-                    // Zero Key
-                    NumberKey("0", onDigitClick = { digit ->
+                    // Remaining Scrambled Key (Index 9)
+                    NumberKey(scrambledDigits[9], onDigitClick = { digit ->
                         if (enteredPin.length < 4) {
                             val newPin = enteredPin + digit
                             enteredPin = newPin

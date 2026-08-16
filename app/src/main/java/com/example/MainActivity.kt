@@ -60,6 +60,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Anti-Malware Killswitch Evaluation
+        val isRooted = com.example.security.RootDetectionManager.isDeviceRooted(applicationContext) && !com.example.security.RootDetectionManager.isEmulator()
 
         enableEdgeToEdge()
 
@@ -82,6 +85,11 @@ class MainActivity : FragmentActivity() {
                             .fillMaxSize()
                             .background(Color.Black)
                     )
+                    return@MyApplicationTheme
+                }
+
+                if (isRooted) {
+                    com.example.ui.screens.RootWarningScreen()
                     return@MyApplicationTheme
                 }
 
