@@ -159,8 +159,11 @@ object CryptoManager {
         // 1. Write Header: Magic VLT2
         outputStream.write(V2_MAGIC)
 
+        // Reuse a single Cipher instance and pre-allocated buffers across all chunks (ultra-fast throughput)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
         val readBuffer = ByteArray(CHUNK_SIZE)
-        var nextBuffer = ByteArray(CHUNK_SIZE)
+        val nextBuffer = ByteArray(CHUNK_SIZE)
+        val cipherBuffer = ByteArray(CHUNK_SIZE + 64)
         var totalProcessed = 0L
 
         try {
@@ -168,15 +171,14 @@ object CryptoManager {
 
             // Handle empty (0-byte) files safely
             if (currentChunkBytes <= 0) {
-                val cipher = Cipher.getInstance(TRANSFORMATION)
                 cipher.init(Cipher.ENCRYPT_MODE, secretKey)
                 val iv = cipher.iv
-                val cipherText = cipher.doFinal(ByteArray(0))
+                val cipherLen = cipher.doFinal(ByteArray(0), 0, 0, cipherBuffer, 0)
 
-                writeInt(outputStream, cipherText.size)
+                writeInt(outputStream, cipherLen)
                 outputStream.write(1) // isLast
                 outputStream.write(iv)
-                outputStream.write(cipherText)
+                outputStream.write(cipherBuffer, 0, cipherLen)
                 outputStream.flush()
                 onProgress?.invoke(0L, totalBytes)
                 return
@@ -187,17 +189,16 @@ object CryptoManager {
                 val isLast = (nextChunkBytes <= 0)
 
                 // AndroidKeyStore requires hardware-generated IV in ENCRYPT_MODE
-                val cipher = Cipher.getInstance(TRANSFORMATION)
                 cipher.init(Cipher.ENCRYPT_MODE, secretKey)
                 val chunkIV = cipher.iv
 
-                val cipherText = cipher.doFinal(readBuffer, 0, currentChunkBytes)
+                val cipherLen = cipher.doFinal(readBuffer, 0, currentChunkBytes, cipherBuffer, 0)
 
                 // Chunk layout: Length (4 bytes) + isLast (1 byte) + IV (12 bytes) + CipherText
-                writeInt(outputStream, cipherText.size)
+                writeInt(outputStream, cipherLen)
                 outputStream.write(if (isLast) 1 else 0)
                 outputStream.write(chunkIV)
-                outputStream.write(cipherText)
+                outputStream.write(cipherBuffer, 0, cipherLen)
 
                 totalProcessed += currentChunkBytes
                 onProgress?.invoke(totalProcessed, totalBytes)
@@ -212,12 +213,13 @@ object CryptoManager {
         } finally {
             wipeByteArray(readBuffer)
             wipeByteArray(nextBuffer)
+            wipeByteArray(cipherBuffer)
         }
     }
 
     /**
      * Decrypts an encrypted file directly to a destination file on disk.
-     * Uses zero-RAM memory mapping for legacy V1 files and streaming AEAD for V2 files.
+     * Uses high-throughput 256KB buffered streams for V2 files and zero-RAM memory mapping for legacy V1 files.
      * Guaranteed to never crash with OutOfMemoryError regardless of file size.
      */
     fun decryptFileToFile(
@@ -236,8 +238,8 @@ object CryptoManager {
         }
 
         if (headerBytes.contentEquals(V2_MAGIC)) {
-            encryptedFile.inputStream().buffered(65536).use { input ->
-                destFile.outputStream().buffered(65536).use { output ->
+            encryptedFile.inputStream().buffered(262144).use { input ->
+                destFile.outputStream().buffered(262144).use { output ->
                     decryptStreamToOutputStream(input, output, totalSize, onProgress)
                 }
             }
@@ -295,47 +297,56 @@ object CryptoManager {
         val isV2 = headerBytes.contentEquals(V2_MAGIC)
 
         if (isV2) {
-            // V2 Chunked AEAD Streaming Decryption (Constant ~1MB RAM)
+            // V2 Chunked AEAD Streaming Decryption (Constant ~1MB RAM, High Throughput)
+            // Reuse single Cipher instance and pre-allocated buffers across all chunks
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            val maxChunkCapacity = CHUNK_SIZE + 64
+            val cipherBuffer = ByteArray(maxChunkCapacity)
+            val plainBuffer = ByteArray(maxChunkCapacity)
+            val chunkIV = ByteArray(IV_SIZE_BYTES)
+            val lenHeader = ByteArray(4)
             var totalProcessed = 0L
 
-            while (true) {
-                val cipherLength = readInt(inputStream)
-                if (cipherLength < 0) break
+            try {
+                while (true) {
+                    val lenRead = readFully(inputStream, lenHeader, 0, 4)
+                    if (lenRead < 4) break
 
-                val isLastFlag = inputStream.read()
-                if (isLastFlag < 0) break
+                    val cipherLength = ((lenHeader[0].toInt() and 0xFF) shl 24) or
+                            ((lenHeader[1].toInt() and 0xFF) shl 16) or
+                            ((lenHeader[2].toInt() and 0xFF) shl 8) or
+                            (lenHeader[3].toInt() and 0xFF)
 
-                val chunkIV = ByteArray(IV_SIZE_BYTES)
-                val ivRead = readFully(inputStream, chunkIV, 0, IV_SIZE_BYTES)
-                if (ivRead < IV_SIZE_BYTES) {
-                    throw IllegalStateException("Unexpected end of encrypted stream: Incomplete chunk IV.")
-                }
+                    if (cipherLength <= 0 || cipherLength > maxChunkCapacity) break
 
-                val cipherBuffer = ByteArray(cipherLength)
-                var plainChunk: ByteArray? = null
-                try {
+                    val isLastFlag = inputStream.read()
+                    if (isLastFlag < 0) break
+
+                    val ivRead = readFully(inputStream, chunkIV, 0, IV_SIZE_BYTES)
+                    if (ivRead < IV_SIZE_BYTES) {
+                        throw IllegalStateException("Unexpected end of encrypted stream: Incomplete chunk IV.")
+                    }
+
                     val bytesRead = readFully(inputStream, cipherBuffer, 0, cipherLength)
                     if (bytesRead < cipherLength) {
                         throw IllegalStateException("Unexpected end of encrypted stream.")
                     }
 
-                    val cipher = Cipher.getInstance(TRANSFORMATION)
                     cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
-
-                    plainChunk = cipher.doFinal(cipherBuffer, 0, cipherLength)
-                    outputStream.write(plainChunk)
+                    val plainBytes = cipher.doFinal(cipherBuffer, 0, cipherLength, plainBuffer, 0)
+                    outputStream.write(plainBuffer, 0, plainBytes)
 
                     totalProcessed += cipherLength
                     onProgress?.invoke(totalProcessed, totalBytes)
-                } finally {
-                    wipeByteArray(cipherBuffer)
-                    wipeByteArray(plainChunk)
-                    wipeByteArray(chunkIV)
-                }
 
-                if (isLastFlag == 1) break
+                    if (isLastFlag == 1) break
+                }
+                outputStream.flush()
+            } finally {
+                wipeByteArray(cipherBuffer)
+                wipeByteArray(plainBuffer)
+                wipeByteArray(chunkIV)
             }
-            outputStream.flush()
         } else {
             // Legacy V1 format: Header was the first 4 bytes of the 12-byte IV
             val iv = ByteArray(IV_SIZE_BYTES)
