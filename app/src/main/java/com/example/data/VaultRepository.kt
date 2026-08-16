@@ -166,6 +166,13 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
 
             val isVideo = mimeType.startsWith("video/")
 
+            // 1.5 Extract thumbnail before encryption (if possible)
+            val thumbnailBitmap = try {
+                com.example.security.ThumbnailExtractor.extractThumbnailFromUri(context, sourceUri, mimeType, isVideo)
+            } catch (e: Exception) {
+                null
+            }
+
             // 2. Prepare internal vault destination file inside Context.filesDir
             val vaultDir = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
             val encryptedFileName = "enc_${UUID.randomUUID()}.bin"
@@ -201,6 +208,10 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             )
             val generatedId = vaultDao.insertVaultItem(vaultItem)
             val savedVaultItem = vaultItem.copy(id = generatedId)
+
+            if (thumbnailBitmap != null) {
+                com.example.security.VaultThumbnailManager.saveThumbnail(context, savedVaultItem, thumbnailBitmap)
+            }
 
             // 5. Handle deletion of original file if requested
             var originalDeleted = false

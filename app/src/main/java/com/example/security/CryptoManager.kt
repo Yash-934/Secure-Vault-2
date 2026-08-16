@@ -37,6 +37,8 @@ object CryptoManager {
 
     // Magic header identifier for V2 Chunked AEAD format
     private val V2_MAGIC = byteArrayOf(0x56, 0x4C, 0x54, 0x32) // "VLT2"
+    // Magic header identifier for V3 Envelope Encryption format
+    private val V3_MAGIC = byteArrayOf(0x56, 0x4C, 0x54, 0x33) // "VLT3"
 
     private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply {
         load(null)
@@ -70,9 +72,11 @@ object CryptoManager {
         return keyGenerator.generateKey()
     }
 
+    private val secureRandom = SecureRandom()
+
     private fun generateRandomIV(): ByteArray {
         val iv = ByteArray(IV_SIZE_BYTES)
-        SecureRandom().nextBytes(iv)
+        secureRandom.nextBytes(iv)
         return iv
     }
 
@@ -143,10 +147,8 @@ object CryptoManager {
     }
 
     /**
-     * Encrypts the provided InputStream using Chunked AES-256-GCM streaming.
-     * Peak memory consumption is capped at ~1MB regardless of whether the file is 100MB or 10GB.
-     * Compatible with AndroidKeyStore's randomized encryption requirement (hardware generates random IV per chunk).
-     * Zeroes all intermediate memory buffers immediately after use.
+     * Encrypts a stream into V3 format (Envelope Encryption).
+     * Ultra-fast ~GB/s speed because chunk encryption uses software AES, while DEK is Keystore-protected.
      */
     fun encryptStream(
         inputStream: InputStream,
@@ -154,12 +156,26 @@ object CryptoManager {
         totalBytes: Long = -1L,
         onProgress: ((bytesProcessed: Long, totalBytes: Long) -> Unit)? = null
     ) {
-        val secretKey = getSecretKey()
+        val masterKey = getSecretKey()
 
-        // 1. Write Header: Magic VLT2
-        outputStream.write(V2_MAGIC)
+        // 1. Generate Software DEK (Data Encryption Key)
+        val dekGenerator = KeyGenerator.getInstance("AES")
+        dekGenerator.init(256, secureRandom)
+        val dek = dekGenerator.generateKey()
 
-        // Reuse a single Cipher instance and pre-allocated buffers across all chunks (ultra-fast throughput)
+        // 2. Encrypt DEK with Keystore Master Key
+        val ksCipher = Cipher.getInstance(TRANSFORMATION)
+        ksCipher.init(Cipher.ENCRYPT_MODE, masterKey)
+        val dekIv = ksCipher.iv
+        val encryptedDek = ksCipher.doFinal(dek.encoded)
+
+        // 3. Write V3 Header
+        outputStream.write(V3_MAGIC)
+        outputStream.write(dekIv)
+        writeInt(outputStream, encryptedDek.size)
+        outputStream.write(encryptedDek)
+
+        // 4. Process Chunks using Software DEK (Extremely Fast)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         val readBuffer = ByteArray(CHUNK_SIZE)
         val nextBuffer = ByteArray(CHUNK_SIZE)
@@ -169,10 +185,9 @@ object CryptoManager {
         try {
             var currentChunkBytes = readFully(inputStream, readBuffer, 0, CHUNK_SIZE)
 
-            // Handle empty (0-byte) files safely
             if (currentChunkBytes <= 0) {
-                cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-                val iv = cipher.iv
+                val iv = generateRandomIV()
+                cipher.init(Cipher.ENCRYPT_MODE, dek, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
                 val cipherLen = cipher.doFinal(ByteArray(0), 0, 0, cipherBuffer, 0)
 
                 writeInt(outputStream, cipherLen)
@@ -188,13 +203,11 @@ object CryptoManager {
                 val nextChunkBytes = readFully(inputStream, nextBuffer, 0, CHUNK_SIZE)
                 val isLast = (nextChunkBytes <= 0)
 
-                // AndroidKeyStore requires hardware-generated IV in ENCRYPT_MODE
-                cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-                val chunkIV = cipher.iv
+                val chunkIV = generateRandomIV()
+                cipher.init(Cipher.ENCRYPT_MODE, dek, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
 
                 val cipherLen = cipher.doFinal(readBuffer, 0, currentChunkBytes, cipherBuffer, 0)
 
-                // Chunk layout: Length (4 bytes) + isLast (1 byte) + IV (12 bytes) + CipherText
                 writeInt(outputStream, cipherLen)
                 outputStream.write(if (isLast) 1 else 0)
                 outputStream.write(chunkIV)
@@ -214,6 +227,7 @@ object CryptoManager {
             wipeByteArray(readBuffer)
             wipeByteArray(nextBuffer)
             wipeByteArray(cipherBuffer)
+            wipeByteArray(dek.encoded)
         }
     }
 
@@ -285,7 +299,7 @@ object CryptoManager {
         totalBytes: Long = -1L,
         onProgress: ((bytesProcessed: Long, totalBytes: Long) -> Unit)? = null
     ) {
-        val secretKey = getSecretKey()
+        val masterKey = getSecretKey()
 
         // 1. Check Magic Header (4 bytes)
         val headerBytes = ByteArray(4)
@@ -295,9 +309,45 @@ object CryptoManager {
         }
 
         val isV2 = headerBytes.contentEquals(V2_MAGIC)
+        val isV3 = headerBytes.contentEquals(V3_MAGIC)
 
-        if (isV2) {
-            // V2 Chunked AEAD Streaming Decryption (Constant ~1MB RAM, High Throughput)
+        if (isV2 || isV3) {
+            // V3 / V2 Chunked AEAD Streaming Decryption (Constant ~1MB RAM, High Throughput)
+            
+            // Resolve Key: Master Key for V2, Software DEK for V3
+            val activeKey: SecretKey
+            var dekWipeBuffer: ByteArray? = null
+
+            if (isV3) {
+                val dekIv = ByteArray(IV_SIZE_BYTES)
+                if (readFully(inputStream, dekIv, 0, IV_SIZE_BYTES) < IV_SIZE_BYTES) {
+                    throw IllegalStateException("Unexpected end of stream: Missing DEK IV.")
+                }
+                val dekLenHeader = ByteArray(4)
+                if (readFully(inputStream, dekLenHeader, 0, 4) < 4) {
+                    throw IllegalStateException("Unexpected end of stream: Missing DEK Length.")
+                }
+                val dekLen = ((dekLenHeader[0].toInt() and 0xFF) shl 24) or
+                        ((dekLenHeader[1].toInt() and 0xFF) shl 16) or
+                        ((dekLenHeader[2].toInt() and 0xFF) shl 8) or
+                        (dekLenHeader[3].toInt() and 0xFF)
+                        
+                if (dekLen <= 0 || dekLen > 1024) throw IllegalStateException("Invalid DEK length.")
+                
+                val encryptedDek = ByteArray(dekLen)
+                if (readFully(inputStream, encryptedDek, 0, dekLen) < dekLen) {
+                    throw IllegalStateException("Unexpected end of stream: Missing Encrypted DEK.")
+                }
+                
+                val ksCipher = Cipher.getInstance(TRANSFORMATION)
+                ksCipher.init(Cipher.DECRYPT_MODE, masterKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, dekIv))
+                val rawDek = ksCipher.doFinal(encryptedDek)
+                dekWipeBuffer = rawDek
+                activeKey = javax.crypto.spec.SecretKeySpec(rawDek, "AES")
+            } else {
+                activeKey = masterKey
+            }
+            
             // Reuse single Cipher instance and pre-allocated buffers across all chunks
             val cipher = Cipher.getInstance(TRANSFORMATION)
             val maxChunkCapacity = CHUNK_SIZE + 64
@@ -332,7 +382,7 @@ object CryptoManager {
                         throw IllegalStateException("Unexpected end of encrypted stream.")
                     }
 
-                    cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
+                    cipher.init(Cipher.DECRYPT_MODE, activeKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
                     val plainBytes = cipher.doFinal(cipherBuffer, 0, cipherLength, plainBuffer, 0)
                     outputStream.write(plainBuffer, 0, plainBytes)
 
@@ -346,6 +396,7 @@ object CryptoManager {
                 wipeByteArray(cipherBuffer)
                 wipeByteArray(plainBuffer)
                 wipeByteArray(chunkIV)
+                wipeByteArray(dekWipeBuffer)
             }
         } else {
             // Legacy V1 format: Header was the first 4 bytes of the 12-byte IV
@@ -357,7 +408,7 @@ object CryptoManager {
             }
 
             val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+            cipher.init(Cipher.DECRYPT_MODE, masterKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
             // To avoid any OOM on legacy single-block streams, spill to temporary disk-backed file and memory-map
             val tempEncFile = File.createTempFile("v1_enc_", ".tmp")

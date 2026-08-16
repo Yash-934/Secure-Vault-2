@@ -56,6 +56,28 @@ object VaultThumbnailManager {
         return null
     }
 
+    suspend fun saveThumbnail(context: Context, item: VaultItem, bitmap: Bitmap) = withContext(Dispatchers.IO) {
+        val cacheKey = "${item.encryptedFileName}_${item.id}"
+        memoryCache.put(cacheKey, bitmap)
+        
+        try {
+            val encryptedCacheFile = File(getThumbnailDiskCacheDir(context), "${item.encryptedFileName}.thumb_aes256")
+            val webpOut = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.WEBP, 82, webpOut)
+            val rawWebpBytes = webpOut.toByteArray()
+            
+            val encryptedThumbnailBytes = CryptoManager.encryptByteArray(rawWebpBytes)
+            
+            FileOutputStream(encryptedCacheFile).use { out ->
+                out.write(encryptedThumbnailBytes)
+                out.flush()
+            }
+            rawWebpBytes.fill(0)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to write thumbnail during import: ${e.message}")
+        }
+    }
+
     /**
      * Retrieves or generates a downsampled thumbnail Bitmap for a given VaultItem.
      * Guaranteed: All disk storage is AES-256-GCM encrypted.
