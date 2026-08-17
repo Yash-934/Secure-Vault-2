@@ -1,4 +1,5 @@
 package com.example.ui.components
+import androidx.compose.material.icons.automirrored.filled.*
 
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -21,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -221,7 +221,7 @@ fun SecureZipViewer(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                            imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
                             contentDescription = null,
                             tint = if (entry.isDirectory) Color(0xFFFFB300) else Color(0xFF00D2EF),
                             modifier = Modifier.size(20.dp)

@@ -1,4 +1,5 @@
 package com.example.ui.screens
+import androidx.compose.material.icons.automirrored.filled.*
 
 import android.app.Activity
 import android.content.IntentSender
@@ -45,13 +46,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Deselect
-import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
@@ -851,7 +850,7 @@ fun DashboardScreen(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
-                                imageVector = Icons.Default.DriveFileMove,
+                                imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
                                 contentDescription = "Move Selected",
                                 tint = BrightCyan,
                                 modifier = Modifier.size(22.dp)
@@ -1553,7 +1552,7 @@ private fun VaultGridCard(
                                     text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
                                     leadingIcon = {
                                         Icon(
-                                            Icons.Default.DriveFileMove,
+                                            Icons.AutoMirrored.Filled.DriveFileMove,
                                             contentDescription = null,
                                             tint = BrightCyan
                                         )
@@ -1752,7 +1751,7 @@ private fun VaultListCard(
                             text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
                             leadingIcon = {
                                 Icon(
-                                    Icons.Default.DriveFileMove,
+                                    Icons.AutoMirrored.Filled.DriveFileMove,
                                     contentDescription = null,
                                     tint = BrightCyan
                                 )
@@ -1816,7 +1815,7 @@ private fun getVaultItemIconAndBadge(mimeType: String, isVideo: Boolean): Pair<a
         mimeType == "application/pdf" -> Icons.Default.Description to "PDF"
         mimeType.startsWith("text/") -> Icons.Default.Description to "TXT"
         mimeType.startsWith("audio/") -> Icons.Default.Description to "AUDIO"
-        else -> Icons.Default.InsertDriveFile to "DOC"
+        else -> Icons.AutoMirrored.Filled.InsertDriveFile to "DOC"
     }
 }
 

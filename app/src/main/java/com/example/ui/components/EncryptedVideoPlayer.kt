@@ -1,4 +1,5 @@
 package com.example.ui.components
+import androidx.compose.material.icons.automirrored.filled.*
 
 import android.app.Activity
 import android.content.Context
@@ -36,8 +37,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.VolumeMute
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -464,7 +463,7 @@ fun EncryptedVideoPlayer(
                                 .background(Color.Black.copy(alpha = 0.6f))
                         ) {
                             Icon(
-                                imageVector = if (isMuted) Icons.Default.VolumeMute else Icons.Default.VolumeUp,
+                                imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeMute else Icons.AutoMirrored.Filled.VolumeUp,
                                 contentDescription = if (isMuted) "Unmute" else "Mute",
                                 tint = if (isMuted) Color(0xFFFF5252) else Color.White,
                                 modifier = Modifier.size(20.dp)

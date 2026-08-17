@@ -1,4 +1,5 @@
 package com.example.ui.screens
+import androidx.compose.material.icons.automirrored.filled.*
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -34,7 +35,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -433,7 +433,7 @@ fun PasswordCardItem(
     val categoryIcon = when (item.category.lowercase()) {
         "card" -> Icons.Default.CreditCard
         "bank" -> Icons.Default.Public
-        "note" -> Icons.Default.Notes
+        "note" -> Icons.AutoMirrored.Filled.Notes
         else -> Icons.Default.Lock
     }
 

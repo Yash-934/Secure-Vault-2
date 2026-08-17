@@ -10,11 +10,9 @@
 -dontskipnonpubliclibraryclasses
 -dontskipnonpubliclibraryclassmembers
 -allowaccessmodification
--repackageclasses 'a.b.c'
--flattenpackagehierarchy 'a.b.c'
 
 # Hide source file names and line numbers in production traces
--renamesourcefileattribute ' '
+-renamesourcefileattribute SourceFile
 -keepattributes SourceFile,LineNumberTable
 
 # Preserve runtime annotations and generic signatures for Jetpack Compose & Room

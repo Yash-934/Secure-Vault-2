@@ -1,4 +1,5 @@
 package com.example.ui.components
+import androidx.compose.material.icons.automirrored.filled.*
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,7 +13,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -91,7 +91,7 @@ fun MoveCopyDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.DriveFileMove,
+                            imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
                             contentDescription = "Move/Copy",
                             tint = VaultPrimaryCyan,
                             modifier = Modifier.size(24.dp)
@@ -237,7 +237,7 @@ fun MoveCopyDialog(
                             .testTag("action_move_btn")
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(imageVector = Icons.Default.DriveFileMove, contentDescription = "Move", tint = Color(0xFF03070C), modifier = Modifier.size(16.dp))
+                            Icon(imageVector = Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "Move", tint = Color(0xFF03070C), modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Move Here", color = Color(0xFF03070C), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
