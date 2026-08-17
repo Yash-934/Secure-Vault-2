@@ -45,19 +45,21 @@ object AntiTamperManager {
     )
 
     private val SUSPICIOUS_LIBRARIES = arrayOf(
-        "frida",
-        "gadget",
-        "xposed",
+        "libfrida",
+        "frida-agent",
+        "frida-gadget",
+        "frida-server",
+        "libxposed",
+        "edxposed",
+        "lsposed",
         "substrate",
         "sandhook",
-        "whale",
-        "epic",
-        "riru",
-        "zygisk",
-        "pine",
-        "linjector",
-        "libmemtrack",
-        "libhook"
+        "libwhale",
+        "libepic",
+        "libriru",
+        "libzygisk",
+        "libpine",
+        "linjector"
     )
 
     private val SUSPICIOUS_PORTS = intArrayOf(

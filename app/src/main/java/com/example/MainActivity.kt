@@ -65,7 +65,7 @@ class MainActivity : FragmentActivity() {
         // Anti-Malware Killswitch Evaluation
         val isRooted = try {
             com.example.security.RootDetectionManager.isDeviceRooted(applicationContext) && !com.example.security.RootDetectionManager.isEmulator()
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
             false
         }
 
@@ -95,13 +95,19 @@ class MainActivity : FragmentActivity() {
                 val isUnlocked by vaultViewModel.isUnlocked.collectAsStateWithLifecycle()
 
                 // Dynamically update Anti-Screen Capture (FLAG_SECURE)
-                // Note: FLAG_SECURE is disabled here because it breaks the AI Studio Streaming Emulator preview (which uses screen capturing).
+                // In production, FLAG_SECURE is always enforced. It is bypassed only on BuildConfig.DEBUG or Emulator.
                 LaunchedEffect(settings.isScreenProtectionEnabled, currentRoute, isUnlocked) {
                     val forceSecure = currentRoute in listOf("auth", "root_warning") || !isUnlocked
-                    if (forceSecure || settings.isScreenProtectionEnabled) {
-                        // window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    val isDebugOrEmulator = BuildConfig.DEBUG || com.example.security.RootDetectionManager.isEmulator()
+                    if (!isDebugOrEmulator) {
+                        if (forceSecure || settings.isScreenProtectionEnabled) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        }
                     } else {
-                        // window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        // Bypassed in DEBUG/Emulator to allow browser streaming preview
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     }
                 }
 

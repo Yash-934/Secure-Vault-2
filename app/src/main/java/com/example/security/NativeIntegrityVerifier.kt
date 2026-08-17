@@ -45,47 +45,55 @@ object NativeIntegrityVerifier {
             val nativeResult = NativeBridge.runObfuscatedCheck()
             globalSecurityState = nativeResult
             nativeResult
-        } catch (e: Throwable) {
+        } catch (e: UnsatisfiedLinkError) {
             // Fallback to Kotlin-based obfuscation if JNI is unavailable
-            var state = 0x01
-            var accumulator = 0xA5A5
-            var iterations = 0
-
-            while (state != 0x00 && iterations < 50) {
-                iterations++
-                when (state) {
-                    0x01 -> {
-                        val x = (System.currentTimeMillis() and 0xFF).toInt()
-                        if ((x * (x + 1)) % 2 == 0) {
-                            accumulator = (accumulator xor 0x3C3C) + 7
-                            state = 0x02
-                        } else {
-                            accumulator = (accumulator and 0x0000)
-                            state = 0x99
-                        }
-                    }
-                    0x02 -> {
-                        val a = accumulator and 0xFF
-                        val b = 0x42
-                        val substitutedSum = (a xor b) + (2 * (a and b))
-                        accumulator = (accumulator and 0xFF00) or (substitutedSum and 0xFF)
-                        state = 0x03
-                    }
-                    0x03 -> {
-                        state = if (!AntiTamperManager.isHookFrameworkDetected()) 0x04 else 0xFF
-                    }
-                    0x04 -> {
-                        accumulator = accumulator xor 0x5A5A
-                        state = 0x00
-                    }
-                    0x99 -> { accumulator = 0; state = 0x00 }
-                    0xFF -> { accumulator = -1; state = 0x00 }
-                    else -> state = 0x00
-                }
-            }
-            globalSecurityState = accumulator
-            accumulator
+            runKotlinFallbackCheck()
+        } catch (e: SecurityException) {
+            runKotlinFallbackCheck()
+        } catch (e: Exception) {
+            runKotlinFallbackCheck()
         }
+    }
+
+    private fun runKotlinFallbackCheck(): Int {
+        var state = 0x01
+        var accumulator = 0xA5A5
+        var iterations = 0
+
+        while (state != 0x00 && iterations < 50) {
+            iterations++
+            when (state) {
+                0x01 -> {
+                    val x = (System.currentTimeMillis() and 0xFF).toInt()
+                    if ((x * (x + 1)) % 2 == 0) {
+                        accumulator = (accumulator xor 0x3C3C) + 7
+                        state = 0x02
+                    } else {
+                        accumulator = (accumulator and 0x0000)
+                        state = 0x99
+                    }
+                }
+                0x02 -> {
+                    val a = accumulator and 0xFF
+                    val b = 0x42
+                    val substitutedSum = (a xor b) + (2 * (a and b))
+                    accumulator = (accumulator and 0xFF00) or (substitutedSum and 0xFF)
+                    state = 0x03
+                }
+                0x03 -> {
+                    state = if (!AntiTamperManager.isHookFrameworkDetected()) 0x04 else 0xFF
+                }
+                0x04 -> {
+                    accumulator = accumulator xor 0x5A5A
+                    state = 0x00
+                }
+                0x99 -> { accumulator = 0; state = 0x00 }
+                0xFF -> { accumulator = -1; state = 0x00 }
+                else -> state = 0x00
+            }
+        }
+        globalSecurityState = accumulator
+        return accumulator
     }
 
     /**
@@ -136,12 +144,18 @@ object NativeIntegrityVerifier {
     }
 
     /**
-     * Fail-closed validation if tampering is detected.
+     * Fail-closed hard termination in production builds if tampering is detected.
      */
     fun failClosedIfTampered(context: Context) {
         val report = verifyRuntimeCodeIntegrity(context)
         if (!report.isMemoryIntact || !report.isTextSectionPristine) {
-            Log.w(TAG, "WARNING: Memory validation anomaly detected.")
+            if (com.example.BuildConfig.DEBUG) {
+                Log.w(TAG, "DEBUG: Memory validation anomaly detected (bypassing process kill in debug mode).")
+            } else {
+                Log.e(TAG, "CRITICAL: Memory tampering detected in release build! Terminating process.")
+                Process.killProcess(Process.myPid())
+                System.exit(1)
+            }
         }
     }
 }

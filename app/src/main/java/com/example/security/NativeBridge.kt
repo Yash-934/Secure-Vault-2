@@ -1,13 +1,18 @@
 package com.example.security
 
+import android.util.Log
 import java.nio.ByteBuffer
 
 object NativeBridge {
+    private const val TAG = "NativeBridge"
+
     init {
         try {
             System.loadLibrary("native-lib")
-        } catch (e: Throwable) {
-            e.printStackTrace()
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Native library 'native-lib' not found or unsupported ABI", e)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException while loading native library", e)
         }
     }
 
@@ -20,7 +25,9 @@ object NativeBridge {
         if (buffer == null || !buffer.isDirect) return false
         return try {
             mlockBuffer(buffer, buffer.capacity())
-        } catch (e: Throwable) {
+        } catch (e: UnsatisfiedLinkError) {
+            false
+        } catch (e: Exception) {
             false
         }
     }
@@ -29,7 +36,9 @@ object NativeBridge {
         if (buffer == null || !buffer.isDirect) return false
         return try {
             munlockBuffer(buffer, buffer.capacity())
-        } catch (e: Throwable) {
+        } catch (e: UnsatisfiedLinkError) {
+            false
+        } catch (e: Exception) {
             false
         }
     }

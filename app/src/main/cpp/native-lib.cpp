@@ -9,6 +9,8 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NativeSecurity", __VA_ARGS__)
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    // Disable core dumps for the process to prevent memory extraction on crash
+    prctl(PR_SET_DUMPABLE, 0);
     return JNI_VERSION_1_6;
 }
 
