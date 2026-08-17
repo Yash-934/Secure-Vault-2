@@ -3,6 +3,7 @@ package com.example.ui.navigation
 sealed class NavRoutes(val route: String) {
     object Lock : NavRoutes("lock")
     object Calculator : NavRoutes("calculator")
+    object Notes : NavRoutes("notes")
     object Dashboard : NavRoutes("dashboard")
     object Settings : NavRoutes("settings")
     object IntruderLogs : NavRoutes("intruder_logs")

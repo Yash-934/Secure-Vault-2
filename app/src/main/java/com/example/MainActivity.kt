@@ -124,6 +124,22 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
+                // Active Screen Capture Protection & Virtual Display Monitor
+                DisposableEffect(isUnlocked) {
+                    var displayListener: android.hardware.display.DisplayManager.DisplayListener? = null
+                    if (isUnlocked) {
+                        vaultViewModel.checkAndEnforceScreenRecordingProtection(applicationContext)
+                        displayListener = com.example.security.ScreenCaptureDetector.registerDisplayListener(applicationContext) {
+                            runOnUiThread {
+                                vaultViewModel.checkAndEnforceScreenRecordingProtection(applicationContext)
+                            }
+                        }
+                    }
+                    onDispose {
+                        com.example.security.ScreenCaptureDetector.unregisterDisplayListener(applicationContext, displayListener)
+                    }
+                }
+
                 // Panic Flip Sensor Listener: Locks vault & exits app if flipped face-down
                 DisposableEffect(isUnlocked, settings.isPanicFlipEnabled) {
                     if (isUnlocked && settings.isPanicFlipEnabled) {

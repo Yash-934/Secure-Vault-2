@@ -166,6 +166,27 @@ fun AntiTamperReportDialog(
                 )
 
                 TamperCheckRow(
+                    title = "In-Memory DEX & Checksum Guard",
+                    subtitle = "Verifies classes.dex and dynamic memory loader",
+                    isPassed = report.isDexIntegrityValid,
+                    icon = Icons.Default.EnhancedEncryption
+                )
+
+                TamperCheckRow(
+                    title = "Native Code & Memory Self-Check",
+                    subtitle = "Flattened control flow & .text self-verification",
+                    isPassed = report.isNativeIntegrityValid,
+                    icon = Icons.Default.Shield
+                )
+
+                TamperCheckRow(
+                    title = "Screen Recording & Capture Defense",
+                    subtitle = "Detects virtual displays & screenrecord processes",
+                    isPassed = !report.isScreenRecordingDetected,
+                    icon = Icons.Default.EnhancedEncryption
+                )
+
+                TamperCheckRow(
                     title = "Memory Maps (.so Injection Guard)",
                     subtitle = "Verifies /proc/self/maps against injected modules",
                     isPassed = !report.isMemoryTampered,

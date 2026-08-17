@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.VaultItem
 import com.example.data.VaultRepository
 import com.example.domain.model.VaultMode
+import com.example.security.ScreenCaptureDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,6 +88,25 @@ class VaultViewModel(
     private val _isUnlocked = MutableStateFlow(false)
     val isUnlocked: StateFlow<Boolean> = _isUnlocked.asStateFlow()
 
+    private val _isScreenRecordingWarningVisible = MutableStateFlow(false)
+    val isScreenRecordingWarningVisible: StateFlow<Boolean> = _isScreenRecordingWarningVisible.asStateFlow()
+
+    fun dismissScreenRecordingWarning() {
+        _isScreenRecordingWarningVisible.value = false
+    }
+
+    fun checkAndEnforceScreenRecordingProtection(context: Context) {
+        if (_isUnlocked.value && ScreenCaptureDetector.auditScreenCapture(context).isCaptureActive) {
+            lockVault()
+            _isScreenRecordingWarningVisible.value = true
+            logIntruderAttempt(
+                context,
+                "SCREEN_RECORDING_DETECTED",
+                "Screen recording or virtual mirroring display detected while vault was unlocked!"
+            )
+        }
+    }
+
     private val _filterTab = MutableStateFlow(VaultFilterTab.ALL)
     val filterTab: StateFlow<VaultFilterTab> = _filterTab.asStateFlow()
 
@@ -161,9 +181,27 @@ class VaultViewModel(
         _isUnlocked.value = true
     }
 
-    // Consecutive Failed Attempts Counter
+    // Consecutive Failed Attempts Counter & Lockout Timer
     var consecutiveFailedAttempts = 0
         private set
+
+    private val _lockoutSecondsRemaining = MutableStateFlow(0)
+    val lockoutSecondsRemaining: StateFlow<Int> = _lockoutSecondsRemaining.asStateFlow()
+
+    private var lockoutJob: kotlinx.coroutines.Job? = null
+
+    private fun startLockoutCountdown(seconds: Int) {
+        lockoutJob?.cancel()
+        _lockoutSecondsRemaining.value = seconds
+        lockoutJob = viewModelScope.launch {
+            while (_lockoutSecondsRemaining.value > 0) {
+                delay(1000)
+                _lockoutSecondsRemaining.value -= 1
+            }
+        }
+    }
+
+    var pendingExportIsDeviceLocked: Boolean = false
 
     fun executeSelfDestruct(context: Context) {
         _isProcessing.value = true
@@ -181,6 +219,10 @@ class VaultViewModel(
         enteredPin: String,
         settings: com.example.data.local.VaultSettings
     ): Boolean {
+        if (_lockoutSecondsRemaining.value > 0) {
+            return false
+        }
+
         // 1. Check Kill PIN
         if (settings.isKillPinEnabled && enteredPin == settings.killPin) {
             logIntruderAttempt(context, "KILL_PIN_TRIGGERED", "Nuclear Kill PIN entered! Shredding all data...")
@@ -192,6 +234,8 @@ class VaultViewModel(
         if (enteredPin == settings.masterPin) {
             unlockRealVault()
             consecutiveFailedAttempts = 0
+            _lockoutSecondsRemaining.value = 0
+            lockoutJob?.cancel()
             return true
         }
 
@@ -199,12 +243,24 @@ class VaultViewModel(
         if (enteredPin == settings.decoyPin) {
             unlockDecoyVault()
             consecutiveFailedAttempts = 0
+            _lockoutSecondsRemaining.value = 0
+            lockoutJob?.cancel()
             return true
         }
 
         // 4. Incorrect PIN
         consecutiveFailedAttempts++
         logIntruderAttempt(context, "PIN_FAILED", "Incorrect PIN attempt #$consecutiveFailedAttempts")
+
+        if (consecutiveFailedAttempts >= 10) {
+            logIntruderAttempt(context, "NUCLEAR_AUTO_WIPE", "10 consecutive failed PIN attempts exceeded. Self-destructing.")
+            executeSelfDestruct(context)
+            return false
+        }
+
+        if (consecutiveFailedAttempts >= 5) {
+            startLockoutCountdown(30)
+        }
 
         if (consecutiveFailedAttempts >= 3 && settings.isIntruderSelfieEnabled && lifecycleOwner != null) {
             com.example.security.IntruderCaptureManager.captureIntruderSelfie(
@@ -213,7 +269,6 @@ class VaultViewModel(
                 attemptType = "INTRUDER_SELFIE_3X",
                 details = "Captured 3 consecutive failed PIN attempts"
             )
-            consecutiveFailedAttempts = 0
         }
 
         return false
@@ -578,19 +633,23 @@ class VaultViewModel(
         }
     }
 
-    fun exportMasterBackup(context: Context, masterPassword: String, targetUri: android.net.Uri) {
+    fun exportMasterBackup(
+        context: Context,
+        masterPassword: String,
+        targetUri: android.net.Uri,
+        isDeviceLocked: Boolean = false
+    ) {
         _isProcessing.value = true
         _backupRestoreProgress.value = BackupRestoreProgressState(
             isActive = true,
             type = BackupRestoreType.BACKUP,
-            title = "MASTER ENCRYPTED BACKUP",
-            subtitle = "Zero-Knowledge AES-256-GCM Streaming",
+            title = if (isDeviceLocked) "DEVICE-LOCKED MASTER BACKUP" else "MASTER ENCRYPTED BACKUP",
+            subtitle = if (isDeviceLocked) "Argon2id + Keystore Hardware Wrapping" else "Zero-Knowledge Argon2id Streaming",
             currentStep = "Initializing master backup...",
             progress = 0f
         )
         viewModelScope.launch {
             try {
-                // 1. Open standard compatible write stream for SAF document
                 val outputStream = try {
                     context.contentResolver.openOutputStream(targetUri, "w")
                 } catch (_: Throwable) {
@@ -607,13 +666,13 @@ class VaultViewModel(
                     return@launch
                 }
 
-                // 2. Single-pass streaming directly to SAF document without intermediate disk staging
                 val backupResult = outputStream.buffered(65536).use { safeOutStream ->
                     com.example.security.VaultBackupManager.exportMasterBackup(
                         context,
                         masterPassword,
                         safeOutStream,
                         repository,
+                        isDeviceLocked = isDeviceLocked,
                         onProgress = { current, total, name, bytes ->
                             val prog = if (total > 0) (current.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
                             _backupRestoreProgress.value = _backupRestoreProgress.value.copy(

@@ -10,6 +10,9 @@ interface IntruderLogDao {
     @Query("SELECT * FROM intruder_logs ORDER BY timestamp DESC")
     fun getAllLogs(): Flow<List<IntruderLog>>
 
+    @Query("SELECT * FROM intruder_logs ORDER BY timestamp DESC")
+    suspend fun getAllLogsSync(): List<IntruderLog>
+
     @Insert
     suspend fun insertLog(log: IntruderLog)
 

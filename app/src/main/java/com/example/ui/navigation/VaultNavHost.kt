@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,7 +87,8 @@ fun VaultNavHost(
         vaultViewModel.pendingExportPassword = null
         if (uri != null) {
             if (!pwd.isNullOrBlank()) {
-                vaultViewModel.exportMasterBackup(context, pwd, uri)
+                val isDeviceLocked = vaultViewModel.pendingExportIsDeviceLocked
+                vaultViewModel.exportMasterBackup(context, pwd, uri, isDeviceLocked)
             } else {
                 vaultViewModel.pendingExportUri = uri
                 showExportPasswordDialog = true
@@ -141,8 +145,12 @@ fun VaultNavHost(
         }
     }
 
-    androidx.compose.runtime.LaunchedEffect(vaultMode, settings.isCamouflageEnabled) {
-        val targetLockRoute = if (settings.isCamouflageEnabled) NavRoutes.Calculator.route else NavRoutes.Lock.route
+    androidx.compose.runtime.LaunchedEffect(vaultMode, settings.isCamouflageEnabled, settings.camouflageType) {
+        val targetLockRoute = if (settings.isCamouflageEnabled) {
+            if (settings.camouflageType == "NOTES") NavRoutes.Notes.route else NavRoutes.Calculator.route
+        } else {
+            NavRoutes.Lock.route
+        }
         when (vaultMode) {
             VaultMode.REAL -> {
                 navController.navigate(NavRoutes.Dashboard.route) {
@@ -164,7 +172,11 @@ fun VaultNavHost(
         }
     }
 
-    val initialTargetLockRoute = if (settings.isCamouflageEnabled) NavRoutes.Calculator.route else NavRoutes.Lock.route
+    val initialTargetLockRoute = if (settings.isCamouflageEnabled) {
+        if (settings.camouflageType == "NOTES") NavRoutes.Notes.route else NavRoutes.Calculator.route
+    } else {
+        NavRoutes.Lock.route
+    }
     NavHost(
         navController = navController,
         startDestination = if (vaultMode == VaultMode.LOCKED) initialTargetLockRoute else NavRoutes.Dashboard.route
@@ -172,6 +184,7 @@ fun VaultNavHost(
         // 1. Lock Screen Destination
         composable(NavRoutes.Lock.route) {
             val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            val lockoutSecondsRemaining by vaultViewModel.lockoutSecondsRemaining.collectAsStateWithLifecycle()
             LockScreen(
                 onAuthenticateClick = onTriggerBiometrics,
                 onPinSubmit = { enteredPin ->
@@ -194,12 +207,17 @@ fun VaultNavHost(
                             }
                         }
                     } else {
-                        pinErrorMessage = "Incorrect PIN. Please try again."
+                        if (vaultViewModel.lockoutSecondsRemaining.value > 0) {
+                            pinErrorMessage = "Too many failed attempts! Cooldown active."
+                        } else {
+                            pinErrorMessage = "Incorrect PIN. Please try again."
+                        }
                         pinErrorTrigger++
                     }
                 },
                 errorMessage = pinErrorMessage,
-                errorTrigger = pinErrorTrigger
+                errorTrigger = pinErrorTrigger,
+                lockoutSecondsRemaining = lockoutSecondsRemaining
             )
         }
 
@@ -227,6 +245,33 @@ fun VaultNavHost(
                         }
                     } else {
                         // Silent failure for calculator to maintain stealth
+                    }
+                }
+            )
+        }
+
+        composable(NavRoutes.Notes.route) {
+            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            com.example.ui.screens.NotesScreen(
+                onPinSubmit = { enteredPin ->
+                    val success = vaultViewModel.authenticateWithPin(
+                        context = context,
+                        lifecycleOwner = lifecycleOwner,
+                        enteredPin = enteredPin,
+                        settings = settings
+                    )
+                    if (success) {
+                        pinErrorMessage = null
+                        if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                            vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
+                            navController.navigate(NavRoutes.Dashboard.route) {
+                                popUpTo(NavRoutes.Notes.route) { inclusive = true }
+                            }
+                        } else {
+                            navController.navigate(NavRoutes.Dashboard.route) {
+                                popUpTo(NavRoutes.Notes.route) { inclusive = true }
+                            }
+                        }
                     }
                 }
             )
@@ -310,6 +355,7 @@ fun VaultNavHost(
                 onTogglePanicFlip = { settingsViewModel.setPanicFlipEnabled(it) },
                 onToggleThumbnails = { settingsViewModel.setThumbnailsEnabled(it, context) },
                 onToggleCamouflage = { settingsViewModel.setCamouflageEnabled(context, it) },
+                onChangeCamouflageType = { settingsViewModel.setCamouflageType(it) },
                 onToggleScreenProtection = { settingsViewModel.setScreenProtectionEnabled(it) },
                 onExportBackupClick = { showExportPasswordDialog = true },
                 onImportBackupClick = {
@@ -454,18 +500,20 @@ fun VaultNavHost(
         if (showExportPasswordDialog) {
             BackupPasswordDialog(
                 title = "Encrypt Master Backup",
-                subtitle = "Enter a password to derive an AES-256 key via PBKDF2 for this backup.",
+                subtitle = "Derives memory-hard key via Argon2id. Optional hardware wrapping binds backup to this device.",
+                isExportMode = true,
                 onDismiss = {
                     showExportPasswordDialog = false
                     vaultViewModel.pendingExportPassword = null
                     vaultViewModel.pendingExportUri = null
                 },
-                onConfirm = { password ->
+                onConfirm = { password, isDeviceLocked ->
                     showExportPasswordDialog = false
+                    vaultViewModel.pendingExportIsDeviceLocked = isDeviceLocked
                     val pendingUri = vaultViewModel.pendingExportUri
                     if (pendingUri != null) {
                         vaultViewModel.pendingExportUri = null
-                        vaultViewModel.exportMasterBackup(context, password, pendingUri)
+                        vaultViewModel.exportMasterBackup(context, password, pendingUri, isDeviceLocked)
                     } else {
                         vaultViewModel.pendingExportPassword = password
                         vaultViewModel.onSystemPickerLaunched()
@@ -479,12 +527,13 @@ fun VaultNavHost(
         if (showImportPasswordDialog && vaultViewModel.pendingImportUri != null) {
             BackupPasswordDialog(
                 title = "Decrypt Master Backup",
-                subtitle = "Enter the password used when creating this backup file.",
+                subtitle = "Enter the password used when creating this backup file (V3 Argon2id / V2).",
+                isExportMode = false,
                 onDismiss = {
                     showImportPasswordDialog = false
                     vaultViewModel.pendingImportUri = null
                 },
-                onConfirm = { password ->
+                onConfirm = { password, _ ->
                     showImportPasswordDialog = false
                     val uri = vaultViewModel.pendingImportUri ?: return@BackupPasswordDialog
                     vaultViewModel.pendingImportUri = null
@@ -498,12 +547,13 @@ fun VaultNavHost(
             BackupPasswordDialog(
                 title = "Encrypt Multi-Carrier Stego",
                 subtitle = "Enter a password to encrypt your vault before concealing it inside the cover video, PDF, or image.",
+                isExportMode = false,
                 onDismiss = {
                     showStegoEmbedPasswordDialog = false
                     vaultViewModel.pendingStegoPassword = null
                     vaultViewModel.pendingStegoCoverUri = null
                 },
-                onConfirm = { password ->
+                onConfirm = { password, _ ->
                     showStegoEmbedPasswordDialog = false
                     vaultViewModel.pendingStegoPassword = password
                     vaultViewModel.onSystemPickerLaunched()
@@ -517,11 +567,12 @@ fun VaultNavHost(
             BackupPasswordDialog(
                 title = "Decrypt Multi-Carrier Stego",
                 subtitle = "Enter the password to extract and restore the vault hidden inside this carrier file.",
+                isExportMode = false,
                 onDismiss = {
                     showStegoExtractPasswordDialog = false
                     vaultViewModel.pendingStegoExtractUri = null
                 },
-                onConfirm = { password ->
+                onConfirm = { password, _ ->
                     showStegoExtractPasswordDialog = false
                     val uri = vaultViewModel.pendingStegoExtractUri ?: return@BackupPasswordDialog
                     vaultViewModel.pendingStegoExtractUri = null
@@ -535,6 +586,41 @@ fun VaultNavHost(
             BackupRestoreProgressDialog(
                 state = backupRestoreProgress,
                 onDismiss = { vaultViewModel.dismissBackupRestoreProgress() }
+            )
+        }
+
+        // Screen Recording / Capture Warning Alert Dialog
+        val isScreenRecordingWarningVisible by vaultViewModel.isScreenRecordingWarningVisible.collectAsStateWithLifecycle()
+        if (isScreenRecordingWarningVisible) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { vaultViewModel.dismissScreenRecordingWarning() },
+                icon = {
+                    androidx.compose.material3.Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Default.Warning,
+                        contentDescription = "Screen Recording Detected",
+                        tint = androidx.compose.material3.MaterialTheme.colorScheme.error
+                    )
+                },
+                title = {
+                    androidx.compose.material3.Text(
+                        "Screen Recording Detected!",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+                },
+                text = {
+                    androidx.compose.material3.Text(
+                        "Active screen recording, screen mirroring, or virtual display capture was detected while the vault was active. The vault has been automatically locked and encrypted in memory to protect your confidential files.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.Button(
+                        onClick = { vaultViewModel.dismissScreenRecordingWarning() }
+                    ) {
+                        androidx.compose.material3.Text("Acknowledge & Dismiss")
+                    }
+                }
             )
         }
     }

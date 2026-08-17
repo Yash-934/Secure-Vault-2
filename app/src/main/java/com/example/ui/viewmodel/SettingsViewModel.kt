@@ -89,6 +89,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setCamouflageType(type: String) {
+        viewModelScope.launch {
+            settingsDataStore.setCamouflageType(type)
+        }
+    }
+
     fun updateKillPin(newPin: String) {
         viewModelScope.launch {
             settingsDataStore.updateKillPin(newPin)

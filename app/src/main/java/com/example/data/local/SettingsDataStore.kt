@@ -24,6 +24,7 @@ data class VaultSettings(
     val isPanicFlipEnabled: Boolean = true,
     val isStealthModeEnabled: Boolean = false,
     val isCamouflageEnabled: Boolean = false,
+    val camouflageType: String = "CALCULATOR", // "CALCULATOR" or "NOTES"
     val isScreenProtectionEnabled: Boolean = false,
     val isIntruderSelfieEnabled: Boolean = false,
     val isDeadManSwitchEnabled: Boolean = false,
@@ -43,6 +44,7 @@ class SettingsDataStore(private val context: Context) {
         private val PANIC_FLIP_ENABLED_KEY = booleanPreferencesKey("panic_flip_enabled")
         private val STEALTH_MODE_ENABLED_KEY = booleanPreferencesKey("stealth_mode_enabled")
         private val CAMOUFLAGE_ENABLED_KEY = booleanPreferencesKey("camouflage_enabled")
+        private val CAMOUFLAGE_TYPE_KEY = stringPreferencesKey("camouflage_type")
         private val SCREEN_PROTECTION_ENABLED_KEY = booleanPreferencesKey("screen_protection_enabled")
         private val INTRUDER_SELFIE_ENABLED_KEY = booleanPreferencesKey("intruder_selfie_enabled")
         private val DEAD_MAN_SWITCH_ENABLED_KEY = booleanPreferencesKey("dead_man_switch_enabled")
@@ -61,6 +63,7 @@ class SettingsDataStore(private val context: Context) {
             isPanicFlipEnabled = prefs[PANIC_FLIP_ENABLED_KEY] ?: true,
             isStealthModeEnabled = prefs[STEALTH_MODE_ENABLED_KEY] ?: false,
             isCamouflageEnabled = prefs[CAMOUFLAGE_ENABLED_KEY] ?: false,
+            camouflageType = prefs[CAMOUFLAGE_TYPE_KEY] ?: "CALCULATOR",
             isScreenProtectionEnabled = prefs[SCREEN_PROTECTION_ENABLED_KEY] ?: false,
             isIntruderSelfieEnabled = prefs[INTRUDER_SELFIE_ENABLED_KEY] ?: false,
             isDeadManSwitchEnabled = prefs[DEAD_MAN_SWITCH_ENABLED_KEY] ?: false,
@@ -115,6 +118,12 @@ class SettingsDataStore(private val context: Context) {
     suspend fun setCamouflageEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[CAMOUFLAGE_ENABLED_KEY] = enabled
+        }
+    }
+
+    suspend fun setCamouflageType(type: String) {
+        context.dataStore.edit { prefs ->
+            prefs[CAMOUFLAGE_TYPE_KEY] = type
         }
     }
 

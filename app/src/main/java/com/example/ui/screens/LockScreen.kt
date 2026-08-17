@@ -58,9 +58,11 @@ fun LockScreen(
     onAuthenticateClick: () -> Unit,
     onPinSubmit: (pin: String) -> Unit,
     errorMessage: String? = null,
-    errorTrigger: Int = 0
+    errorTrigger: Int = 0,
+    lockoutSecondsRemaining: Int = 0
 ) {
     var enteredPin by remember { mutableStateOf("") }
+    val isLockedOut = lockoutSecondsRemaining > 0
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     // Generate scrambled digits once per LockScreen composition
@@ -225,14 +227,23 @@ fun LockScreen(
                 }
             }
 
-            // Error Text Display
+            // Error / Lockout Text Display
             Box(
                 modifier = Modifier
-                    .height(30.dp)
+                    .height(34.dp)
                     .fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
-                if (!errorMessage.isNullOrEmpty()) {
+                if (isLockedOut) {
+                    Text(
+                        text = "LOCKOUT ACTIVE: ${lockoutSecondsRemaining}s REMAINING",
+                        color = VaultErrorRed,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = FontFamily.Monospace,
+                        textAlign = TextAlign.Center
+                    )
+                } else if (!errorMessage.isNullOrEmpty()) {
                     Text(
                         text = errorMessage,
                         color = VaultErrorRed,
@@ -253,8 +264,8 @@ fun LockScreen(
                 // Row 1
                 KeypadRow {
                     for (i in 0..2) {
-                        NumberKey(scrambledDigits[i], onDigitClick = { digit ->
-                            if (enteredPin.length < 4) {
+                        NumberKey(scrambledDigits[i], enabled = !isLockedOut, onDigitClick = { digit ->
+                            if (!isLockedOut && enteredPin.length < 4) {
                                 val newPin = enteredPin + digit
                                 enteredPin = newPin
                                 if (newPin.length == 4) {
@@ -268,8 +279,8 @@ fun LockScreen(
                 // Row 2
                 KeypadRow {
                     for (i in 3..5) {
-                        NumberKey(scrambledDigits[i], onDigitClick = { digit ->
-                            if (enteredPin.length < 4) {
+                        NumberKey(scrambledDigits[i], enabled = !isLockedOut, onDigitClick = { digit ->
+                            if (!isLockedOut && enteredPin.length < 4) {
                                 val newPin = enteredPin + digit
                                 enteredPin = newPin
                                 if (newPin.length == 4) {
@@ -283,8 +294,8 @@ fun LockScreen(
                 // Row 3
                 KeypadRow {
                     for (i in 6..8) {
-                        NumberKey(scrambledDigits[i], onDigitClick = { digit ->
-                            if (enteredPin.length < 4) {
+                        NumberKey(scrambledDigits[i], enabled = !isLockedOut, onDigitClick = { digit ->
+                            if (!isLockedOut && enteredPin.length < 4) {
                                 val newPin = enteredPin + digit
                                 enteredPin = newPin
                                 if (newPin.length == 4) {
@@ -305,21 +316,21 @@ fun LockScreen(
                             .clip(RoundedCornerShape(20.dp))
                             .background(Brush.linearGradient(listOf(Color(0xFF091B2A), Color(0xFF11283F))))
                             .border(1.5.dp, CyberNeonGradient, RoundedCornerShape(20.dp))
-                            .clickable { onAuthenticateClick() }
+                            .clickable(enabled = !isLockedOut) { onAuthenticateClick() }
                             .testTag("biometric_keypad_button"),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Fingerprint,
                             contentDescription = "Biometric Unlock",
-                            tint = VaultPrimaryCyan,
+                            tint = if (isLockedOut) Color.Gray else VaultPrimaryCyan,
                             modifier = Modifier.size(32.dp)
                         )
                     }
 
                     // Remaining Scrambled Key (Index 9)
-                    NumberKey(scrambledDigits[9], onDigitClick = { digit ->
-                        if (enteredPin.length < 4) {
+                    NumberKey(scrambledDigits[9], enabled = !isLockedOut, onDigitClick = { digit ->
+                        if (!isLockedOut && enteredPin.length < 4) {
                             val newPin = enteredPin + digit
                             enteredPin = newPin
                             if (newPin.length == 4) {
@@ -336,7 +347,7 @@ fun LockScreen(
                             .clip(RoundedCornerShape(20.dp))
                             .background(Brush.linearGradient(listOf(Color(0xFF2E0915), Color(0xFF450D20))))
                             .border(1.5.dp, Brush.horizontalGradient(listOf(VaultErrorRed, VaultNeonPink)), RoundedCornerShape(20.dp))
-                            .clickable {
+                            .clickable(enabled = !isLockedOut) {
                                 if (enteredPin.isNotEmpty()) {
                                     enteredPin = enteredPin.dropLast(1)
                                 }
@@ -347,7 +358,7 @@ fun LockScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Backspace,
                             contentDescription = "Delete",
-                            tint = VaultErrorRed,
+                            tint = if (isLockedOut) Color.Gray else VaultErrorRed,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -372,6 +383,7 @@ private fun KeypadRow(content: @Composable androidx.compose.foundation.layout.Ro
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.NumberKey(
     digit: String,
+    enabled: Boolean = true,
     onDigitClick: (String) -> Unit
 ) {
     Box(
@@ -379,9 +391,17 @@ private fun androidx.compose.foundation.layout.RowScope.NumberKey(
             .weight(1f)
             .height(68.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(Brush.verticalGradient(listOf(Color(0xFF0F1B2B), Color(0xFF0B1420))))
-            .border(1.dp, Brush.horizontalGradient(listOf(Color(0xFF1E3852), Color(0xFF284868))), RoundedCornerShape(20.dp))
-            .clickable { onDigitClick(digit) }
+            .background(
+                if (enabled) Brush.verticalGradient(listOf(Color(0xFF0F1B2B), Color(0xFF0B1420)))
+                else Brush.verticalGradient(listOf(Color(0xFF070C12), Color(0xFF070C12)))
+            )
+            .border(
+                1.dp,
+                if (enabled) Brush.horizontalGradient(listOf(Color(0xFF1E3852), Color(0xFF284868)))
+                else Brush.horizontalGradient(listOf(Color(0xFF111C28), Color(0xFF111C28))),
+                RoundedCornerShape(20.dp)
+            )
+            .clickable(enabled = enabled) { onDigitClick(digit) }
             .testTag("keypad_$digit"),
         contentAlignment = Alignment.Center
     ) {
@@ -389,7 +409,7 @@ private fun androidx.compose.foundation.layout.RowScope.NumberKey(
             text = digit,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = if (enabled) Color.White else Color(0xFF4A5568)
         )
     }
 }

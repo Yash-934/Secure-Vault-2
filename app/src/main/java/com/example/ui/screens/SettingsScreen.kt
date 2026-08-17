@@ -118,6 +118,7 @@ fun SettingsScreen(
     onTogglePanicFlip: (Boolean) -> Unit,
     onToggleThumbnails: (Boolean) -> Unit = {},
     onToggleCamouflage: (Boolean) -> Unit = {},
+    onChangeCamouflageType: (String) -> Unit = {},
     onToggleScreenProtection: (Boolean) -> Unit = {},
     onExportBackupClick: () -> Unit = {},
     onImportBackupClick: () -> Unit = {},
@@ -864,7 +865,7 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
 
-                    // Item 3: App Icon Camouflage (Calculator Disguise)
+                    // Item 3: App Icon Camouflage (Calculator / Notes Disguise)
                     SettingRowItem(
                         icon = {
                             Box(
@@ -883,7 +884,11 @@ fun SettingsScreen(
                             }
                         },
                         title = "App Icon Camouflage",
-                        subtitle = "Disguise home launcher icon as a stealth Calculator",
+                        subtitle = if (settings.isCamouflageEnabled) {
+                            "Camouflage Active: ${if (settings.camouflageType == "NOTES") "Quick Notes" else "Calculator"}"
+                        } else {
+                            "Disguise launcher icon & entry screen"
+                        },
                         trailing = {
                             Switch(
                                 checked = settings.isCamouflageEnabled,
@@ -899,6 +904,48 @@ fun SettingsScreen(
                             )
                         }
                     )
+
+                    if (settings.isCamouflageEnabled) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = { onChangeCamouflageType("CALCULATOR") },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (settings.camouflageType == "CALCULATOR") BrightCyan else Color(0xFF0C1D2E),
+                                    contentColor = if (settings.camouflageType == "CALCULATOR") Color.Black else Color.White
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "Calculator",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Button(
+                                onClick = { onChangeCamouflageType("NOTES") },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (settings.camouflageType == "NOTES") BrightCyan else Color(0xFF0C1D2E),
+                                    contentColor = if (settings.camouflageType == "NOTES") Color.Black else Color.White
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "Notes App",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
 
                     HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
 
@@ -969,7 +1016,7 @@ fun SettingsScreen(
                             }
                         },
                         title = "Export Encrypted Master Backup",
-                        subtitle = "ZIP archive encrypted via PBKDF2 password for offline SAF export",
+                        subtitle = "Argon2id (64MB memory-hard) + optional Keystore hardware key binding",
                         trailing = {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,

@@ -101,6 +101,8 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.androidx.biometric)
+  implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+  implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.common)
