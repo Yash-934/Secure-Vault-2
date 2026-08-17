@@ -46,11 +46,25 @@ class MainActivity : FragmentActivity() {
     private lateinit var panicSensorManager: PanicSensorManager
 
     private val vaultViewModel: VaultViewModel by viewModels {
-        val database = AppDatabase.getDatabase(applicationContext)
-        val decoyDatabase = AppDatabase.getDecoyDatabase(applicationContext)
-        val realRepository = VaultRepository(database.vaultDao(), "vault")
-        val decoyRepository = VaultRepository(decoyDatabase.vaultDao(), "decoy_vault")
-        VaultViewModel.Factory(realRepository, decoyRepository)
+        try {
+            val database = AppDatabase.getDatabase(applicationContext)
+            val decoyDatabase = AppDatabase.getDecoyDatabase(applicationContext)
+            val realRepository = VaultRepository(database.vaultDao(), "vault")
+            val decoyRepository = VaultRepository(decoyDatabase.vaultDao(), "decoy_vault")
+            VaultViewModel.Factory(realRepository, decoyRepository)
+        } catch (t: Throwable) {
+            android.util.Log.e("MainActivity", "Error creating databases for VaultViewModel", t)
+            // If opening database failed, clear corrupted files and retry cleanly
+            try {
+                applicationContext.deleteDatabase("secure_vault_db")
+                applicationContext.deleteDatabase("decoy_vault_db")
+            } catch (_: Exception) {}
+            val database = AppDatabase.getDatabase(applicationContext)
+            val decoyDatabase = AppDatabase.getDecoyDatabase(applicationContext)
+            val realRepository = VaultRepository(database.vaultDao(), "vault")
+            val decoyRepository = VaultRepository(decoyDatabase.vaultDao(), "decoy_vault")
+            VaultViewModel.Factory(realRepository, decoyRepository)
+        }
     }
 
     private val settingsViewModel: SettingsViewModel by viewModels {

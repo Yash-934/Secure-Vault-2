@@ -84,13 +84,16 @@ object RootDetectionManager {
 
         var score = 0
         if (suFound) score += 40
-        if (magiskMounts) score += 30
-        if (rootPkgs) score += 20
-        if (selinuxPermissive) score += 15
-        if (dangerousProps) score += 15
+        if (magiskMounts) score += 35
+        if (rootPkgs) score += 25
+        if (selinuxPermissive) score += 20
+        if (dangerousProps) score += 10
 
         val riskScore = score.coerceIn(0, 100)
-        val isRooted = (suFound || magiskMounts || rootPkgs || (selinuxPermissive && dangerousProps))
+        // A device is considered truly rooted if SU binaries are present, Magisk mounts exist,
+        // root management apps are installed, or SELinux is actively set to Permissive with dangerous build props.
+        // Test-keys or debug build properties alone on an OEM device with SELinux enforcing and no SU binary do not trigger root lockdown.
+        val isRooted = suFound || magiskMounts || rootPkgs || (selinuxPermissive && dangerousProps)
 
         val detailsBuilder = StringBuilder()
         if (suFound) detailsBuilder.append("[SU Binary Detected] ")
