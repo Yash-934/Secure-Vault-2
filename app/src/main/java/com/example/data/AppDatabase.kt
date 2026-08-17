@@ -19,28 +19,39 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
+                val pass = com.example.security.DatabaseKeyManager.getDatabasePassphrase(context)
+                val factory = net.sqlcipher.database.SupportFactory(pass)
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "secure_vault_db"
                 )
+                    .openHelperFactory(factory)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
+                pass.fill(0)
                 instance
             }
         }
 
         fun getDecoyDatabase(context: Context): AppDatabase {
             return DECOY_INSTANCE ?: synchronized(this) {
+                val pass = com.example.security.DatabaseKeyManager.getDatabasePassphrase(context)
+                // Use a derived/hashed version for the decoy DB or just use the same securely 
+                // for simplicity in this implementation (they are stored in different files).
+                // Actually, let's just use the same hardware-backed passphrase since it's an offline vault
+                val factory = net.sqlcipher.database.SupportFactory(pass)
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "decoy_vault_db"
                 )
+                    .openHelperFactory(factory)
                     .fallbackToDestructiveMigration()
                     .build()
                 DECOY_INSTANCE = instance
+                pass.fill(0)
                 instance
             }
         }

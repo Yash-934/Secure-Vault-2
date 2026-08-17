@@ -56,8 +56,9 @@ object HardwareAttestationManager {
 
     /**
      * Performs a fresh hardware key generation and attestation inspection with randomized challenge.
+     * Binds the native library integrity state to the hardware attestation challenge.
      */
-    fun performHardwareAttestation(): AttestationReport {
+    fun performHardwareAttestation(context: android.content.Context): AttestationReport {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             return AttestationReport(
                 isAttestationSupported = false,
@@ -77,8 +78,15 @@ object HardwareAttestationManager {
             val keyStore = KeyStore.getInstance(KEYSTORE_TYPE).apply { load(null) }
             
             // Generate a fresh random 32-byte attestation challenge on every single run to prevent replay attacks
+            // and bind native execution state to hardware attestation
+            val nativeState = NativeIntegrityVerifier.executeObfuscatedSecurityCheck(context)
             val challenge = ByteArray(32)
             SecureRandom().nextBytes(challenge)
+            
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            md.update(challenge)
+            val bb = java.nio.ByteBuffer.allocate(4).putInt(nativeState)
+            val boundChallenge = md.digest(bb.array())
 
             val kpg = KeyPairGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_EC,
@@ -90,7 +98,7 @@ object HardwareAttestationManager {
                 KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
             )
                 .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
-                .setAttestationChallenge(challenge)
+                .setAttestationChallenge(boundChallenge)
 
             kpg.initialize(specBuilder.build())
             kpg.generateKeyPair()
@@ -107,7 +115,7 @@ object HardwareAttestationManager {
             val extensionValue = leafCert.getExtensionValue(KEY_ATTESTATION_OID)
                 ?: return fallbackReport("Attestation extension OID not found in leaf cert")
 
-            return parseAttestationExtension(extensionValue, challenge)
+            return parseAttestationExtension(extensionValue, boundChallenge)
         } catch (e: Exception) {
             Log.w(TAG, "Hardware attestation execution: ${e.message}")
             return fallbackReport("Hardware Keystore fallback: ${e.localizedMessage}")
@@ -207,7 +215,7 @@ object HardwareAttestationManager {
                                     KM_VERIFIED_BOOT_FAILED -> "FAILED"
                                     else -> "UNKNOWN"
                                 }
-                                isBootVerified = (bootState == KM_VERIFIED_BOOT_VERIFIED || bootState == KM_VERIFIED_BOOT_SELF_SIGNED)
+                                isBootVerified = (bootState == KM_VERIFIED_BOOT_VERIFIED) // STRICT mode: Require fully verified boot. Reject SELF_SIGNED by default.
                             }
                         }
                     }

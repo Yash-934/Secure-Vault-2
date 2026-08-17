@@ -44,6 +44,8 @@ object Argon2Kdf {
         keyLengthBytes: Int = KEY_LENGTH_BYTES
     ): SecretKey {
         val passwordBytes = CharArrayToByteArray(password)
+        val directOutput = java.nio.ByteBuffer.allocateDirect(keyLengthBytes)
+        NativeBridge.safeMlock(directOutput)
         val outputKeyBytes = ByteArray(keyLengthBytes)
 
         try {
@@ -57,11 +59,24 @@ object Argon2Kdf {
             val generator = Argon2BytesGenerator()
             generator.init(builder.build())
             generator.generateBytes(passwordBytes, outputKeyBytes, 0, outputKeyBytes.size)
+            
+            directOutput.put(outputKeyBytes)
+            directOutput.flip()
+            
+            val directArray = ByteArray(keyLengthBytes)
+            directOutput.get(directArray)
 
-            return SecretKeySpec(outputKeyBytes, "AES")
+            return SecretKeySpec(directArray, "AES")
         } finally {
             // Zeroize sensitive plaintext password bytes from memory
             passwordBytes.fill(0)
+            outputKeyBytes.fill(0)
+            if (directOutput.capacity() > 0) {
+                directOutput.clear()
+                val zeroes = ByteArray(directOutput.capacity())
+                directOutput.put(zeroes)
+                NativeBridge.safeMunlock(directOutput)
+            }
         }
     }
 

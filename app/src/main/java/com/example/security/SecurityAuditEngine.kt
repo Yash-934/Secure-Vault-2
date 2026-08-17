@@ -30,7 +30,7 @@ class SecurityAuditEngine @Inject constructor(
     fun performSecurityAudit(): AuditResult {
         val internetCheck = checkInternetPermissionDenied()
         val keystoreCheck = checkKeystoreIntegrity()
-        val attestationReport = HardwareAttestationManager.performHardwareAttestation()
+        val attestationReport = HardwareAttestationManager.performHardwareAttestation(context)
         val attestationCheck = attestationReport.isSystemSecure && attestationReport.isChallengeVerified
         val cryptoCheck = checkAesGcmCryptoTest()
         val argon2Check = checkArgon2idKdfTest()
@@ -193,13 +193,22 @@ class SecurityAuditEngine @Inject constructor(
 
         val totalWeight = checkItems.sumOf { it.weight }
         val passedWeight = checkItems.filter { it.passed }.sumOf { it.weight }
-        val calculatedScore = ((passedWeight.toDouble() / totalWeight.toDouble()) * 100).toInt().coerceIn(0, 100)
+        
+        // Normalize to a 10-point scale: (passed / total) * 10, ensuring max 10.0 (or 9.9 to show realistic maximum)
+        val rawScore10 = (passedWeight.toDouble() / totalWeight.toDouble()) * 10.0
+        val maxScore = 9.9 // Cap at 9.9/10 per requirements
+        val normalizedScore = rawScore10.coerceIn(0.0, maxScore)
+        
+        // Format to 1 decimal place (e.g., 9.9) for display, keep an int representation for internal threshold checks (0-100)
+        val calculatedScore = (normalizedScore * 10).toInt()
+
+        val displayScoreStr = String.format(java.util.Locale.US, "%.1f", normalizedScore)
 
         val grade = when {
-            calculatedScore >= 95 -> "9.9 / 10 • MILITARY HARDENED"
-            calculatedScore >= 85 -> "9.0 / 10 • HIGH SECURITY"
-            calculatedScore >= 70 -> "7.5 / 10 • ELEVATED PROTECTION"
-            else -> "WARNING • ELEVATED RISK"
+            calculatedScore >= 95 -> "$displayScoreStr / 10 • MILITARY HARDENED"
+            calculatedScore >= 85 -> "$displayScoreStr / 10 • HIGH SECURITY"
+            calculatedScore >= 70 -> "$displayScoreStr / 10 • ELEVATED PROTECTION"
+            else -> "$displayScoreStr / 10 • WARNING: ELEVATED RISK"
         }
 
         val checkResultsMap = checkItems.associate { it.name to it.passed }

@@ -37,8 +37,16 @@ object SelfDestructManager {
             // 4. Reset Keystore keys
             try {
                 val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-                if (keyStore.containsAlias("VaultMasterKey")) {
-                    keyStore.deleteEntry("VaultMasterKey")
+                val aliasesToDelete = listOf(
+                    "VaultMasterKey",
+                    "SecureVaultAES256MasterKey",
+                    "SecureVaultDexKey",
+                    "SecureVaultHardwareAttestationKey_v2"
+                )
+                aliasesToDelete.forEach { alias ->
+                    if (keyStore.containsAlias(alias)) {
+                        keyStore.deleteEntry(alias)
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -70,11 +78,13 @@ object SelfDestructManager {
         dir.delete()
     }
 
-    private fun shredFile(file: File) {
+    fun shredFile(file: File) {
         try {
             if (file.exists() && file.canWrite()) {
                 val length = file.length()
                 if (length > 0) {
+                    // Crypto-shredding is primary: Destroying the DEK in metadata makes data irrecoverable.
+                    // This zeroization pass is a secondary best-effort physical overwrite.
                     file.outputStream().use { fos ->
                         // Zero overwrite
                         val zeroes = ByteArray(8192)

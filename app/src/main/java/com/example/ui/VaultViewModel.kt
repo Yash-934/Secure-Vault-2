@@ -335,7 +335,7 @@ class VaultViewModel(
             } catch (e: Exception) {
                 _statusMessage.value = "Steganography extraction failed: ${e.localizedMessage}"
             } finally {
-                if (tempStegoFile.exists()) tempStegoFile.delete()
+                if (tempStegoFile.exists()) securelyShredFile(tempStegoFile)
                 securelyShredFile(tempExtractedFile)
                 _isProcessing.value = false
             }
@@ -626,7 +626,7 @@ class VaultViewModel(
                 )
                 showUserFeedback(context, "Extraction failed: $err")
             } finally {
-                if (tempStegoFile.exists()) tempStegoFile.delete()
+                if (tempStegoFile.exists()) securelyShredFile(tempStegoFile)
                 securelyShredFile(tempExtractedBackupFile)
                 _isProcessing.value = false
             }

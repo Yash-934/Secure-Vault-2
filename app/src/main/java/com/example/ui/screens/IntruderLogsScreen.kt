@@ -41,6 +41,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
 import com.example.data.IntruderLog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -259,12 +262,52 @@ private fun IntruderLogCard(log: IntruderLog, formattedDate: String) {
                     .border(1.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                coil.compose.AsyncImage(
-                    model = java.io.File(log.imagePath),
-                    contentDescription = "Intruder Selfie",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                )
+                var imageBitmap by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+                var hasError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+                androidx.compose.runtime.LaunchedEffect(log.imagePath) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            val file = java.io.File(log.imagePath)
+                            if (file.exists()) {
+                                val encryptedData = file.readBytes()
+                                val decryptedData = com.example.security.CryptoManager.decryptByteArray(encryptedData)
+                                val bitmap = android.graphics.BitmapFactory.decodeByteArray(decryptedData, 0, decryptedData.size)
+                                if (bitmap != null) {
+                                    imageBitmap = bitmap.asImageBitmap()
+                                } else {
+                                    hasError = true
+                                }
+                                decryptedData.fill(0)
+                            } else {
+                                hasError = true
+                            }
+                        } catch (e: Exception) {
+                            hasError = true
+                        }
+                    }
+                }
+
+                if (imageBitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = imageBitmap!!,
+                        contentDescription = "Intruder Selfie",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                    )
+                } else if (hasError) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Decryption Failed",
+                        tint = PanicRed,
+                        modifier = Modifier.size(48.dp)
+                    )
+                } else {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        color = BrightCyan,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
         }
     }

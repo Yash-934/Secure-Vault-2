@@ -25,6 +25,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -94,13 +95,17 @@ class MainActivity : FragmentActivity() {
                 }
 
                 val navController = rememberNavController()
+                val currentBackStackEntry by navController.currentBackStackEntryAsState()
+                val currentRoute = currentBackStackEntry?.destination?.route
+
                 val deleteIntentSender by vaultViewModel.deleteIntentSender.collectAsStateWithLifecycle()
                 val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
                 val isUnlocked by vaultViewModel.isUnlocked.collectAsStateWithLifecycle()
 
                 // Dynamically update Anti-Screen Capture (FLAG_SECURE)
-                LaunchedEffect(settings.isScreenProtectionEnabled) {
-                    if (settings.isScreenProtectionEnabled) {
+                LaunchedEffect(settings.isScreenProtectionEnabled, currentRoute, isUnlocked) {
+                    val forceSecure = currentRoute in listOf("auth", "root_warning") || !isUnlocked
+                    if (forceSecure || settings.isScreenProtectionEnabled) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     } else {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)

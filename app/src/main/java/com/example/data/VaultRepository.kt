@@ -398,12 +398,12 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
         val vaultDir = File(context.filesDir, vaultDirName)
         val encryptedFile = File(vaultDir, item.encryptedFileName)
         if (encryptedFile.exists()) {
-            encryptedFile.delete()
+            com.example.security.SelfDestructManager.shredFile(encryptedFile)
         }
         // Also remove any encrypted thumbnail cache
         try {
             val thumbFile = File(File(context.cacheDir, "vault_thumbnails_encrypted"), "${item.encryptedFileName}.thumb_aes256")
-            if (thumbFile.exists()) thumbFile.delete()
+            if (thumbFile.exists()) com.example.security.SelfDestructManager.shredFile(thumbFile)
         } catch (_: Throwable) {}
         vaultDao.deleteVaultItem(item)
     }

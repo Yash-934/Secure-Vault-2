@@ -251,7 +251,7 @@ object CryptoManager {
             checkRaf.readFully(headerBytes)
         }
 
-        if (headerBytes.contentEquals(V2_MAGIC)) {
+        if (headerBytes.contentEquals(V2_MAGIC) || headerBytes.contentEquals(V3_MAGIC)) {
             encryptedFile.inputStream().buffered(262144).use { input ->
                 destFile.outputStream().buffered(262144).use { output ->
                     decryptStreamToOutputStream(input, output, totalSize, onProgress)

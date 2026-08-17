@@ -14,13 +14,26 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.securevault.vltapp"
-    minSdk = 24
-    targetSdk = 36
+    applicationId = "com.aistudio.quantumvault.wkqpx"
+    minSdk = 26
+    targetSdk = 34
     versionCode = 1
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    
+    externalNativeBuild {
+      cmake {
+        cppFlags += "-std=c++14"
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
   }
 
   signingConfigs {
@@ -42,7 +55,7 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -99,6 +112,8 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation("net.zetetic:android-database-sqlcipher:4.5.4")
+  implementation("androidx.sqlite:sqlite-ktx:2.4.0")
   implementation(libs.coil.compose)
   implementation(libs.androidx.biometric)
   implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")

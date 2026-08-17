@@ -37,67 +37,55 @@ object NativeIntegrityVerifier {
      * Defeats decompiler control flow analysis through state flattening and opaque predicates.
      */
     fun executeObfuscatedSecurityCheck(context: Context): Int {
-        var state = 0x01
-        var accumulator = 0xA5A5
-        var iterations = 0
+        // Task 2: Real Native Obfuscation with OLLVM (Fallback to Clang + manual obfuscation)
+        // Call the JNI layer to execute the obfuscated state machine.
+        // If the native library fails to load (e.g. unsupported ABI), fallback to the original logic
+        // to prevent crashing the app during development/testing.
+        return try {
+            val nativeResult = NativeBridge.runObfuscatedCheck()
+            globalSecurityState = nativeResult
+            nativeResult
+        } catch (e: UnsatisfiedLinkError) {
+            // Fallback to Kotlin-based obfuscation if JNI is unavailable
+            var state = 0x01
+            var accumulator = 0xA5A5
+            var iterations = 0
 
-        // Control Flow Flattening Dispatch Loop
-        while (state != 0x00 && iterations < 50) {
-            iterations++
-            when (state) {
-                0x01 -> {
-                    // Opaque Predicate 1: (x * (x + 1)) % 2 == 0 is always true
-                    val x = (System.currentTimeMillis() and 0xFF).toInt()
-                    val invariant = (x * (x + 1)) % 2 == 0
-                    if (invariant) {
-                        accumulator = (accumulator xor 0x3C3C) + 7
-                        state = 0x02
-                    } else {
-                        // Bogus branch (never reached in normal math)
-                        accumulator = (accumulator and 0x0000)
-                        state = 0x99
+            while (state != 0x00 && iterations < 50) {
+                iterations++
+                when (state) {
+                    0x01 -> {
+                        val x = (System.currentTimeMillis() and 0xFF).toInt()
+                        if ((x * (x + 1)) % 2 == 0) {
+                            accumulator = (accumulator xor 0x3C3C) + 7
+                            state = 0x02
+                        } else {
+                            accumulator = (accumulator and 0x0000)
+                            state = 0x99
+                        }
                     }
-                }
-                0x02 -> {
-                    // Instruction Substitution: a + b replaced with (a ^ b) + 2*(a & b)
-                    val a = accumulator and 0xFF
-                    val b = 0x42
-                    val substitutedSum = (a xor b) + (2 * (a and b))
-                    accumulator = (accumulator and 0xFF00) or (substitutedSum and 0xFF)
-                    state = 0x03
-                }
-                0x03 -> {
-                    // Memory map inspection check
-                    val isClean = !AntiTamperManager.isHookFrameworkDetected()
-                    if (isClean) {
-                        state = 0x04
-                    } else {
-                        state = 0xFF // Threat detected
+                    0x02 -> {
+                        val a = accumulator and 0xFF
+                        val b = 0x42
+                        val substitutedSum = (a xor b) + (2 * (a and b))
+                        accumulator = (accumulator and 0xFF00) or (substitutedSum and 0xFF)
+                        state = 0x03
                     }
-                }
-                0x04 -> {
-                    // Opaque Predicate 2: 7 * y^2 - 1 != z^2 in modular rings
-                    accumulator = accumulator xor 0x5A5A
-                    state = 0x00 // Success exit
-                }
-                0x99 -> {
-                    // Bogus state handler
-                    accumulator = 0
-                    state = 0x00
-                }
-                0xFF -> {
-                    // Security Violation: Zeroize and flag
-                    accumulator = -1
-                    state = 0x00
-                }
-                else -> {
-                    state = 0x00
+                    0x03 -> {
+                        state = if (!AntiTamperManager.isHookFrameworkDetected()) 0x04 else 0xFF
+                    }
+                    0x04 -> {
+                        accumulator = accumulator xor 0x5A5A
+                        state = 0x00
+                    }
+                    0x99 -> { accumulator = 0; state = 0x00 }
+                    0xFF -> { accumulator = -1; state = 0x00 }
+                    else -> state = 0x00
                 }
             }
+            globalSecurityState = accumulator
+            accumulator
         }
-
-        globalSecurityState = accumulator
-        return accumulator
     }
 
     /**

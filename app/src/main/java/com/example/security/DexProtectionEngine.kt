@@ -29,22 +29,6 @@ object DexProtectionEngine {
     private const val GCM_TAG_LENGTH = 128
     private const val IV_LENGTH = 12
 
-    // Obfuscated AES-256 Master Key bytes for DEX payload decryption
-    private val OBFUSCATED_DEX_KEY = byteArrayOf(
-        0xA3.toByte(), 0x1F.toByte(), 0x5C.toByte(), 0x8D.toByte(),
-        0xE2.toByte(), 0x49.toByte(), 0x7B.toByte(), 0x06.toByte(),
-        0x91.toByte(), 0xC8.toByte(), 0x33.toByte(), 0xF4.toByte(),
-        0x6A.toByte(), 0x2D.toByte(), 0xBF.toByte(), 0x50.toByte(),
-        0x14.toByte(), 0x7E.toByte(), 0x89.toByte(), 0xD3.toByte(),
-        0x22.toByte(), 0x6B.toByte(), 0xFA.toByte(), 0x05.toByte(),
-        0x48.toByte(), 0xBD.toByte(), 0x31.toByte(), 0x97.toByte(),
-        0xEC.toByte(), 0x58.toByte(), 0x0F.toByte(), 0x72.toByte()
-    )
-
-    private val KEY_MASK = byteArrayOf(
-        0x4B.toByte(), 0x82.toByte(), 0x39.toByte(), 0xF1.toByte()
-    )
-
     data class DexIntegrityReport(
         val isChecksumValid: Boolean,
         val dexCount: Int,
@@ -55,17 +39,80 @@ object DexProtectionEngine {
         val details: String
     )
 
+    private const val KS_ALIAS_DEX = "SecureVaultDexKey"
+    private const val PREF_NAME = "VaultDexPrefs"
+    private const val PREF_WRAPPED_KEY = "wrapped_dex_key"
+    private const val PREF_WRAPPED_IV = "wrapped_dex_iv"
+
     /**
-     * Derives the AES-256 SecretKey for DEX operations and immediately zeroizes intermediate structures.
+     * Derives or generates the AES-256 SecretKey for DEX operations, wrapped by Keystore.
      */
-    private fun deriveDexKey(): SecretKeySpec {
-        val rawKey = ByteArray(32)
-        for (i in 0 until 32) {
-            rawKey[i] = (OBFUSCATED_DEX_KEY[i].toInt() xor KEY_MASK[i % KEY_MASK.size].toInt()).toByte()
+    private fun deriveDexKey(context: Context): SecretKeySpec {
+        val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
+
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val wrappedKeyBase64 = prefs.getString(PREF_WRAPPED_KEY, null)
+        val wrappedIvBase64 = prefs.getString(PREF_WRAPPED_IV, null)
+
+        val hardwareKey: javax.crypto.SecretKey
+        if (!keyStore.containsAlias(KS_ALIAS_DEX)) {
+            val keyGenerator = javax.crypto.KeyGenerator.getInstance(
+                android.security.keystore.KeyProperties.KEY_ALGORITHM_AES,
+                "AndroidKeyStore"
+            )
+            val builder = android.security.keystore.KeyGenParameterSpec.Builder(
+                KS_ALIAS_DEX,
+                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .setRandomizedEncryptionRequired(true)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try {
+                    builder.setIsStrongBoxBacked(true)
+                } catch (e: Exception) {
+                    // StrongBox unavailable, fallback to TEE
+                }
+            }
+            keyGenerator.init(builder.build())
+            hardwareKey = keyGenerator.generateKey()
+        } else {
+            val entry = keyStore.getEntry(KS_ALIAS_DEX, null) as java.security.KeyStore.SecretKeyEntry
+            hardwareKey = entry.secretKey
         }
-        val spec = SecretKeySpec(rawKey, "AES")
-        rawKey.fill(0)
-        return spec
+
+        if (wrappedKeyBase64 != null && wrappedIvBase64 != null) {
+            val wrappedKey = android.util.Base64.decode(wrappedKeyBase64, android.util.Base64.DEFAULT)
+            val wrappedIv = android.util.Base64.decode(wrappedIvBase64, android.util.Base64.DEFAULT)
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, hardwareKey, GCMParameterSpec(128, wrappedIv))
+            val rawKey = cipher.doFinal(wrappedKey)
+            val spec = SecretKeySpec(rawKey, "AES")
+            rawKey.fill(0)
+            return spec
+        } else {
+            val secureRandom = java.security.SecureRandom()
+            val rawKey = ByteArray(32)
+            secureRandom.nextBytes(rawKey)
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, hardwareKey)
+            val iv = cipher.iv
+            val wrappedKey = cipher.doFinal(rawKey)
+
+            prefs.edit()
+                .putString(PREF_WRAPPED_KEY, android.util.Base64.encodeToString(wrappedKey, android.util.Base64.DEFAULT))
+                .putString(PREF_WRAPPED_IV, android.util.Base64.encodeToString(iv, android.util.Base64.DEFAULT))
+                .apply()
+
+            val spec = SecretKeySpec(rawKey, "AES")
+            rawKey.fill(0)
+            return spec
+        }
     }
 
     /**
@@ -145,6 +192,7 @@ object DexProtectionEngine {
      * Zero temporary files are written to disk. Decrypted buffer is zeroized after class loading.
      */
     fun loadEncryptedDexInMemory(
+        context: Context,
         encryptedInputStream: InputStream,
         parentClassLoader: ClassLoader
     ): ClassLoader? {
@@ -161,7 +209,7 @@ object DexProtectionEngine {
             val iv = rawEncrypted.copyOfRange(0, IV_LENGTH)
             val cipherText = rawEncrypted.copyOfRange(IV_LENGTH, rawEncrypted.size)
 
-            val keySpec = deriveDexKey()
+            val keySpec = deriveDexKey(context)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(GCM_TAG_LENGTH, iv))
 
@@ -169,6 +217,7 @@ object DexProtectionEngine {
             val byteBuffer = ByteBuffer.allocateDirect(decryptedBytes.size)
             byteBuffer.put(decryptedBytes)
             byteBuffer.flip()
+            NativeBridge.safeMlock(byteBuffer)
 
             return InMemoryDexClassLoader(arrayOf(byteBuffer), parentClassLoader)
         } catch (e: Exception) {
@@ -182,8 +231,8 @@ object DexProtectionEngine {
     /**
      * Encrypts a raw DEX byte buffer with AES-256-GCM.
      */
-    fun encryptDexBytes(plainDexBytes: ByteArray): ByteArray {
-        val keySpec = deriveDexKey()
+    fun encryptDexBytes(context: Context, plainDexBytes: ByteArray): ByteArray {
+        val keySpec = deriveDexKey(context)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, keySpec)
         val iv = cipher.iv

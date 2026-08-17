@@ -66,23 +66,34 @@ object IntruderCaptureManager {
                 cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, imageCapture, imageAnalysis)
 
                 val selfieDir = File(context.filesDir, "intruder_selfies").apply { if (!exists()) mkdirs() }
-                val selfieFile = File(selfieDir, "intruder_${System.currentTimeMillis()}.jpg")
-
-                val outputOptions = ImageCapture.OutputFileOptions.Builder(selfieFile).build()
+                val selfieFile = File(selfieDir, "intruder_${System.currentTimeMillis()}.selfie_enc")
 
                 // Give camera sensor time to initialize and focus before snapping
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     try {
                         imageCapture.takePicture(
-                            outputOptions,
                             executor,
-                            object : ImageCapture.OnImageSavedCallback {
-                                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                            object : androidx.camera.core.ImageCapture.OnImageCapturedCallback() {
+                                override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
                                     ContextCompat.getMainExecutor(context).execute {
                                         cameraProvider.unbindAll()
                                     }
-                                    // Record log with selfie imagePath in Room DB
-                                    saveLogWithImage(context, attemptType, details, selfieFile.absolutePath)
+                                    try {
+                                        val buffer = image.planes[0].buffer
+                                        val bytes = ByteArray(buffer.remaining())
+                                        buffer.get(bytes)
+                                        
+                                        // Encrypt the captured bytes immediately in memory
+                                        val encryptedBytes = CryptoManager.encryptByteArray(bytes)
+                                        selfieFile.writeBytes(encryptedBytes)
+                                        
+                                        // Record log with encrypted selfie imagePath in Room DB
+                                        saveLogWithImage(context, attemptType, details, selfieFile.absolutePath)
+                                    } catch (e: Exception) {
+                                        saveLogWithImage(context, attemptType, details + " (Encryption Error: ${e.message})", null)
+                                    } finally {
+                                        image.close()
+                                    }
                                 }
 
                                 override fun onError(exception: ImageCaptureException) {
