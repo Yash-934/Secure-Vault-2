@@ -101,245 +101,505 @@ fun LockScreen(
             lockoutSecondsRemaining = lockoutSecondsRemaining
         )
     } else {
-        // STANDARD PIN ENTRY SCREEN
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(CyberBackgroundGradient)
-        ) {
-        // Futuristic Cyber Background Grid with Ambient Radial Glow
-        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            val gridSpacing = 44.dp.toPx()
-            val gridColor = Color(0xFF00F5D4).copy(alpha = 0.05f)
-            
-            var x = 0f
-            while (x < size.width) {
-                drawLine(gridColor, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height), strokeWidth = 1f)
-                x += gridSpacing
+        // ULTRA-FUTURISTIC CYBERPUNK PIN ENTRY SCREEN
+        FuturisticCyberPinScreen(
+            enteredPin = enteredPin,
+            scrambledDigits = scrambledDigits,
+            isLockedOut = isLockedOut,
+            errorMessage = errorMessage,
+            onDigitClick = { digit ->
+                if (!isLockedOut && enteredPin.length < 4) {
+                    val newPin = enteredPin + digit
+                    enteredPin = newPin
+                    if (newPin.length == 4) {
+                        onPinSubmit(newPin)
+                    }
+                }
+            },
+            onBackspaceClick = {
+                if (enteredPin.isNotEmpty()) {
+                    enteredPin = enteredPin.dropLast(1)
+                }
+            },
+            onAuthenticateClick = onAuthenticateClick
+        )
+    }
+}
+
+@Composable
+private fun FuturisticCyberPinScreen(
+    enteredPin: String,
+    scrambledDigits: List<String>,
+    isLockedOut: Boolean,
+    errorMessage: String?,
+    onDigitClick: (String) -> Unit,
+    onBackspaceClick: () -> Unit,
+    onAuthenticateClick: () -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "cyber_pin_anim")
+
+    // Rotating Outer Tech Arc
+    val outerRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 9000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "outer_pin_rot"
+    )
+
+    // Counter-Rotating Inner Tech Arc
+    val innerRotation by infiniteTransition.animateFloat(
+        initialValue = 360f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 6000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "inner_pin_rot"
+    )
+
+    // Ambient Pulse
+    val ambientPulse by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pin_ambient_pulse"
+    )
+
+    // Laser Scan Beam Line
+    val scanLineY by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pin_scan_beam"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF03070E),
+                        Color(0xFF070E1A),
+                        Color(0xFF03060B)
+                    )
+                )
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Futuristic Cyber Background Grid with Ambient Radial Pulse
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val gridSpacing = 42.dp.toPx()
+            val cols = (size.width / gridSpacing).toInt() + 1
+            val rows = (size.height / gridSpacing).toInt() + 1
+
+            for (i in 0..cols) {
+                val x = i * gridSpacing
+                drawLine(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.035f),
+                    start = Offset(x, 0f),
+                    end = Offset(x, size.height),
+                    strokeWidth = 1f
+                )
             }
-            
-            var y = 0f
-            while (y < size.height) {
-                drawLine(gridColor, androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Offset(size.width, y), strokeWidth = 1f)
-                y += gridSpacing
+            for (j in 0..rows) {
+                val y = j * gridSpacing
+                drawLine(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.035f),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1f
+                )
             }
 
-            // Radial Center Ambient Purple/Cyan Glow
+            // Radial Ambient Cyan/Purple Glow
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        VaultNeonPurple.copy(alpha = 0.25f),
-                        VaultPrimaryCyan.copy(alpha = 0.12f),
+                        Color(0xFF00E5FF).copy(alpha = 0.12f * ambientPulse),
+                        Color(0xFF7C4DFF).copy(alpha = 0.08f * ambientPulse),
                         Color.Transparent
                     ),
-                    center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height * 0.35f),
-                    radius = size.width * 0.65f
+                    center = Offset(size.width / 2f, size.height * 0.28f),
+                    radius = size.width * 0.7f
                 )
             )
         }
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 28.dp, vertical = 24.dp),
+            modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // 1. Top System Badge (Pill with Gradient Border)
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(Color(0xFF0B1424))
-                    .border(1.5.dp, CyberNeonGradient, CircleShape)
-                    .padding(horizontal = 16.dp, vertical = 7.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF00FF87)) // Matrix Emerald Green
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "QUANTUM VAULT: ENCRYPTED",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = VaultPrimaryCyan,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.2.sp
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 2. Glowing Shield Ring Logo with Concentric Mixed Gradient Rings
-            Box(
-                modifier = Modifier.size(108.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                // Outer Cyber Plasma Gradient Circle
-                Box(
-                    modifier = Modifier
-                        .size(108.dp)
-                        .clip(CircleShape)
-                        .border(2.5.dp, CyberPlasmaGradient, CircleShape)
-                )
-                // Inner Cyber Neon Gradient Circle
-                Box(
-                    modifier = Modifier
-                        .size(86.dp)
-                        .clip(CircleShape)
-                        .border(1.8.dp, CyberNeonGradient, CircleShape)
-                )
-                // Center Shield Icon
-                Icon(
-                    imageVector = Icons.Default.Shield,
-                    contentDescription = "Vault Shield",
-                    tint = VaultPrimaryCyan,
-                    modifier = Modifier.size(46.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // 3. Title & Subtitle
-            Text(
-                text = "QUANTUM VAULT",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color.White,
-                letterSpacing = 3.sp
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "NEON PROTOCOL • AUTH REQUIRED",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = VaultNeonPurple,
-                fontFamily = FontFamily.Monospace,
-                letterSpacing = 2.sp
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 4. PIN Indicator Dots with Cyber Neon Gradient Fill
+            // TOP STATUS TELEMETRY BANNER
             Row(
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF091424).copy(alpha = 0.85f))
+                    .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.45f * ambientPulse), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
             ) {
-                for (i in 0 until 4) {
-                    val isFilled = i < enteredPin.length
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF00FF87))
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "QUANTUM ENCLAVE • AUTHENTICATION REQUIRED",
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00E5FF),
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.2.sp
+                )
+            }
+
+            // ROTATING QUANTUM CORE & TITLE & PIN HUD
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Rotating Holographic Shield Core
+                Box(
+                    modifier = Modifier.size(110.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        val radiusOuter = size.minDimension / 2f - 4.dp.toPx()
+                        val radiusInner = size.minDimension / 2f - 14.dp.toPx()
+
+                        // Outer Orbit Arc (Cyan)
+                        drawArc(
+                            color = Color(0xFF00E5FF).copy(alpha = 0.85f),
+                            startAngle = outerRotation,
+                            sweepAngle = 110f,
+                            useCenter = false,
+                            topLeft = Offset(center.x - radiusOuter, center.y - radiusOuter),
+                            size = Size(radiusOuter * 2f, radiusOuter * 2f),
+                            style = Stroke(
+                                width = 2.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f), 0f)
+                            )
+                        )
+
+                        // Outer Orbit Arc 2 (Magenta)
+                        drawArc(
+                            color = Color(0xFFFF2A85).copy(alpha = 0.85f),
+                            startAngle = outerRotation + 180f,
+                            sweepAngle = 90f,
+                            useCenter = false,
+                            topLeft = Offset(center.x - radiusOuter, center.y - radiusOuter),
+                            size = Size(radiusOuter * 2f, radiusOuter * 2f),
+                            style = Stroke(
+                                width = 2.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f), 0f)
+                            )
+                        )
+
+                        // Inner Counter-Rotating Tech Arc
+                        drawArc(
+                            color = Color(0xFF7C4DFF).copy(alpha = 0.7f),
+                            startAngle = innerRotation,
+                            sweepAngle = 200f,
+                            useCenter = false,
+                            topLeft = Offset(center.x - radiusInner, center.y - radiusInner),
+                            size = Size(radiusInner * 2f, radiusInner * 2f),
+                            style = Stroke(
+                                width = 1.5.dp.toPx(),
+                                cap = StrokeCap.Round
+                            )
+                        )
+
+                        // 4 Corner HUD Crosshairs
+                        val crosshairLen = 6.dp.toPx()
+                        val pad = 3.dp.toPx()
+                        drawLine(Color(0xFF00E5FF), Offset(pad, pad), Offset(pad + crosshairLen, pad), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(pad, pad), Offset(pad, pad + crosshairLen), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(size.width - pad, pad), Offset(size.width - pad - crosshairLen, pad), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(size.width - pad, pad), Offset(size.width - pad, pad + crosshairLen), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(pad, size.height - pad), Offset(pad + crosshairLen, size.height - pad), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(pad, size.height - pad), Offset(pad, size.height - pad - crosshairLen), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(size.width - pad, size.height - pad), Offset(size.width - pad - crosshairLen, size.height - pad), 1.5f)
+                        drawLine(Color(0xFF00E5FF), Offset(size.width - pad, size.height - pad), Offset(size.width - pad, size.height - pad - crosshairLen), 1.5f)
+                    }
+
+                    // Center Glowing Core
                     Box(
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(56.dp)
                             .clip(CircleShape)
                             .background(
-                                if (isFilled) CyberPlasmaGradient else Brush.linearGradient(listOf(Color(0xFF0A1320), Color(0xFF0A1320)))
+                                Brush.radialGradient(
+                                    listOf(
+                                        Color(0xFF0B2236),
+                                        Color(0xFF050E17)
+                                    )
+                                )
                             )
                             .border(
-                                width = 1.5.dp,
-                                brush = if (isFilled) CyberNeonGradient else Brush.linearGradient(listOf(Color(0xFF1E3148), Color(0xFF1E3148))),
-                                shape = CircleShape
+                                1.5.dp,
+                                Brush.sweepGradient(
+                                    listOf(
+                                        Color(0xFF00E5FF),
+                                        Color(0xFFFF2A85),
+                                        Color(0xFF00E5FF)
+                                    )
+                                ),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shield,
+                            contentDescription = "Shield",
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Title
+                Text(
+                    text = "QUANTUM VAULT",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White,
+                    letterSpacing = 2.8.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = "MILITARY-GRADE ENCRYPTED ENCLAVE",
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00E5FF),
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.4.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // HOLOGRAPHIC PIN DISPLAY HUD CARD WITH SCANNER BEAM
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xFF091424).copy(alpha = 0.9f),
+                                    Color(0xFF060E18).copy(alpha = 0.95f)
+                                )
                             )
-                    )
+                        )
+                        .border(
+                            1.2.dp,
+                            Brush.horizontalGradient(
+                                listOf(
+                                    Color(0xFF00E5FF).copy(alpha = 0.6f),
+                                    Color(0xFF7C4DFF).copy(alpha = 0.8f),
+                                    Color(0xFF00E5FF).copy(alpha = 0.6f)
+                                )
+                            ),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .padding(vertical = 12.dp, horizontal = 16.dp)
+                ) {
+                    // Subtle Scanning Line over the PIN HUD Card
+                    Canvas(modifier = Modifier.matchParentSize()) {
+                        val currentY = size.height * scanLineY
+                        drawLine(
+                            brush = Brush.horizontalGradient(
+                                listOf(
+                                    Color.Transparent,
+                                    Color(0xFF00E5FF).copy(alpha = 0.5f),
+                                    Color(0xFF00FF87).copy(alpha = 0.8f),
+                                    Color(0xFF00E5FF).copy(alpha = 0.5f),
+                                    Color.Transparent
+                                )
+                            ),
+                            start = Offset(0f, currentY),
+                            end = Offset(size.width, currentY),
+                            strokeWidth = 1.5.dp.toPx()
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // 4 Futuristic Glowing PIN Nodes
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            for (i in 0 until 4) {
+                                val isFilled = i < enteredPin.length
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isFilled) Brush.radialGradient(
+                                                listOf(
+                                                    Color(0xFF00FF87),
+                                                    Color(0xFF00E5FF),
+                                                    Color(0xFF005577)
+                                                )
+                                            )
+                                            else Brush.radialGradient(
+                                                listOf(
+                                                    Color(0xFF0E1A29),
+                                                    Color(0xFF060B12)
+                                                )
+                                            )
+                                        )
+                                        .border(
+                                            width = 1.5.dp,
+                                            brush = if (isFilled) Brush.sweepGradient(
+                                                listOf(
+                                                    Color(0xFF00FF87),
+                                                    Color(0xFF00E5FF),
+                                                    Color(0xFF00FF87)
+                                                )
+                                            )
+                                            else Brush.linearGradient(
+                                                listOf(
+                                                    Color(0xFF1E354D),
+                                                    Color(0xFF112233)
+                                                )
+                                            ),
+                                            shape = CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isFilled) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.White)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Status feedback
+                        if (!errorMessage.isNullOrEmpty()) {
+                            Text(
+                                text = errorMessage,
+                                color = Color(0xFFFF3355),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                textAlign = TextAlign.Center
+                            )
+                        } else {
+                            Text(
+                                text = if (enteredPin.isEmpty()) "ENTER 4-DIGIT SECURE PASSCODE" else "DECRYPTING KEYSTREAM [${enteredPin.length}/4]",
+                                color = if (enteredPin.isEmpty()) Color(0xFF78909C) else Color(0xFF00E5FF),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
                 }
             }
 
-            // Error / Lockout Text Display
-            Box(
-                modifier = Modifier
-                    .height(34.dp)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isLockedOut) {
-                    Text(
-                        text = "LOCKOUT ACTIVE: ${lockoutSecondsRemaining}s REMAINING",
-                        color = VaultErrorRed,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontFamily = FontFamily.Monospace,
-                        textAlign = TextAlign.Center
-                    )
-                } else if (!errorMessage.isNullOrEmpty()) {
-                    Text(
-                        text = errorMessage,
-                        color = VaultErrorRed,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // 5. Numeric Keypad Grid (Scrambled 0-9, Fingerprint, Backspace)
+            // FUTURISTIC NUMERIC KEYPAD
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Row 1
                 KeypadRow {
                     for (i in 0..2) {
-                        NumberKey(scrambledDigits[i], enabled = !isLockedOut, onDigitClick = { digit ->
-                            if (!isLockedOut && enteredPin.length < 4) {
-                                val newPin = enteredPin + digit
-                                enteredPin = newPin
-                                if (newPin.length == 4) {
-                                    onPinSubmit(newPin)
-                                }
-                            }
-                        })
+                        FuturisticNumberKey(
+                            digit = scrambledDigits[i],
+                            enabled = !isLockedOut,
+                            onDigitClick = onDigitClick
+                        )
                     }
                 }
 
                 // Row 2
                 KeypadRow {
                     for (i in 3..5) {
-                        NumberKey(scrambledDigits[i], enabled = !isLockedOut, onDigitClick = { digit ->
-                            if (!isLockedOut && enteredPin.length < 4) {
-                                val newPin = enteredPin + digit
-                                enteredPin = newPin
-                                if (newPin.length == 4) {
-                                    onPinSubmit(newPin)
-                                }
-                            }
-                        })
+                        FuturisticNumberKey(
+                            digit = scrambledDigits[i],
+                            enabled = !isLockedOut,
+                            onDigitClick = onDigitClick
+                        )
                     }
                 }
 
                 // Row 3
                 KeypadRow {
                     for (i in 6..8) {
-                        NumberKey(scrambledDigits[i], enabled = !isLockedOut, onDigitClick = { digit ->
-                            if (!isLockedOut && enteredPin.length < 4) {
-                                val newPin = enteredPin + digit
-                                enteredPin = newPin
-                                if (newPin.length == 4) {
-                                    onPinSubmit(newPin)
-                                }
-                            }
-                        })
+                        FuturisticNumberKey(
+                            digit = scrambledDigits[i],
+                            enabled = !isLockedOut,
+                            onDigitClick = onDigitClick
+                        )
                     }
                 }
 
-                // Row 4: Fingerprint, Remaining Digit, Backspace
+                // Row 4: Biometric, Remaining Digit, Backspace
                 KeypadRow {
-                    // Fingerprint Key
+                    // Biometric Key
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(68.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Brush.linearGradient(listOf(Color(0xFF091B2A), Color(0xFF11283F))))
-                            .border(1.5.dp, CyberNeonGradient, RoundedCornerShape(20.dp))
+                            .height(60.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color(0xFF0A1B2C),
+                                        Color(0xFF05101C)
+                                    )
+                                )
+                            )
+                            .border(
+                                1.2.dp,
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color(0xFF00E5FF).copy(alpha = 0.8f),
+                                        Color(0xFF7C4DFF).copy(alpha = 0.8f)
+                                    )
+                                ),
+                                RoundedCornerShape(16.dp)
+                            )
                             .clickable(enabled = !isLockedOut) { onAuthenticateClick() }
                             .testTag("biometric_keypad_button"),
                         contentAlignment = Alignment.Center
@@ -347,95 +607,173 @@ fun LockScreen(
                         Icon(
                             imageVector = Icons.Default.Fingerprint,
                             contentDescription = "Biometric Unlock",
-                            tint = if (isLockedOut) Color.Gray else VaultPrimaryCyan,
-                            modifier = Modifier.size(32.dp)
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(30.dp)
                         )
                     }
 
-                    // Remaining Scrambled Key (Index 9)
-                    NumberKey(scrambledDigits[9], enabled = !isLockedOut, onDigitClick = { digit ->
-                        if (!isLockedOut && enteredPin.length < 4) {
-                            val newPin = enteredPin + digit
-                            enteredPin = newPin
-                            if (newPin.length == 4) {
-                                onPinSubmit(newPin)
-                            }
-                        }
-                    })
+                    // Remaining Scrambled Key
+                    FuturisticNumberKey(
+                        digit = scrambledDigits[9],
+                        enabled = !isLockedOut,
+                        onDigitClick = onDigitClick
+                    )
 
                     // Backspace Key
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(68.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Brush.linearGradient(listOf(Color(0xFF2E0915), Color(0xFF450D20))))
-                            .border(1.5.dp, Brush.horizontalGradient(listOf(VaultErrorRed, VaultNeonPink)), RoundedCornerShape(20.dp))
-                            .clickable(enabled = !isLockedOut) {
-                                if (enteredPin.isNotEmpty()) {
-                                    enteredPin = enteredPin.dropLast(1)
-                                }
-                            }
+                            .height(60.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color(0xFF220A14),
+                                        Color(0xFF14050C)
+                                    )
+                                )
+                            )
+                            .border(
+                                1.2.dp,
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color(0xFFFF1744).copy(alpha = 0.8f),
+                                        Color(0xFFFF2A85).copy(alpha = 0.8f)
+                                    )
+                                ),
+                                RoundedCornerShape(16.dp)
+                            )
+                            .clickable(enabled = !isLockedOut) { onBackspaceClick() }
                             .testTag("backspace_keypad_button"),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Backspace,
                             contentDescription = "Delete",
-                            tint = if (isLockedOut) Color.Gray else VaultErrorRed,
+                            tint = Color(0xFFFF5252),
                             modifier = Modifier.size(24.dp)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // BOTTOM CRYPTOGRAPHIC TELEMETRY BADGES
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                CyberSpecBadge(
+                    label = "AES-256-GCM",
+                    activeColor = Color(0xFF00E676),
+                    modifier = Modifier.weight(1f)
+                )
+                CyberSpecBadge(
+                    label = "ARGON2ID 64M",
+                    activeColor = Color(0xFF00E5FF),
+                    modifier = Modifier.weight(1f)
+                )
+                CyberSpecBadge(
+                    label = "ZERO CLOUD",
+                    activeColor = Color(0xFFFFB300),
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
     }
-}
 }
 
 @Composable
 private fun KeypadRow(content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         content()
     }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.NumberKey(
+private fun androidx.compose.foundation.layout.RowScope.FuturisticNumberKey(
     digit: String,
     enabled: Boolean = true,
     onDigitClick: (String) -> Unit
 ) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(68.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .height(60.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(
-                if (enabled) Brush.verticalGradient(listOf(Color(0xFF0F1B2B), Color(0xFF0B1420)))
-                else Brush.verticalGradient(listOf(Color(0xFF070C12), Color(0xFF070C12)))
+                if (enabled) Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF0D1B2D),
+                        Color(0xFF08121E)
+                    )
+                )
+                else Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF070C12),
+                        Color(0xFF070C12)
+                    )
+                )
             )
             .border(
                 1.dp,
-                if (enabled) Brush.horizontalGradient(listOf(Color(0xFF1E3852), Color(0xFF284868)))
-                else Brush.horizontalGradient(listOf(Color(0xFF111C28), Color(0xFF111C28))),
-                RoundedCornerShape(20.dp)
+                if (enabled) Brush.horizontalGradient(
+                    listOf(
+                        Color(0xFF1A334E),
+                        Color(0xFF24466B)
+                    )
+                )
+                else Brush.horizontalGradient(
+                    listOf(
+                        Color(0xFF111C28),
+                        Color(0xFF111C28)
+                    )
+                ),
+                RoundedCornerShape(16.dp)
             )
-            .clickable(enabled = enabled) { onDigitClick(digit) }
+            .clickable(enabled = enabled) {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                onDigitClick(digit)
+            }
             .testTag("keypad_$digit"),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = digit,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (enabled) Color.White else Color(0xFF4A5568)
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = digit,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (enabled) Color.White else Color(0xFF4A5568)
+            )
+            Text(
+                text = when (digit) {
+                    "1" -> "•••"
+                    "2" -> "ABC"
+                    "3" -> "DEF"
+                    "4" -> "GHI"
+                    "5" -> "JKL"
+                    "6" -> "MNO"
+                    "7" -> "PQRS"
+                    "8" -> "TUV"
+                    "9" -> "WXYZ"
+                    else -> "HEX"
+                },
+                fontSize = 7.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (enabled) Color(0xFF00E5FF).copy(alpha = 0.6f) else Color(0xFF334155),
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 0.8.sp
+            )
+        }
     }
 }
 
