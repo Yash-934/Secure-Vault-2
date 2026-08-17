@@ -510,7 +510,7 @@ fun VaultNavHost(
                     vaultViewModel.pendingExportPassword = null
                     vaultViewModel.pendingExportUri = null
                 },
-                onConfirm = { password, isDeviceLocked ->
+                onConfirm = { password, isDeviceLocked, _ ->
                     showExportPasswordDialog = false
                     vaultViewModel.pendingExportIsDeviceLocked = isDeviceLocked
                     val pendingUri = vaultViewModel.pendingExportUri
@@ -532,15 +532,16 @@ fun VaultNavHost(
                 title = "Decrypt Master Backup",
                 subtitle = "Enter the password used when creating this backup file (V3 Argon2id / V2).",
                 isExportMode = false,
+                showRestoreModeOptions = true,
                 onDismiss = {
                     showImportPasswordDialog = false
                     vaultViewModel.pendingImportUri = null
                 },
-                onConfirm = { password, _ ->
+                onConfirm = { password, _, isReplaceMode ->
                     showImportPasswordDialog = false
                     val uri = vaultViewModel.pendingImportUri ?: return@BackupPasswordDialog
                     vaultViewModel.pendingImportUri = null
-                    vaultViewModel.importMasterBackup(context, password, uri)
+                    vaultViewModel.importMasterBackup(context, password, uri, isReplaceMode)
                 }
             )
         }
@@ -556,7 +557,7 @@ fun VaultNavHost(
                     vaultViewModel.pendingStegoPassword = null
                     vaultViewModel.pendingStegoCoverUri = null
                 },
-                onConfirm = { password, _ ->
+                onConfirm = { password, _, _ ->
                     showStegoEmbedPasswordDialog = false
                     vaultViewModel.pendingStegoPassword = password
                     vaultViewModel.onSystemPickerLaunched()
@@ -571,15 +572,16 @@ fun VaultNavHost(
                 title = "Decrypt Multi-Carrier Stego",
                 subtitle = "Enter the password to extract and restore the vault hidden inside this carrier file.",
                 isExportMode = false,
+                showRestoreModeOptions = true,
                 onDismiss = {
                     showStegoExtractPasswordDialog = false
                     vaultViewModel.pendingStegoExtractUri = null
                 },
-                onConfirm = { password, _ ->
+                onConfirm = { password, _, isReplaceMode ->
                     showStegoExtractPasswordDialog = false
                     val uri = vaultViewModel.pendingStegoExtractUri ?: return@BackupPasswordDialog
                     vaultViewModel.pendingStegoExtractUri = null
-                    vaultViewModel.importStegoBackup(context, password, uri)
+                    vaultViewModel.importStegoBackup(context, password, uri, isReplaceMode)
                 }
             )
         }

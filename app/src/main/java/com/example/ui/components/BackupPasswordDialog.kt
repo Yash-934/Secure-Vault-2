@@ -31,6 +31,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -63,12 +65,14 @@ fun BackupPasswordDialog(
     title: String,
     subtitle: String,
     isExportMode: Boolean = false,
+    showRestoreModeOptions: Boolean = false,
     onDismiss: () -> Unit,
-    onConfirm: (password: String, isDeviceLocked: Boolean) -> Unit
+    onConfirm: (password: String, isDeviceLocked: Boolean, isReplaceMode: Boolean) -> Unit
 ) {
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var isDeviceLocked by remember { mutableStateOf(false) }
+    var isReplaceMode by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val (strengthScore, strengthLabel) = remember(password) {
@@ -216,6 +220,57 @@ fun BackupPasswordDialog(
                             }
                         }
                     }
+                } else if (showRestoreModeOptions) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Restore Mode",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = BrightCyan
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    
+                    // Merge Option
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { isReplaceMode = false }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        RadioButton(
+                            selected = !isReplaceMode,
+                            onClick = { isReplaceMode = false },
+                            colors = RadioButtonDefaults.colors(selectedColor = BrightCyan)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Column {
+                            Text(text = "Merge with current", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                            Text(text = "Adds backup items to your existing vault.", fontSize = 11.sp, color = SubtitleText)
+                        }
+                    }
+                    
+                    // Replace Option
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { isReplaceMode = true }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        RadioButton(
+                            selected = isReplaceMode,
+                            onClick = { isReplaceMode = true },
+                            colors = RadioButtonDefaults.colors(selectedColor = BrightCyan)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Column {
+                            Text(text = "Replace current", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                            Text(text = "Wipes your existing vault before restoring.", fontSize = 11.sp, color = Color(0xFFFF4D6D))
+                        }
+                    }
                 }
 
                 if (errorMessage != null) {
@@ -234,7 +289,7 @@ fun BackupPasswordDialog(
                     if (password.length < 4) {
                         errorMessage = "Password must be at least 4 characters."
                     } else {
-                        onConfirm(password, isDeviceLocked)
+                        onConfirm(password, isDeviceLocked, isReplaceMode)
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = BrightCyan, contentColor = Color.Black),

@@ -537,17 +537,20 @@ class VaultViewModel(
         }
     }
 
-    fun importStegoBackup(context: Context, masterPassword: String, stegoUri: android.net.Uri) {
+    fun importStegoBackup(context: Context, masterPassword: String, stegoUri: android.net.Uri, isReplaceMode: Boolean = false) {
         _isProcessing.value = true
         _backupRestoreProgress.value = BackupRestoreProgressState(
             isActive = true,
             type = BackupRestoreType.STEGO_RESTORE,
             title = "STEGO DISASTER RECOVERY",
             subtitle = "Extracting Concealed Vault Payload",
-            currentStep = "Reading cover file stream...",
+            currentStep = if (isReplaceMode) "Wiping current vault..." else "Reading cover file stream...",
             progress = 0.1f
         )
         viewModelScope.launch {
+            if (isReplaceMode) {
+                repository.deleteAllVaultItems(context)
+            }
             val tempStegoFile = java.io.File(context.cacheDir, "temp_incoming_stego_${System.currentTimeMillis()}.tmp")
             val tempExtractedBackupFile = java.io.File(context.cacheDir, "temp_extracted_backup_${System.currentTimeMillis()}.bin")
             try {
@@ -721,18 +724,22 @@ class VaultViewModel(
         }
     }
 
-    fun importMasterBackup(context: Context, masterPassword: String, sourceUri: android.net.Uri) {
+    fun importMasterBackup(context: Context, masterPassword: String, sourceUri: android.net.Uri, isReplaceMode: Boolean = false) {
         _isProcessing.value = true
         _backupRestoreProgress.value = BackupRestoreProgressState(
             isActive = true,
             type = BackupRestoreType.RESTORE,
             title = "DISASTER RECOVERY RESTORE",
             subtitle = "Decrypting & Rebuilding Vault Database",
-            currentStep = "Validating backup archive header...",
+            currentStep = if (isReplaceMode) "Wiping current vault..." else "Validating backup archive header...",
             progress = 0f
         )
         viewModelScope.launch {
             try {
+                if (isReplaceMode) {
+                    repository.deleteAllVaultItems(context)
+                }
+                
                 val inputStream = context.contentResolver.openInputStream(sourceUri)
                 if (inputStream == null) {
                     _backupRestoreProgress.value = _backupRestoreProgress.value.copy(

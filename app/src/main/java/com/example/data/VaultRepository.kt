@@ -411,6 +411,23 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
         VaultLogger.log(context, "VaultRepository", "Deleted vault item from DB and shredded encrypted file: ID=${item.id}, name='${item.originalName}'")
     }
 
+    suspend fun deleteAllVaultItems(context: Context) = withContext(Dispatchers.IO) {
+        val vaultDir = File(context.filesDir, vaultDirName)
+        if (vaultDir.exists()) {
+            vaultDir.listFiles()?.forEach { file ->
+                com.example.security.SelfDestructManager.shredFile(file)
+            }
+        }
+        val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
+        if (thumbDir.exists()) {
+            thumbDir.listFiles()?.forEach { file ->
+                com.example.security.SelfDestructManager.shredFile(file)
+            }
+        }
+        vaultDao.deleteAllItems()
+        VaultLogger.log(context, "VaultRepository", "Wiped all vault items for Replace Restore.")
+    }
+
     /**
      * Decrypts vault item and restores it back to public gallery (Downloads/Vault or Pictures/Vault).
      */
