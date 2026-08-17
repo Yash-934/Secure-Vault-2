@@ -45,7 +45,7 @@ object NativeIntegrityVerifier {
             val nativeResult = NativeBridge.runObfuscatedCheck()
             globalSecurityState = nativeResult
             nativeResult
-        } catch (e: UnsatisfiedLinkError) {
+        } catch (e: Throwable) {
             // Fallback to Kotlin-based obfuscation if JNI is unavailable
             var state = 0x01
             var accumulator = 0xA5A5

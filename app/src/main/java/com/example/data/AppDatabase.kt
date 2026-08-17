@@ -35,7 +35,6 @@ abstract class AppDatabase : RoomDatabase() {
                         .openHelperFactory(factory)
                         .fallbackToDestructiveMigration(true)
                         .build()
-                    db.openHelper.writableDatabase
                     INSTANCE = db
                     db
                 } catch (e: Throwable) {
@@ -72,7 +71,6 @@ abstract class AppDatabase : RoomDatabase() {
                         .openHelperFactory(factory)
                         .fallbackToDestructiveMigration(true)
                         .build()
-                    db.openHelper.writableDatabase
                     DECOY_INSTANCE = db
                     db
                 } catch (e: Throwable) {

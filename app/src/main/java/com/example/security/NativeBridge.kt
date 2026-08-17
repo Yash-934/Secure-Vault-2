@@ -6,8 +6,7 @@ object NativeBridge {
     init {
         try {
             System.loadLibrary("native-lib")
-        } catch (e: UnsatisfiedLinkError) {
-            // Graceful fallback if native library is missing or architecture is unsupported
+        } catch (e: Throwable) {
             e.printStackTrace()
         }
     }
