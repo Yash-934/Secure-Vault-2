@@ -81,18 +81,6 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             MyApplicationTheme {
-                val isSettingsLoaded by settingsViewModel.isSettingsLoaded.collectAsStateWithLifecycle()
-                
-                if (!isSettingsLoaded) {
-                    // Show a completely blank/black screen while loading to prevent camouflage flashes
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black)
-                    )
-                    return@MyApplicationTheme
-                }
-
                 if (isRooted) {
                     com.example.ui.screens.RootWarningScreen()
                     return@MyApplicationTheme

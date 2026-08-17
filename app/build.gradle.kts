@@ -112,7 +112,7 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  implementation("net.zetetic:android-database-sqlcipher:4.5.4")
+  // implementation("net.zetetic:android-database-sqlcipher:4.5.4")
   implementation("androidx.sqlite:sqlite-ktx:2.4.0")
   implementation(libs.coil.compose)
   implementation(libs.androidx.biometric)

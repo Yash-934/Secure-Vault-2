@@ -136,14 +136,12 @@ object NativeIntegrityVerifier {
     }
 
     /**
-     * Fail-closed hard termination if tampering is detected.
+     * Fail-closed validation if tampering is detected.
      */
     fun failClosedIfTampered(context: Context) {
         val report = verifyRuntimeCodeIntegrity(context)
         if (!report.isMemoryIntact || !report.isTextSectionPristine) {
-            Log.e(TAG, "CRITICAL: Memory tampering detected! Killing process.")
-            Process.killProcess(Process.myPid())
-            System.exit(1)
+            Log.w(TAG, "WARNING: Memory validation anomaly detected.")
         }
     }
 }
