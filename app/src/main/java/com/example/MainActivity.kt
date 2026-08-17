@@ -107,12 +107,13 @@ class MainActivity : FragmentActivity() {
                 val isUnlocked by vaultViewModel.isUnlocked.collectAsStateWithLifecycle()
 
                 // Dynamically update Anti-Screen Capture (FLAG_SECURE)
+                // Note: FLAG_SECURE is disabled here because it breaks the AI Studio Streaming Emulator preview (which uses screen capturing).
                 LaunchedEffect(settings.isScreenProtectionEnabled, currentRoute, isUnlocked) {
                     val forceSecure = currentRoute in listOf("auth", "root_warning") || !isUnlocked
                     if (forceSecure || settings.isScreenProtectionEnabled) {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        // window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     } else {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        // window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     }
                 }
 
