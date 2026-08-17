@@ -27,7 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "secure_vault_db"
                 )
                     .openHelperFactory(factory)
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigration(true)
                     .build()
                 INSTANCE = instance
                 pass.fill(0)
@@ -48,7 +48,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "decoy_vault_db"
                 )
                     .openHelperFactory(factory)
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigration(true)
                     .build()
                 DECOY_INSTANCE = instance
                 pass.fill(0)

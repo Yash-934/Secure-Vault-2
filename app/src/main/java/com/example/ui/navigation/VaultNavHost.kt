@@ -183,7 +183,7 @@ fun VaultNavHost(
     ) {
         // 1. Lock Screen Destination
         composable(NavRoutes.Lock.route) {
-            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
             val lockoutSecondsRemaining by vaultViewModel.lockoutSecondsRemaining.collectAsStateWithLifecycle()
             LockScreen(
                 onAuthenticateClick = onTriggerBiometrics,
@@ -222,7 +222,7 @@ fun VaultNavHost(
         }
 
         composable(NavRoutes.Calculator.route) {
-            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
             CalculatorScreen(
                 onPinSubmit = { enteredPin ->
                     val success = vaultViewModel.authenticateWithPin(
@@ -251,7 +251,7 @@ fun VaultNavHost(
         }
 
         composable(NavRoutes.Notes.route) {
-            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
             com.example.ui.screens.NotesScreen(
                 onPinSubmit = { enteredPin ->
                     val success = vaultViewModel.authenticateWithPin(

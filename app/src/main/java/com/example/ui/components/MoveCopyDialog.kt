@@ -120,7 +120,7 @@ fun MoveCopyDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Divider(color = VaultBorder, thickness = 1.dp)
+                HorizontalDivider(color = VaultBorder, thickness = 1.dp)
 
                 Spacer(modifier = Modifier.height(12.dp))
 
