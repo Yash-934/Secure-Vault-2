@@ -110,7 +110,6 @@ import com.example.ui.components.CyberVaultHudDeck
 import com.example.ui.components.FileDetailsDialog
 import com.example.ui.components.MoveCopyDialog
 import com.example.ui.components.PlaceholderLoadingCard
-import com.example.ui.components.RecentFilesSection
 import com.example.ui.components.SortFilterDialog
 import com.example.ui.components.VaultItemThumbnail
 import com.example.ui.components.VaultSortOption
@@ -585,17 +584,6 @@ fun DashboardScreen(
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
-
-                // Recent Encrypted Files Strip
-                if (!isSearchActive && vaultItems.isNotEmpty() && selectedFolder == "ALL") {
-                    RecentFilesSection(
-                        items = vaultItems,
-                        isThumbnailsEnabled = isThumbnailsEnabled,
-                        onItemClick = onItemClick,
-                        onItemLongClick = { fileDetailsTargetItem = it }
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                }
 
                 // Files Section Controls Header (Sort/Filter & Grid/List Layout)
                 Row(
