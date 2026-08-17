@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -31,10 +32,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.MainActivity
 import com.example.ui.theme.MyApplicationTheme
+import com.example.util.VaultLogger
 
 /**
  * Diagnostics & Emergency Recovery Activity.
@@ -92,8 +96,10 @@ fun ErrorFallbackContent(
     onRestart: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
+    val persistentLogs = remember { VaultLogger.readLogs(context) }
 
     Column(
         modifier = modifier
@@ -130,7 +136,7 @@ fun ErrorFallbackContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "An initialization error occurred. Details have been captured below for diagnostics:",
+            text = "An initialization error occurred. Details and persistent audit logs have been captured below for diagnostics:",
             color = Color(0xFF94A3B8),
             fontSize = 14.sp
         )
@@ -185,6 +191,31 @@ fun ErrorFallbackContent(
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1B2A)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "PERSISTENT VAULT EVENTS LOG",
+                    color = Color(0xFF10B981),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = persistentLogs,
+                    color = Color(0xFF94A3B8),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
         Row(
@@ -193,11 +224,13 @@ fun ErrorFallbackContent(
         ) {
             OutlinedButton(
                 onClick = {
-                    clipboardManager.setText(AnnotatedString("$errorMessage\n\n$stackTrace"))
+                    clipboardManager.setText(AnnotatedString("$errorMessage\n\n$stackTrace\n\n--- VAULT LOGS ---\n$persistentLogs"))
                 },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(10.dp)
             ) {
+                Icon(Icons.Default.Article, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.size(6.dp))
                 Text("Copy Log")
             }
 

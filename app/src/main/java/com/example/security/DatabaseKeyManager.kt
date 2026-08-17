@@ -5,8 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
-import java.io.IOException
-import java.security.GeneralSecurityException
+import com.example.util.VaultLogger
 import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -24,8 +23,15 @@ object DatabaseKeyManager {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val GCM_TAG_LENGTH_BITS = 128
 
+    @Volatile
+    private var cachedPassphrase: ByteArray? = null
+
     @Synchronized
     fun getDatabasePassphrase(context: Context): ByteArray {
+        cachedPassphrase?.let {
+            return it.clone()
+        }
+
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val encryptedB64 = prefs.getString(PREF_KEY_ENCRYPTED, null)
         val ivB64 = prefs.getString(PREF_KEY_IV, null)
@@ -40,15 +46,20 @@ object DatabaseKeyManager {
                 val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, ivBytes)
                 cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
                 val decryptedPass = cipher.doFinal(encryptedBytes)
-                if (decryptedPass.isNotEmpty()) {
+                if (decryptedPass != null && decryptedPass.isNotEmpty()) {
+                    cachedPassphrase = decryptedPass.clone()
+                    VaultLogger.log(context, TAG, "Successfully unwrapped persistent database passphrase from Android Keystore")
                     return decryptedPass
+                } else {
+                    throw IllegalStateException("Decrypted database passphrase was empty")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Exception decrypting DB passphrase, regenerating", e)
+                VaultLogger.logError(context, TAG, "Failed to unwrap persistent database encryption key from Android Keystore. Refusing to regenerate.", e)
+                throw IllegalStateException("Database encryption key could not be unwrapped from Android Keystore: ${e.localizedMessage}. Cannot proceed to avoid data loss.", e)
             }
         }
 
-        // Generate a new 32-byte cryptographically secure database passphrase
+        // Generate a new 32-byte cryptographically secure database passphrase (only on fresh vault creation)
         val rawPassphrase = ByteArray(32)
         SecureRandom().nextBytes(rawPassphrase)
 
@@ -59,15 +70,23 @@ object DatabaseKeyManager {
             val iv = cipher.iv
             val cipherBytes = cipher.doFinal(rawPassphrase)
 
-            prefs.edit()
+            val editor = prefs.edit()
                 .putString(PREF_KEY_ENCRYPTED, Base64.encodeToString(cipherBytes, Base64.NO_WRAP))
                 .putString(PREF_KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
                 .remove("persistent_db_passphrase_hex") // Clean up any legacy plaintext
-                .apply()
+            
+            val committed = editor.commit() // Synchronous commit to ensure disk persistence immediately
+            if (!committed) {
+                Log.w(TAG, "Shared preferences commit returned false, falling back to apply")
+                editor.apply()
+            }
+            VaultLogger.log(context, TAG, "Generated and securely stored new 256-bit database encryption key in Android Keystore")
         } catch (e: Exception) {
-            Log.e(TAG, "Exception wrapping DB passphrase", e)
+            VaultLogger.logError(context, TAG, "Exception wrapping DB passphrase with Keystore", e)
+            throw IllegalStateException("Failed to securely store database encryption key in Keystore: ${e.localizedMessage}", e)
         }
 
+        cachedPassphrase = rawPassphrase.clone()
         return rawPassphrase
     }
 

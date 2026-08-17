@@ -41,7 +41,8 @@ object SelfDestructManager {
                     "VaultMasterKey",
                     "SecureVaultAES256MasterKey",
                     "SecureVaultDexKey",
-                    "SecureVaultHardwareAttestationKey_v2"
+                    "SecureVaultHardwareAttestationKey_v2",
+                    "QuantumVaultDbKeyWrapMaster"
                 )
                 aliasesToDelete.forEach { alias ->
                     if (keyStore.containsAlias(alias)) {

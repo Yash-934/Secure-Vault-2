@@ -5,7 +5,8 @@ data class SecurityCheckItem(
     val category: String,
     val passed: Boolean,
     val weight: Int,
-    val description: String
+    val description: String,
+    val terminalOutput: String = ""
 )
 
 /**

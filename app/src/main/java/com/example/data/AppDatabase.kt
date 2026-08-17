@@ -6,8 +6,11 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.security.DatabaseKeyManager
+import com.example.util.VaultLogger
 import net.sqlcipher.database.SQLiteDatabase
 import net.sqlcipher.database.SupportFactory
+import java.io.File
+import java.io.FileInputStream
 
 @Database(entities = [VaultItem::class, VaultFolder::class, IntruderLog::class, VaultPassword::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
@@ -35,29 +38,19 @@ abstract class AppDatabase : RoomDatabase() {
                 }
 
                 val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
-                ensureDatabaseValid(appCtx, "secure_vault_db", passphrase)
+                ensureDatabaseValid(appCtx, "secure_vault_db")
                 val factory = SupportFactory(passphrase)
 
-                val db = try {
-                    Room.databaseBuilder(
-                        appCtx,
-                        AppDatabase::class.java,
-                        "secure_vault_db"
-                    )
-                        .openHelperFactory(factory)
-                        .fallbackToDestructiveMigration(true)
-                        .build()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Database builder error, retrying", e)
-                    Room.databaseBuilder(
-                        appCtx,
-                        AppDatabase::class.java,
-                        "secure_vault_db"
-                    )
-                        .openHelperFactory(factory)
-                        .fallbackToDestructiveMigration(true)
-                        .build()
-                }
+                val db = Room.databaseBuilder(
+                    appCtx,
+                    AppDatabase::class.java,
+                    "secure_vault_db"
+                )
+                    .openHelperFactory(factory)
+                    .fallbackToDestructiveMigration(true)
+                    .build()
+
+                VaultLogger.log(appCtx, TAG, "Initialized primary encrypted Room database with SQLCipher")
                 INSTANCE = db
                 db
             }
@@ -75,58 +68,48 @@ abstract class AppDatabase : RoomDatabase() {
                 }
 
                 val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
-                ensureDatabaseValid(appCtx, "decoy_vault_db", passphrase)
+                ensureDatabaseValid(appCtx, "decoy_vault_db")
                 val factory = SupportFactory(passphrase)
 
-                val db = try {
-                    Room.databaseBuilder(
-                        appCtx,
-                        AppDatabase::class.java,
-                        "decoy_vault_db"
-                    )
-                        .openHelperFactory(factory)
-                        .fallbackToDestructiveMigration(true)
-                        .build()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Decoy database builder error, retrying", e)
-                    Room.databaseBuilder(
-                        appCtx,
-                        AppDatabase::class.java,
-                        "decoy_vault_db"
-                    )
-                        .openHelperFactory(factory)
-                        .fallbackToDestructiveMigration(true)
-                        .build()
-                }
+                val db = Room.databaseBuilder(
+                    appCtx,
+                    AppDatabase::class.java,
+                    "decoy_vault_db"
+                )
+                    .openHelperFactory(factory)
+                    .fallbackToDestructiveMigration(true)
+                    .build()
+
+                VaultLogger.log(appCtx, TAG, "Initialized decoy encrypted Room database with SQLCipher")
                 DECOY_INSTANCE = db
                 db
             }
         }
 
-        private fun ensureDatabaseValid(context: Context, dbName: String, passphrase: ByteArray) {
+        private fun ensureDatabaseValid(context: Context, dbName: String) {
             val dbFile = context.getDatabasePath(dbName)
-            if (dbFile.exists() && dbFile.length() > 0) {
-                var testDb: SQLiteDatabase? = null
-                try {
-                    val passString = String(passphrase, Charsets.ISO_8859_1)
-                    testDb = SQLiteDatabase.openDatabase(
-                        dbFile.absolutePath,
-                        passString,
-                        null,
-                        SQLiteDatabase.OPEN_READWRITE
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "Database $dbName cannot be opened with current key (legacy unencrypted or key changed). Deleting to recreate securely.", e)
+            if (dbFile.exists() && dbFile.length() >= 16) {
+                if (isPlaintextSqliteHeader(dbFile)) {
+                    VaultLogger.log(context, TAG, "Detected legacy unencrypted plaintext database: $dbName. Removing legacy file to migrate to SQLCipher.")
                     try {
                         context.deleteDatabase(dbName)
-                    } catch (delEx: Exception) {
-                        Log.e(TAG, "Failed to delete incompatible database $dbName", delEx)
+                    } catch (e: Exception) {
+                        VaultLogger.logError(context, TAG, "Failed to delete legacy plaintext database: $dbName", e)
                     }
-                } finally {
-                    try {
-                        testDb?.close()
-                    } catch (_: Exception) {}
+                } else {
+                    VaultLogger.log(context, TAG, "Verified encrypted SQLCipher database container exists for: $dbName (${dbFile.length()} bytes)")
                 }
+            }
+        }
+
+        private fun isPlaintextSqliteHeader(dbFile: File): Boolean {
+            return try {
+                val header = ByteArray(16)
+                FileInputStream(dbFile).use { it.read(header) }
+                val sqliteMagic = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
+                header.contentEquals(sqliteMagic)
+            } catch (e: Exception) {
+                false
             }
         }
     }

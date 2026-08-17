@@ -85,12 +85,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.AppDatabase
 import com.example.data.local.VaultSettings
 import com.example.security.AuditResult
 import com.example.ui.components.AntiTamperReportDialog
 import com.example.ui.components.ChangePinDialog
+import com.example.ui.components.NuclearSelfDestructDialog
 import com.example.ui.components.SecurityArchitectureDialog
+import com.example.ui.components.SecurityEnclaveScannerDialog
 import com.example.ui.components.MaxSecurityGuideDialog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -141,7 +148,10 @@ fun SettingsScreen(
     var showMaxSecurityGuideDialog by remember { mutableStateOf(false) }
     var showSecurityArchitectureDialog by remember { mutableStateOf(false) }
     var showAntiTamperDialog by remember { mutableStateOf(false) }
+    var showSecurityEnclaveScannerDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val intruderLogsFlow = remember { AppDatabase.getDatabase(context).intruderLogDao().getAllLogs() }
+    val intruderLogs by intruderLogsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     LaunchedEffect(statusMessage) {
         if (!statusMessage.isNullOrEmpty()) {
@@ -1400,41 +1410,30 @@ fun SettingsScreen(
             }
 
             if (showConfirmSelfDestructDialog) {
-                AlertDialog(
-                    onDismissRequest = { showConfirmSelfDestructDialog = false },
-                    containerColor = DarkNavyBg,
-                    title = {
-                        Text(
-                            text = "DANGER: NUCLEAR SELF-DESTRUCT",
-                            color = PanicRed,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    },
-                    text = {
-                        Text(
-                            text = "Are you absolutely sure? This action will zero-overwrite and shred ALL files, database entries, keys, and logs in internal storage immediately. This CANNOT be undone!",
-                            color = Color.White,
-                            fontSize = 13.sp
-                        )
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                showConfirmSelfDestructDialog = false
-                                onExecuteSelfDestructClick()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = PanicRed, contentColor = Color.White)
-                        ) {
-                            Text("CONFIRM SHRED")
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showConfirmSelfDestructDialog = false }) {
-                            Text("Cancel", color = SubtitleText)
-                        }
+                NuclearSelfDestructDialog(
+                    masterPin = settings.masterPin,
+                    onDismiss = { showConfirmSelfDestructDialog = false },
+                    onConfirmSelfDestruct = {
+                        showConfirmSelfDestructDialog = false
+                        onExecuteSelfDestructClick()
                     }
+                )
+            }
+
+            if (showSecurityEnclaveScannerDialog) {
+                SecurityEnclaveScannerDialog(
+                    auditResult = auditResult,
+                    isAuditing = isAuditing,
+                    intruderLogs = intruderLogs,
+                    onRunAudit = onRunAudit,
+                    onClearIntruderLogs = {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                AppDatabase.getDatabase(context).intruderLogDao().clearLogs()
+                            } catch (_: Exception) {}
+                        }
+                    },
+                    onDismiss = { showSecurityEnclaveScannerDialog = false }
                 )
             }
 

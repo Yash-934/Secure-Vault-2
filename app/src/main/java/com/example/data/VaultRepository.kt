@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import com.example.security.CryptoManager
+import com.example.util.VaultLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
@@ -208,6 +209,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             )
             val generatedId = vaultDao.insertVaultItem(vaultItem)
             val savedVaultItem = vaultItem.copy(id = generatedId)
+            VaultLogger.log(context, "VaultRepository", "Imported and securely encrypted item: ID=$generatedId, originalName='$originalName', size=$sizeBytes bytes, folder='$targetFolder'")
 
             if (thumbnailBitmap != null) {
                 com.example.security.VaultThumbnailManager.saveThumbnail(context, savedVaultItem, thumbnailBitmap)
@@ -406,6 +408,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             if (thumbFile.exists()) com.example.security.SelfDestructManager.shredFile(thumbFile)
         } catch (_: Throwable) {}
         vaultDao.deleteVaultItem(item)
+        VaultLogger.log(context, "VaultRepository", "Deleted vault item from DB and shredded encrypted file: ID=${item.id}, name='${item.originalName}'")
     }
 
     /**

@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.util.Log
 import com.example.ui.screens.ErrorFallbackActivity
+import com.example.util.VaultLogger
 import net.sqlcipher.database.SQLiteDatabase
 import java.io.File
 import java.io.PrintWriter
@@ -15,17 +16,22 @@ class VaultApplication : Application() {
         super.onCreate()
         
         setupGlobalExceptionHandler()
+        VaultLogger.log(this, "VaultApplication", "Quantum Vault Application starting up")
 
         try {
             SQLiteDatabase.loadLibs(this)
+            VaultLogger.log(this, "VaultApplication", "SQLCipher native libraries initialized successfully")
         } catch (e: UnsatisfiedLinkError) {
             Log.e("VaultApplication", "SQLCipher native libraries load failure", e)
+            VaultLogger.logError(this, "VaultApplication", "SQLCipher native libraries load failure", e)
             logStartupErrorToFile(e)
         } catch (e: SecurityException) {
             Log.e("VaultApplication", "Security exception while loading SQLCipher", e)
+            VaultLogger.logError(this, "VaultApplication", "Security exception while loading SQLCipher", e)
             logStartupErrorToFile(e)
         } catch (e: Exception) {
             Log.e("VaultApplication", "Exception during SQLCipher initialization", e)
+            VaultLogger.logError(this, "VaultApplication", "Exception during SQLCipher initialization", e)
             logStartupErrorToFile(e)
         }
     }
@@ -35,6 +41,7 @@ class VaultApplication : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 Log.e("VaultApplication", "FATAL UNCAUGHT EXCEPTION on thread ${thread.name}", throwable)
+                VaultLogger.logError(this, "VaultApplication", "FATAL UNCAUGHT EXCEPTION on thread ${thread.name}", throwable)
                 logStartupErrorToFile(throwable)
 
                 val stringWriter = StringWriter()
