@@ -134,22 +134,89 @@ fun AboutScreen(onBackClick: () -> Unit) {
             
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 3. Tech Stack / Features Section
-            Text(
-                text = "TECH STACK & CAPABILITIES",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = BrightCyan,
-                fontFamily = FontFamily.Monospace,
-                letterSpacing = 1.5.sp,
-                modifier = Modifier.align(Alignment.Start).padding(start = 4.dp, bottom = 12.dp)
-            )
+            // 3. Security Architecture & Tech Stack Box (Redesigned from Screenshot)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
+                    // Header Row with Red Shield Icon
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(bottom = 20.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = Color(0xFFFF2A4B),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "SECURITY ARCHITECTURE",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFB0BEC5),
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.6.sp
+                        )
+                    }
 
-            TechStackChip(label = "AES-256-GCM Encryption")
-            Spacer(modifier = Modifier.height(10.dp))
-            TechStackChip(label = "Zero Cloud Tracking")
-            Spacer(modifier = Modifier.height(10.dp))
-            TechStackChip(label = "100% Offline")
+                    // Architecture Items
+                    SecurityArchItem(
+                        title = "AES-256-GCM",
+                        subtitle = "Authenticated Symmetric Encryption"
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    SecurityArchItem(
+                        title = "Argon2id KDF",
+                        subtitle = "Memory-hard brute-force resistance"
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    SecurityArchItem(
+                        title = "Hardware Keystore",
+                        subtitle = "Biometric TEE/StrongBox attestation"
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    SecurityArchItem(
+                        title = "Anti-Tamper & Root",
+                        subtitle = "Detects Magisk, KernelSU, and Frida"
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    SecurityArchItem(
+                        title = "Stealth Disguise",
+                        subtitle = "Decoy applications & covert triggers"
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    SecurityArchItem(
+                        title = "Multi-Carrier Steganography",
+                        subtitle = "Conceal vault payloads in MP4, PDF & Images"
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    SecurityArchItem(
+                        title = "Zero Cloud Telemetry",
+                        subtitle = "100% Air-gapped offline data custody"
+                    )
+                }
+            }
             
             Spacer(modifier = Modifier.height(32.dp))
 
@@ -203,29 +270,35 @@ fun AboutScreen(onBackClick: () -> Unit) {
 }
 
 @Composable
-fun TechStackChip(label: String) {
-    Card(
+private fun SecurityArchItem(
+    title: String,
+    subtitle: String
+) {
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+        verticalAlignment = Alignment.Top
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(BrightCyan)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
+        Box(
+            modifier = Modifier
+                .padding(top = 6.dp)
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(BrightCyan)
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.fillMaxWidth()) {
             Text(
-                text = label,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
+                text = title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
                 color = Color.White
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = SubtitleText,
+                lineHeight = 16.sp
             )
         }
     }

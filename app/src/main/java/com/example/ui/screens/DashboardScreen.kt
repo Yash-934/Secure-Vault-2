@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -105,9 +106,14 @@ import com.example.data.VaultFolder
 import com.example.data.VaultItem
 import com.example.ui.VaultFilterTab
 import com.example.ui.components.CreateFolderDialog
+import com.example.ui.components.CyberVaultHudDeck
+import com.example.ui.components.FileDetailsDialog
 import com.example.ui.components.MoveCopyDialog
 import com.example.ui.components.PlaceholderLoadingCard
+import com.example.ui.components.RecentFilesSection
+import com.example.ui.components.SortFilterDialog
 import com.example.ui.components.VaultItemThumbnail
+import com.example.ui.components.VaultSortOption
 import com.example.ui.theme.VaultErrorRed
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -157,9 +163,11 @@ fun DashboardScreen(
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     var isGridView by remember { mutableStateOf(true) }
+    var currentSortOption by remember { mutableStateOf(VaultSortOption.DATE_DESC) }
+    var showSortFilterDialog by remember { mutableStateOf(false) }
+    var fileDetailsTargetItem by remember { mutableStateOf<VaultItem?>(null) }
     var isScanningVault by remember { mutableStateOf(false) }
     var scanProgress by remember { mutableStateOf(100) }
-    var isHudExpanded by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
@@ -206,8 +214,8 @@ fun DashboardScreen(
         }
     }
 
-    val filteredItems = remember(vaultItems, activeFilter, searchQuery) {
-        vaultItems.filter { item ->
+    val filteredItems = remember(vaultItems, activeFilter, searchQuery, currentSortOption) {
+        val filtered = vaultItems.filter { item ->
             val matchesFilter = when (activeFilter) {
                 VaultFilterTab.ALL -> true
                 VaultFilterTab.PHOTOS -> item.mimeType.startsWith("image/")
@@ -217,6 +225,16 @@ fun DashboardScreen(
             val matchesSearch = searchQuery.isEmpty() ||
                     item.originalName.contains(searchQuery, ignoreCase = true)
             matchesFilter && matchesSearch
+        }
+
+        when (currentSortOption) {
+            VaultSortOption.DATE_DESC -> filtered.sortedByDescending { it.addedTimestamp }
+            VaultSortOption.DATE_ASC -> filtered.sortedBy { it.addedTimestamp }
+            VaultSortOption.NAME_ASC -> filtered.sortedBy { it.originalName.lowercase() }
+            VaultSortOption.NAME_DESC -> filtered.sortedByDescending { it.originalName.lowercase() }
+            VaultSortOption.SIZE_DESC -> filtered.sortedByDescending { it.sizeBytes }
+            VaultSortOption.SIZE_ASC -> filtered.sortedBy { it.sizeBytes }
+            VaultSortOption.TYPE -> filtered.sortedBy { it.mimeType }
         }
     }
 
@@ -350,17 +368,6 @@ fun DashboardScreen(
                             }
 
                             IconButton(
-                                onClick = { isGridView = !isGridView },
-                                modifier = Modifier.testTag("toggle_grid_list_button")
-                            ) {
-                                Icon(
-                                    imageVector = if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
-                                    contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
-                                    tint = BrightCyan
-                                )
-                            }
-
-                            IconButton(
                                 onClick = onToggleThumbnails,
                                 modifier = Modifier.testTag("toggle_thumbnails_button")
                             ) {
@@ -423,177 +430,15 @@ fun DashboardScreen(
                     .padding(innerPadding)
                     .padding(horizontal = 20.dp)
             ) {
-                // Cyberpunk Telemetry HUD Bar
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF06121D))
-                        .border(1.dp, Color(0xFF0F2C46), RoundedCornerShape(14.dp))
-                        .clickable { isHudExpanded = !isHudExpanded }
-                        .padding(12.dp)
-                ) {
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isScanningVault) BrightCyan else Color(0xFF00FF66))
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isScanningVault) "SCANNING VAULT ($scanProgress%)..." else "ZERO-TRUST MATRIX ACTIVE",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = BrightCyan,
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 1.sp
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(BrightCyan.copy(alpha = 0.15f))
-                                    .clickable { isScanningVault = true }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "SCAN",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = BrightCyan,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-
-                        if (isHudExpanded) {
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text(
-                                        text = "ENCRYPTED ITEMS",
-                                        fontSize = 9.sp,
-                                        color = MutedText,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                    Text(
-                                        text = "${vaultItems.size} FILES",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = "PROTECTION LEVEL",
-                                        fontSize = 9.sp,
-                                        color = MutedText,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                    Text(
-                                        text = "AES-256 GCM",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF00FF66)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = "DURESS DEFENSE",
-                                        fontSize = 9.sp,
-                                        color = MutedText,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                    Text(
-                                        text = "READY",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = BrightCyan
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Password Vault Quick-Access Bar
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF0A1420))
-                        .border(1.dp, BrightCyan.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                        .clickable { onNavigateToPasswords() }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .testTag("dashboard_password_vault_banner")
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(BrightCyan.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Key,
-                                    contentDescription = null,
-                                    tint = BrightCyan,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text(
-                                    text = "PASSWORD & SECRET VAULT",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 0.5.sp
-                                )
-                                Text(
-                                    text = "Store Logins, Bank Details & Strong Keys",
-                                    fontSize = 9.5.sp,
-                                    color = MutedText
-                                )
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(BrightCyan.copy(alpha = 0.2f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "OPEN",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = BrightCyan,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-                }
+                // Unified Compact Cyberpunk Telemetry & Storage HUD Deck
+                CyberVaultHudDeck(
+                    vaultItems = vaultItems,
+                    isScanning = isScanningVault,
+                    scanProgress = scanProgress,
+                    onStartScan = { isScanningVault = true },
+                    onNavigateToPasswords = onNavigateToPasswords,
+                    modifier = Modifier.padding(bottom = 2.dp)
+                )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -739,7 +584,111 @@ fun DashboardScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Recent Encrypted Files Strip
+                if (!isSearchActive && vaultItems.isNotEmpty() && selectedFolder == "ALL") {
+                    RecentFilesSection(
+                        items = vaultItems,
+                        isThumbnailsEnabled = isThumbnailsEnabled,
+                        onItemClick = onItemClick,
+                        onItemLongClick = { fileDetailsTargetItem = it }
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+
+                // Files Section Controls Header (Sort/Filter & Grid/List Layout)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left: Section label & Current active sort
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { showSortFilterDialog = true }
+                    ) {
+                        Text(
+                            text = "FILES (${filteredItems.size})",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = BrightCyan,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "• ${currentSortOption.displayName.substringBefore(" (")}",
+                            fontSize = 9.5.sp,
+                            color = MutedText,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    // Right: Controls (Sort & Filter Chip + Grid/List Toggle)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Sort & Filter Button
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(DarkCapsuleBg)
+                                .border(0.8.dp, CapsuleBorder, RoundedCornerShape(8.dp))
+                                .clickable { showSortFilterDialog = true }
+                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                .testTag("sort_filter_button")
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Sort,
+                                    contentDescription = "Sort & Filter",
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "SORT",
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        // Grid / List Toggle Switcher
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(DarkCapsuleBg)
+                                .border(0.8.dp, CapsuleBorder, RoundedCornerShape(8.dp))
+                                .clickable { isGridView = !isGridView }
+                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                .testTag("toggle_grid_list_button")
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
+                                    contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (isGridView) "GRID" else "LIST",
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = BrightCyan,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
 
                 if (isLoading) {
                     LazyVerticalGrid(
@@ -788,7 +737,8 @@ fun DashboardScreen(
                                     onClick = { onItemClick(item) },
                                     onDelete = { onDeleteItem(item) },
                                     onExport = { onExportItem(item) },
-                                    onMoveCopy = { moveCopyTargetItem = item }
+                                    onMoveCopy = { moveCopyTargetItem = item },
+                                    onInspectDetails = { fileDetailsTargetItem = item }
                                 )
                             } else {
                                 VaultListCard(
@@ -813,7 +763,8 @@ fun DashboardScreen(
                                     onClick = { onItemClick(item) },
                                     onDelete = { onDeleteItem(item) },
                                     onExport = { onExportItem(item) },
-                                    onMoveCopy = { moveCopyTargetItem = item }
+                                    onMoveCopy = { moveCopyTargetItem = item },
+                                    onInspectDetails = { fileDetailsTargetItem = item }
                                 )
                             }
                         }
@@ -1159,6 +1110,41 @@ fun DashboardScreen(
                 }
             )
         }
+
+        // Sort & Filter Dialog
+        if (showSortFilterDialog) {
+            SortFilterDialog(
+                currentSort = currentSortOption,
+                currentFilter = activeFilter,
+                onSortSelected = { currentSortOption = it },
+                onFilterSelected = { onFilterChanged(it) },
+                onDismiss = { showSortFilterDialog = false }
+            )
+        }
+
+        // File Details & Security Metadata Dialog
+        fileDetailsTargetItem?.let { targetItem ->
+            FileDetailsDialog(
+                item = targetItem,
+                onDismiss = { fileDetailsTargetItem = null },
+                onOpen = {
+                    fileDetailsTargetItem = null
+                    onItemClick(targetItem)
+                },
+                onMoveCopy = {
+                    fileDetailsTargetItem = null
+                    moveCopyTargetItem = targetItem
+                },
+                onExport = {
+                    fileDetailsTargetItem = null
+                    onExportItem(targetItem)
+                },
+                onDelete = {
+                    fileDetailsTargetItem = null
+                    onDeleteItem(targetItem)
+                }
+            )
+        }
     }
 }
 
@@ -1402,7 +1388,8 @@ private fun VaultGridCard(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
-    onMoveCopy: () -> Unit
+    onMoveCopy: () -> Unit,
+    onInspectDetails: () -> Unit = {}
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val (_, itemBadge) = remember(item.mimeType, item.isVideo) {
@@ -1549,6 +1536,20 @@ private fun VaultGridCard(
                                 modifier = Modifier.background(DarkCapsuleBg)
                             ) {
                                 DropdownMenuItem(
+                                    text = { Text("File Details & Security", fontSize = 12.sp, color = Color.White) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = BrightCyan
+                                        )
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onInspectDetails()
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
                                     leadingIcon = {
                                         Icon(
@@ -1629,7 +1630,8 @@ private fun VaultListCard(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
-    onMoveCopy: () -> Unit
+    onMoveCopy: () -> Unit,
+    onInspectDetails: () -> Unit = {}
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -1747,6 +1749,20 @@ private fun VaultListCard(
                         onDismissRequest = { menuExpanded = false },
                         modifier = Modifier.background(DarkCapsuleBg)
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("File Details & Security", fontSize = 12.sp, color = Color.White) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = BrightCyan
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onInspectDetails()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Move / Copy File", fontSize = 12.sp, color = Color.White) },
                             leadingIcon = {

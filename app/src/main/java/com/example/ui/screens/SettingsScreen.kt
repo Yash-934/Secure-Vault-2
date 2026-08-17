@@ -1,11 +1,22 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -140,7 +152,8 @@ fun SettingsScreen(
     onEmbedStegoClick: () -> Unit = {},
     onExtractStegoClick: () -> Unit = {},
     onNavigateToPasswords: () -> Unit = {},
-    onHelpClick: () -> Unit = {}
+    onHelpClick: () -> Unit = {},
+    onAboutClick: () -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showConfirmSelfDestructDialog by remember { mutableStateOf(false) }
@@ -298,7 +311,29 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    if (auditResult != null) {
+                    if (isAuditing) {
+                        EmbeddedRadarScanner(
+                            isScanning = true,
+                            isIdle = false,
+                            score = 0,
+                            passedCount = 0,
+                            totalCount = 20
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                    } else if (auditResult != null) {
+                        val passedCount = auditResult.checkResults.count { it.value }
+                        val totalCount = auditResult.checkResults.size
+                        val calculatedScore = if (totalCount > 0) ((passedCount.toDouble() / totalCount) * 100).toInt() else 100
+
+                        EmbeddedRadarScanner(
+                            isScanning = false,
+                            isIdle = false,
+                            score = calculatedScore,
+                            passedCount = passedCount,
+                            totalCount = totalCount
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+
                         HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
                         Spacer(modifier = Modifier.height(12.dp))
 
@@ -320,7 +355,7 @@ fun SettingsScreen(
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(
                                             if (auditResult.status == "PASS") PassGreen.copy(alpha = 0.18f)
-                                            else PanicRed.copy(alpha = 0.18f)
+                                             else PanicRed.copy(alpha = 0.18f)
                                         )
                                         .border(
                                             1.dp,
@@ -350,8 +385,8 @@ fun SettingsScreen(
 
                             val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
                             Text(
-                                text = "Scanned: ${sdf.format(Date(auditResult.timestamp))}",
-                                fontSize = 10.sp,
+                                text = "Scanned:  ${sdf.format(Date(auditResult.timestamp))}",
+                                fontSize = 11.sp,
                                 color = SubtitleText,
                                 fontFamily = FontFamily.Monospace
                             )
@@ -359,7 +394,7 @@ fun SettingsScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Checklist breakdown
+                        // Checklist breakdown - All 20 Security Matrix points
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             auditResult.checkResults.forEach { (checkName, isPassed) ->
                                 Row(
@@ -367,12 +402,12 @@ fun SettingsScreen(
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(Color(0xFF030D16))
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(20.dp)
+                                            .size(22.dp)
                                             .clip(CircleShape)
                                             .background(
                                                 if (isPassed) PassGreen.copy(alpha = 0.2f) else PanicRed.copy(
@@ -385,20 +420,20 @@ fun SettingsScreen(
                                             imageVector = if (isPassed) Icons.Default.Check else Icons.Default.Close,
                                             contentDescription = null,
                                             tint = if (isPassed) PassGreen else PanicRed,
-                                            modifier = Modifier.size(12.dp)
+                                            modifier = Modifier.size(14.dp)
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
                                     Text(
                                         text = checkName,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
                                         color = Color.White,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Text(
-                                        text = if (isPassed) "SECURE" else "WARN",
-                                        fontSize = 10.sp,
+                                        text = if (isPassed) "SECURE" else "FAIL",
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (isPassed) PassGreen else PanicRed,
                                         fontFamily = FontFamily.Monospace
@@ -407,8 +442,16 @@ fun SettingsScreen(
                             }
                         }
                     } else {
+                        EmbeddedRadarScanner(
+                            isScanning = false,
+                            isIdle = true,
+                            score = 0,
+                            passedCount = 0,
+                            totalCount = 20
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "Execute an offline 5-point environment scan verifying network isolation, keystore integrity, AES-256-GCM crypto engine, biometric support, and private storage path security.",
+                            text = "Execute an offline 20-point environment scan verifying network isolation, keystore integrity, AES-256-GCM crypto engine, biometric support, DEX anti-tamper, and private storage path security.",
                             fontSize = 11.sp,
                             color = SubtitleText,
                             lineHeight = 16.sp
@@ -417,248 +460,78 @@ fun SettingsScreen(
                 }
             }
 
-            // SECURITY ARCHITECTURE CARD
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable { showSecurityArchitectureDialog = true }
-                    .testTag("security_architecture_card"),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = CardBg),
-                border = androidx.compose.foundation.BorderStroke(1.dp, PassGreen.copy(alpha = 0.5f))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f).padding(end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(PassGreen.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Security,
-                                contentDescription = null,
-                                tint = PassGreen,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Security Architecture Level",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Current Rating: ULTRA-HIGH (Military-Grade)",
-                                fontSize = 11.sp,
-                                color = PassGreen
-                            )
-                        }
-                    }
+            // CYBER INTELLIGENCE & SECURITY UTILITIES (2x2 Compact Futuristic Command Matrix)
+            SectionHeader(title = "SECURITY INTELLIGENCE & UTILITIES")
 
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "View Security Details",
-                        tint = PassGreen,
-                        modifier = Modifier.size(22.dp)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Row 1: Security Architecture + Max Directives
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Tile 1: Security Architecture Level
+                    CyberSettingTile(
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("security_architecture_card"),
+                        icon = Icons.Default.Security,
+                        iconTint = PassGreen,
+                        label = "ARCHITECTURE",
+                        status = "ULTRA-HIGH",
+                        statusColor = PassGreen,
+                        subtitle = "Military-Grade TEE",
+                        onClick = { showSecurityArchitectureDialog = true }
+                    )
+
+                    // Tile 2: Max Security Directives
+                    CyberSettingTile(
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("max_security_guide_card"),
+                        icon = Icons.Default.Shield,
+                        iconTint = BrightCyan,
+                        label = "DIRECTIVES",
+                        status = "6 RULES",
+                        statusColor = BrightCyan,
+                        subtitle = "Zero-Trust Guide",
+                        onClick = { showMaxSecurityGuideDialog = true }
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // MAX SECURITY BEST PRACTICES ACTION CARD
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable { showMaxSecurityGuideDialog = true }
-                    .testTag("max_security_guide_card"),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = CardBg),
-                border = androidx.compose.foundation.BorderStroke(1.dp, BrightCyan.copy(alpha = 0.5f))
-            ) {
+                // Row 2: Anti-Tamper Shield + Password Vault
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.weight(1f).padding(end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(BrightCyan.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Shield,
-                                contentDescription = null,
-                                tint = BrightCyan,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Max Security Directives",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "6 Essential Rules for 100% Unbreakable Security",
-                                fontSize = 11.sp,
-                                color = SubtitleText
-                            )
-                        }
-                    }
-
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open Security Directives",
-                        tint = BrightCyan,
-                        modifier = Modifier.size(22.dp)
+                    // Tile 3: Anti-Tamper & Anti-Recompile Shield
+                    CyberSettingTile(
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("anti_tamper_shield_card"),
+                        icon = Icons.Default.EnhancedEncryption,
+                        iconTint = PassGreen,
+                        label = "ANTI-TAMPER",
+                        status = "ARMED",
+                        statusColor = PassGreen,
+                        subtitle = "Frida & Hook Shield",
+                        onClick = { showAntiTamperDialog = true }
                     )
-                }
-            }
 
-            // ANTI-REVERSE ENGINEERING & TAMPER SHIELD CARD
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable { showAntiTamperDialog = true }
-                    .testTag("anti_tamper_shield_card"),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = CardBg),
-                border = androidx.compose.foundation.BorderStroke(1.dp, PassGreen.copy(alpha = 0.45f))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f).padding(end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(PassGreen.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.EnhancedEncryption,
-                                contentDescription = null,
-                                tint = PassGreen,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Anti-Tamper & Anti-Recompile Shield",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Anti-Debugger • Frida & Hooking Shield • SHA-256 Sig",
-                                fontSize = 11.sp,
-                                color = SubtitleText
-                            )
-                        }
-                    }
-
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open Anti-Tamper Shield",
-                        tint = PassGreen,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-
-            // ENCRYPTED PASSWORD VAULT CARD
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable { onNavigateToPasswords() }
-                    .testTag("settings_password_manager_btn"),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = CardBg),
-                border = androidx.compose.foundation.BorderStroke(1.dp, BrightCyan.copy(alpha = 0.4f))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f).padding(end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(BrightCyan.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Key,
-                                contentDescription = null,
-                                tint = BrightCyan,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Encrypted Password Vault",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "AES-256 Logins, Credit Cards & Strong Passwords",
-                                fontSize = 11.sp,
-                                color = SubtitleText
-                            )
-                        }
-                    }
-
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open Password Manager",
-                        tint = BrightCyan,
-                        modifier = Modifier.size(22.dp)
+                    // Tile 4: Password Vault
+                    CyberSettingTile(
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("settings_password_manager_btn"),
+                        icon = Icons.Default.Key,
+                        iconTint = BrightCyan,
+                        label = "PASSWORDS",
+                        status = "AES-256",
+                        statusColor = BrightCyan,
+                        subtitle = "Credentials Vault",
+                        onClick = onNavigateToPasswords
                     )
                 }
             }
@@ -895,14 +768,19 @@ fun SettingsScreen(
                         },
                         title = "App Icon Camouflage",
                         subtitle = if (settings.isCamouflageEnabled) {
-                            "Camouflage Active: ${if (settings.camouflageType == "NOTES") "Quick Notes" else "Calculator"}"
+                            "Camouflage Active: Modern Calculator"
                         } else {
-                            "Disguise launcher icon & entry screen"
+                            "Disguise launcher icon & entry screen as Calculator"
                         },
                         trailing = {
                             Switch(
                                 checked = settings.isCamouflageEnabled,
-                                onCheckedChange = onToggleCamouflage,
+                                onCheckedChange = { isEnabled ->
+                                    if (isEnabled) {
+                                        onChangeCamouflageType("CALCULATOR")
+                                    }
+                                    onToggleCamouflage(isEnabled)
+                                },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = DarkNavyBg,
                                     checkedTrackColor = BrightCyan,
@@ -916,42 +794,31 @@ fun SettingsScreen(
                     )
 
                     if (settings.isCamouflageEnabled) {
-                        Row(
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(BrightCyan.copy(alpha = 0.1f))
+                                .border(1.dp, BrightCyan.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Button(
-                                onClick = { onChangeCamouflageType("CALCULATOR") },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (settings.camouflageType == "CALCULATOR") BrightCyan else Color(0xFF0C1D2E),
-                                    contentColor = if (settings.camouflageType == "CALCULATOR") Color.Black else Color.White
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.weight(1f)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "Calculator",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(16.dp)
                                 )
-                            }
-                            Button(
-                                onClick = { onChangeCamouflageType("NOTES") },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (settings.camouflageType == "NOTES") BrightCyan else Color(0xFF0C1D2E),
-                                    contentColor = if (settings.camouflageType == "NOTES") Color.Black else Color.White
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Notes App",
+                                    text = "Covert Calculator Mode Active • Enter PIN + '=' to unlock",
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace
+                                    color = BrightCyan,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -1348,35 +1215,69 @@ fun SettingsScreen(
                 colors = CardDefaults.cardColors(containerColor = CardBg),
                 border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
             ) {
-                SettingRowItem(
-                    icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(BrightCyan.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
+                Column {
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(BrightCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = BrightCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "App Info & Architecture",
+                        subtitle = "Tech stack, cryptographic specs and build info",
+                        trailing = {
                             Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = null,
-                                tint = BrightCyan,
-                                modifier = Modifier.size(20.dp)
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "View Info",
+                                tint = SubtitleText,
+                                modifier = Modifier.size(22.dp)
                             )
-                        }
-                    },
-                    title = "Help & How to Use",
-                    subtitle = "Read the manual and documentation",
-                    trailing = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "View Help",
-                            tint = SubtitleText,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    },
-                    onClick = onHelpClick
-                )
+                        },
+                        onClick = onAboutClick
+                    )
+
+                    HorizontalDivider(color = CardBorder, thickness = 0.8.dp)
+
+                    SettingRowItem(
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PassGreen.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Help,
+                                    contentDescription = null,
+                                    tint = PassGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        title = "Help & How to Use",
+                        subtitle = "Read the manual and documentation",
+                        trailing = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "View Help",
+                                tint = SubtitleText,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        onClick = onHelpClick
+                    )
+                }
             }
 
             if (showMaxSecurityGuideDialog) {
@@ -1498,3 +1399,314 @@ private fun SettingRowItem(
         trailing()
     }
 }
+
+@Composable
+private fun EmbeddedRadarScanner(
+    isScanning: Boolean,
+    isIdle: Boolean = false,
+    score: Int,
+    passedCount: Int,
+    totalCount: Int,
+    modifier: Modifier = Modifier
+) {
+    val isAllPassed = passedCount >= totalCount && totalCount > 0
+    val statusColor = when {
+        isIdle -> BrightCyan
+        isScanning -> BrightCyan
+        isAllPassed -> PassGreen
+        else -> PanicRed
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "embedded_radar")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "radar_rotation"
+    )
+    val pulse by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "radar_pulse"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(160.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                when {
+                    isIdle -> Color(0xFF020910)
+                    isScanning -> Color(0xFF020910)
+                    isAllPassed -> Color(0xFF021209)
+                    else -> Color(0xFF140407)
+                }
+            )
+            .border(
+                1.dp,
+                statusColor.copy(alpha = if (isScanning || isIdle) 0.3f else 0.5f),
+                RoundedCornerShape(14.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.size(140.dp)) {
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val maxRadius = size.minDimension / 2f - 6.dp.toPx()
+
+            // Concentric radar grid rings
+            for (i in 1..4) {
+                val r = maxRadius * (i / 4f)
+                drawCircle(
+                    color = statusColor.copy(alpha = if (i == 4) 0.35f else 0.15f),
+                    radius = r,
+                    center = center,
+                    style = Stroke(width = if (i == 4) 1.5.dp.toPx() else 1.dp.toPx())
+                )
+            }
+
+            // Crosshair lines
+            drawLine(
+                color = statusColor.copy(alpha = 0.25f),
+                start = Offset(center.x - maxRadius, center.y),
+                end = Offset(center.x + maxRadius, center.y),
+                strokeWidth = 1.dp.toPx()
+            )
+            drawLine(
+                color = statusColor.copy(alpha = 0.25f),
+                start = Offset(center.x, center.y - maxRadius),
+                end = Offset(center.x, center.y + maxRadius),
+                strokeWidth = 1.dp.toPx()
+            )
+
+            if (isScanning) {
+                // Sweeping radar beam (active ONLY during scan)
+                rotate(degrees = rotation, pivot = center) {
+                    val sweepBrush = Brush.sweepGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            statusColor.copy(alpha = 0.04f),
+                            statusColor.copy(alpha = 0.45f)
+                        ),
+                        center = center
+                    )
+                    drawCircle(
+                        brush = sweepBrush,
+                        radius = maxRadius,
+                        center = center
+                    )
+                    drawLine(
+                        color = statusColor,
+                        start = center,
+                        end = Offset(center.x + maxRadius, center.y),
+                        strokeWidth = 2.dp.toPx()
+                    )
+                }
+
+                // Target blips during active scan
+                drawCircle(
+                    color = statusColor.copy(alpha = pulse),
+                    radius = 3.5f.dp.toPx(),
+                    center = Offset(center.x + maxRadius * 0.55f, center.y - maxRadius * 0.35f)
+                )
+                drawCircle(
+                    color = statusColor.copy(alpha = 1f - pulse * 0.4f),
+                    radius = 3.dp.toPx(),
+                    center = Offset(center.x - maxRadius * 0.4f, center.y + maxRadius * 0.45f)
+                )
+            } else if (isIdle) {
+                // Standby mode - subtle pulse blip
+                drawCircle(
+                    color = BrightCyan.copy(alpha = pulse * 0.6f),
+                    radius = 3.dp.toPx(),
+                    center = Offset(center.x + maxRadius * 0.5f, center.y - maxRadius * 0.3f)
+                )
+            } else {
+                // Scan complete: static target lock markers
+                val markerPositions = listOf(
+                    Offset(center.x + maxRadius * 0.55f, center.y - maxRadius * 0.35f),
+                    Offset(center.x - maxRadius * 0.45f, center.y + maxRadius * 0.40f),
+                    Offset(center.x + maxRadius * 0.35f, center.y + maxRadius * 0.50f),
+                    Offset(center.x - maxRadius * 0.50f, center.y - maxRadius * 0.30f)
+                )
+                for (pos in markerPositions) {
+                    drawCircle(
+                        color = statusColor.copy(alpha = 0.85f),
+                        radius = 3.dp.toPx(),
+                        center = pos
+                    )
+                }
+            }
+        }
+
+        // Center readout overlay
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (isScanning) {
+                Text(
+                    text = "SCANNING...",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.Monospace,
+                    color = BrightCyan
+                )
+                Text(
+                    text = "HARDWARE ENCLAVE",
+                    fontSize = 9.sp,
+                    color = SubtitleText,
+                    fontFamily = FontFamily.Monospace
+                )
+            } else if (isIdle) {
+                Text(
+                    text = "RADAR READY",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.Monospace,
+                    color = BrightCyan
+                )
+                Text(
+                    text = "TAP RUN SCAN TO AUDIT",
+                    fontSize = 9.sp,
+                    color = SubtitleText,
+                    fontFamily = FontFamily.Monospace
+                )
+            } else {
+                Text(
+                    text = "$score%",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace,
+                    color = statusColor
+                )
+                Text(
+                    text = if (isAllPassed) "ALL $totalCount CHECKS SECURE" else "${totalCount - passedCount} THREAT(S) DETECTED",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    color = statusColor
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CyberSettingTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    label: String,
+    status: String,
+    statusColor: Color,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF071422),
+                        Color(0xFF040B13)
+                    )
+                )
+            )
+            .border(
+                1.dp,
+                Brush.horizontalGradient(
+                    listOf(
+                        iconTint.copy(alpha = 0.4f),
+                        CardBorder,
+                        iconTint.copy(alpha = 0.2f)
+                    )
+                ),
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(iconTint.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = iconTint,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = label,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.4.sp,
+                        maxLines = 1
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(statusColor.copy(alpha = 0.15f))
+                        .padding(horizontal = 4.dp, vertical = 1.5.dp)
+                ) {
+                    Text(
+                        text = status,
+                        fontSize = 7.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = statusColor,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = subtitle,
+                    fontSize = 9.sp,
+                    color = SubtitleText,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = iconTint.copy(alpha = 0.7f),
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+    }
+}
+

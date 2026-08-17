@@ -380,6 +380,9 @@ fun VaultNavHost(
                 },
                 onHelpClick = {
                     navController.navigate(NavRoutes.Help.route)
+                },
+                onAboutClick = {
+                    navController.navigate(NavRoutes.About.route)
                 }
             )
 

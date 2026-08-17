@@ -46,6 +46,8 @@ class SettingsViewModel @Inject constructor(
     fun runSecurityAudit() {
         viewModelScope.launch {
             _isAuditing.value = true
+            // Allow radar scanner to complete visual sweeps
+            kotlinx.coroutines.delay(2400)
             val result = securityAuditEngine.performSecurityAudit()
             _auditResult.value = result
             _isAuditing.value = false

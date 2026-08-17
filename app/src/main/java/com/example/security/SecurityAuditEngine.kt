@@ -50,47 +50,29 @@ class SecurityAuditEngine @Inject constructor(
 
         val checkItems = listOf(
             SecurityCheckItem(
-                name = "Zero-Network Air-Gap",
-                category = "Data Leakage Prevention",
+                name = "Network Isolation Sandbox",
+                category = "Environment",
                 passed = internetCheck,
                 weight = 10,
-                description = "Verification that android.permission.INTERNET is completely absent from manifest.",
+                description = "INTERNET permission strictly removed from manifest",
                 terminalOutput = if (internetCheck) "PASS: Zero network permissions declared. Completely air-gapped from cloud."
                 else "FAIL: INTERNET permission detected in manifest."
             ),
             SecurityCheckItem(
-                name = "Hardware Keystore Attestation",
-                category = "Hardware & Biometrics",
+                name = "Hardware Keystore TEE / StrongBox",
+                category = "Cryptographic",
                 passed = keystoreCheck,
                 weight = 10,
-                description = "TEE / StrongBox backed cryptographic key generation with hardware attestation.",
+                description = "Hardware-isolated AES-256 master cryptographic key",
                 terminalOutput = if (keystoreCheck) "PASS: Hardware root of trust verified. Keys bound to device TEE."
                 else "FAIL: Hardware Keystore unavailable or key generation failed."
             ),
             SecurityCheckItem(
-                name = "Multi-Layer Root & KernelSU Detection",
-                category = "System & Root Integrity",
-                passed = rootEnvironmentCheck,
-                weight = 10,
-                description = "Detection of SU binaries, Magisk hide sockets, KernelSU, and APatch hooks.",
-                terminalOutput = if (rootEnvironmentCheck) "PASS: 25+ SU binary paths & /proc mountinfo verified clean."
-                else "FAIL: Root binary or elevated kernel module detected."
-            ),
-            SecurityCheckItem(
-                name = "Package Root Utility Scanner",
-                category = "System & Root Integrity",
-                passed = rootEnvironmentCheck,
-                weight = 8,
-                description = "Scans installed packages for known rooting tools and exploit utilities.",
-                terminalOutput = if (rootEnvironmentCheck) "PASS: Zero root management or hooking packages detected on device."
-                else "FAIL: Suspicious package or exploit utility detected."
-            ),
-            SecurityCheckItem(
-                name = "Hardware Key Challenge Nonce",
+                name = "Hardware Key Attestation & Nonce",
                 category = "Hardware Attestation",
                 passed = attestationCheck,
                 weight = 10,
-                description = "Root of trust, verified boot, & randomized challenge replay protection.",
+                description = "Root of trust, verified boot, & randomized challenge replay protection",
                 terminalOutput = if (attestationCheck) "PASS: Attestation challenge nonce verified against hardware keystore."
                 else "FAIL: Attestation challenge verification failed or unsupported."
             ),
@@ -99,7 +81,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Anti-Reverse Engineering",
                 passed = nativeIntegrityCheck,
                 weight = 10,
-                description = "Control flow flattening, opaque predicates & .text self-verification.",
+                description = "Control flow flattening, opaque predicates & .text self-verification",
                 terminalOutput = if (nativeIntegrityCheck) "PASS: Native binaries uncompromised. Memory checksum validated."
                 else "FAIL: Memory checksum mismatch or debugger hook detected."
             ),
@@ -108,7 +90,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Anti-Reverse Engineering",
                 passed = dexMemoryCheck,
                 weight = 10,
-                description = "InMemoryDexClassLoader sandbox with zero disk staging.",
+                description = "InMemoryDexClassLoader sandbox with zero disk staging",
                 terminalOutput = if (dexMemoryCheck) "PASS: In-memory runtime execution isolated without disk artifacts."
                 else "FAIL: In-memory dex verification checksum mismatch."
             ),
@@ -117,15 +99,24 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Anti-Reverse Engineering",
                 passed = true,
                 weight = 8,
-                description = "Polymorphic multi-round XOR string encryption with auto-zeroing.",
+                description = "Polymorphic multi-round XOR string encryption with auto-zeroing",
                 terminalOutput = "PASS: String literals encrypted in native memory space."
+            ),
+            SecurityCheckItem(
+                name = "Root & Magisk / KernelSU Shield",
+                category = "Anti-Tamper",
+                passed = rootEnvironmentCheck,
+                weight = 10,
+                description = "25+ SU binary paths, /proc mountinfo & SELinux verified",
+                terminalOutput = if (rootEnvironmentCheck) "PASS: 25+ SU binary paths & /proc mountinfo verified clean."
+                else "FAIL: Root binary or elevated kernel module detected."
             ),
             SecurityCheckItem(
                 name = "DEX & Binary Anti-Tamper Checksum",
                 category = "Anti-Tamper",
                 passed = dexIntegrityCheck,
                 weight = 10,
-                description = "Base APK classes.dex integrity confirmed via SHA-256.",
+                description = "Base APK classes.dex integrity confirmed",
                 terminalOutput = if (dexIntegrityCheck) "PASS: Base APK classes.dex SHA-256 integrity confirmed."
                 else "FAIL: DEX checksum altered or repacked."
             ),
@@ -134,7 +125,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Anti-Tamper",
                 passed = sigValid,
                 weight = 10,
-                description = "SHA-256 signature certificate fingerprint validated against release key.",
+                description = "SHA-256 signature certificate fingerprint validated",
                 terminalOutput = if (sigValid) "PASS: Signature certificate fingerprint valid and untampered."
                 else "FAIL: Signature mismatch or debug certificate detected."
             ),
@@ -143,7 +134,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Cryptographic",
                 passed = cryptoCheck,
                 weight = 8,
-                description = "Authenticated encryption with 12-byte unique nonce and GCM auth tag.",
+                description = "Authenticated encryption with 12-byte unique nonce",
                 terminalOutput = if (cryptoCheck) "PASS: Hardware-accelerated AES-256-GCM authenticated cipher active."
                 else "FAIL: AES-GCM cipher initialization failed."
             ),
@@ -152,7 +143,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Cryptographic",
                 passed = argon2Check,
                 weight = 8,
-                description = "Argon2id KDF resisting ASIC/GPU dictionary attacks.",
+                description = "Argon2id KDF resisting ASIC/GPU dictionary attacks",
                 terminalOutput = if (argon2Check) "PASS: Argon2id KDF operational with 64MB memory-hard cost matrix."
                 else "FAIL: Argon2id test computation failed."
             ),
@@ -161,7 +152,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Cryptographic",
                 passed = true,
                 weight = 8,
-                description = "TEE-wrapped cryptographic vault backup export locking.",
+                description = "TEE-wrapped cryptographic vault backup export locking",
                 terminalOutput = "PASS: TEE hardware wrapper locking export keys to this physical device."
             ),
             SecurityCheckItem(
@@ -169,7 +160,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Anti-Reverse Engineering",
                 passed = antiDebugCheck,
                 weight = 8,
-                description = "Linux TracerPid & active JDWP/GDB detector.",
+                description = "Linux TracerPid & active JDWP/GDB detector",
                 terminalOutput = if (antiDebugCheck) "PASS: TracerPid is 0. No ptrace or debug engine attached."
                 else "FAIL: Debugger or ptrace process attachment detected."
             ),
@@ -178,7 +169,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Anti-Reverse Engineering",
                 passed = antiHookCheck,
                 weight = 8,
-                description = "Memory maps scan & default Frida / Xposed port filters.",
+                description = "Memory maps scan & default Frida port filters",
                 terminalOutput = if (antiHookCheck) "PASS: Dynamic instrumentation and hook frameworks absent."
                 else "FAIL: Injected library or hooking agent detected."
             ),
@@ -187,7 +178,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Runtime Protection",
                 passed = screenRecordingCheck,
                 weight = 8,
-                description = "FLAG_SECURE, Virtual Display, & /proc screenrecord daemon detector.",
+                description = "FLAG_SECURE, Virtual Display, & /proc screenrecord daemon detector",
                 terminalOutput = if (screenRecordingCheck) "PASS: Screen capture blocked. Surface composition shielded."
                 else "FAIL: Screen recording or virtual display detected."
             ),
@@ -196,7 +187,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Runtime Protection",
                 passed = true,
                 weight = 6,
-                description = "15-second self-shredding clipboard hygiene engine.",
+                description = "15-second self-shredding clipboard hygiene engine",
                 terminalOutput = "PASS: Clipboard sanitization routine active and monitored."
             ),
             SecurityCheckItem(
@@ -204,7 +195,7 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Environment",
                 passed = backupDisabledCheck,
                 weight = 5,
-                description = "allowBackup=false prevents ADB & cloud data extraction.",
+                description = "allowBackup=false prevents ADB & cloud data extraction",
                 terminalOutput = if (backupDisabledCheck) "PASS: OS automatic backup disabled in manifest."
                 else "FAIL: allowBackup is true in manifest."
             ),
@@ -213,16 +204,25 @@ class SecurityAuditEngine @Inject constructor(
                 category = "Environment",
                 passed = storageCheck,
                 weight = 5,
-                description = "Data stored strictly in app-isolated private sandbox.",
+                description = "Data stored strictly in app-isolated private sandbox",
                 terminalOutput = if (storageCheck) "PASS: Storage path isolated to internal /data/data sandbox."
                 else "FAIL: External storage fallback detected."
+            ),
+            SecurityCheckItem(
+                name = "Biometric Hardware / Strong Authenticator",
+                category = "Authentication",
+                passed = biometricCheck,
+                weight = 5,
+                description = "Biometric prompt & Class 3 biometric security",
+                terminalOutput = if (biometricCheck) "PASS: Biometric hardware detected and available."
+                else "FAIL: Biometric hardware unavailable or disabled."
             ),
             SecurityCheckItem(
                 name = "Scrambled Matrix Keypad Protection",
                 category = "Authentication",
                 passed = true,
                 weight = 5,
-                description = "Randomized pinpad layout defeating thermal/screen smudges.",
+                description = "Randomized pinpad layout defeating thermal/screen smudges",
                 terminalOutput = "PASS: Dynamic keypad scrambling active on lock screen."
             )
         )

@@ -258,17 +258,19 @@ class VaultViewModel(
             return false
         }
 
-        if (consecutiveFailedAttempts >= 5) {
-            startLockoutCountdown(30)
-        }
-
         if (consecutiveFailedAttempts >= 3 && settings.isIntruderSelfieEnabled && lifecycleOwner != null) {
             com.example.security.IntruderCaptureManager.captureIntruderSelfie(
                 context = context,
                 lifecycleOwner = lifecycleOwner,
                 attemptType = "INTRUDER_SELFIE_3X",
-                details = "Captured 3 consecutive failed PIN attempts"
+                details = "Captured on 3rd consecutive failed PIN attempt"
             )
+        }
+
+        if (consecutiveFailedAttempts == 4) {
+            startLockoutCountdown(30)
+        } else if (consecutiveFailedAttempts in 5..9) {
+            startLockoutCountdown(30 + (consecutiveFailedAttempts - 4) * 15)
         }
 
         return false
