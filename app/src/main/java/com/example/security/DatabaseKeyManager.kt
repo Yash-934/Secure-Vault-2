@@ -43,12 +43,8 @@ object DatabaseKeyManager {
                 if (decryptedPass.isNotEmpty()) {
                     return decryptedPass
                 }
-            } catch (e: GeneralSecurityException) {
-                Log.e(TAG, "GeneralSecurityException decrypting DB passphrase, regenerating", e)
-            } catch (e: IOException) {
-                Log.e(TAG, "IOException reading DB passphrase", e)
-            } catch (e: IllegalArgumentException) {
-                Log.e(TAG, "Base64 decode error on DB passphrase", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception decrypting DB passphrase, regenerating", e)
             }
         }
 
@@ -68,10 +64,8 @@ object DatabaseKeyManager {
                 .putString(PREF_KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
                 .remove("persistent_db_passphrase_hex") // Clean up any legacy plaintext
                 .apply()
-        } catch (e: GeneralSecurityException) {
-            Log.e(TAG, "GeneralSecurityException wrapping DB passphrase", e)
-        } catch (e: IOException) {
-            Log.e(TAG, "IOException storing wrapped DB passphrase", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception wrapping DB passphrase", e)
         }
 
         return rawPassphrase

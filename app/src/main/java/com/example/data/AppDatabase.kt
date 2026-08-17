@@ -30,9 +30,12 @@ abstract class AppDatabase : RoomDatabase() {
                     SQLiteDatabase.loadLibs(appCtx)
                 } catch (e: UnsatisfiedLinkError) {
                     Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
+                } catch (e: Exception) {
+                    Log.w(TAG, "SQLCipher load error", e)
                 }
 
                 val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
+                ensureDatabaseValid(appCtx, "secure_vault_db", passphrase)
                 val factory = SupportFactory(passphrase)
 
                 val db = try {
@@ -67,9 +70,12 @@ abstract class AppDatabase : RoomDatabase() {
                     SQLiteDatabase.loadLibs(appCtx)
                 } catch (e: UnsatisfiedLinkError) {
                     Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
+                } catch (e: Exception) {
+                    Log.w(TAG, "SQLCipher load error", e)
                 }
 
                 val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
+                ensureDatabaseValid(appCtx, "decoy_vault_db", passphrase)
                 val factory = SupportFactory(passphrase)
 
                 val db = try {
@@ -94,6 +100,33 @@ abstract class AppDatabase : RoomDatabase() {
                 }
                 DECOY_INSTANCE = db
                 db
+            }
+        }
+
+        private fun ensureDatabaseValid(context: Context, dbName: String, passphrase: ByteArray) {
+            val dbFile = context.getDatabasePath(dbName)
+            if (dbFile.exists() && dbFile.length() > 0) {
+                var testDb: SQLiteDatabase? = null
+                try {
+                    val passString = String(passphrase, Charsets.ISO_8859_1)
+                    testDb = SQLiteDatabase.openDatabase(
+                        dbFile.absolutePath,
+                        passString,
+                        null,
+                        SQLiteDatabase.OPEN_READWRITE
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Database $dbName cannot be opened with current key (legacy unencrypted or key changed). Deleting to recreate securely.", e)
+                    try {
+                        context.deleteDatabase(dbName)
+                    } catch (delEx: Exception) {
+                        Log.e(TAG, "Failed to delete incompatible database $dbName", delEx)
+                    }
+                } finally {
+                    try {
+                        testDb?.close()
+                    } catch (_: Exception) {}
+                }
             }
         }
     }
