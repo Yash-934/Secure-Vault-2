@@ -63,7 +63,11 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         
         // Anti-Malware Killswitch Evaluation
-        val isRooted = com.example.security.RootDetectionManager.isDeviceRooted(applicationContext) && !com.example.security.RootDetectionManager.isEmulator()
+        val isRooted = try {
+            com.example.security.RootDetectionManager.isDeviceRooted(applicationContext) && !com.example.security.RootDetectionManager.isEmulator()
+        } catch (_: Throwable) {
+            false
+        }
 
         enableEdgeToEdge()
 

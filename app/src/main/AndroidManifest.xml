@@ -15,6 +15,7 @@
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
     <application
+        android:name=".VaultApplication"
         android:allowBackup="false"
         android:largeHeap="true"
         android:hardwareAccelerated="true"
