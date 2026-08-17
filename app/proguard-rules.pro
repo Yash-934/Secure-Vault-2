@@ -21,12 +21,10 @@
 # ----------------------------------------------------------------------------
 # 2. HEAVY OBFUSCATION FOR CRYPTO, KEYSTORE, AND SECURITY LOGIC
 # ----------------------------------------------------------------------------
-# Heavily obfuscate internal security methods and names while keeping class references intact if needed
--keepclassmembers class com.example.security.** {
-    public private protected *;
-}
+-keep class com.example.security.** { *; }
 
-# Preserve Native Cryptographic & Keystore Methods
+# Preserve Native Cryptographic & Keystore Methods and JNI Bridge
+-keep class com.example.security.NativeBridge { *; }
 -keepclasseswithmembernames class * {
     native <methods>;
 }
@@ -34,6 +32,20 @@
 -keep class javax.crypto.** { *; }
 -keep class java.security.** { *; }
 -keep class android.security.keystore.** { *; }
+
+# ----------------------------------------------------------------------------
+# 2.1. SQLCIPHER & SQLITE DATABASE ENCRYPTION RULES
+# ----------------------------------------------------------------------------
+-keep class net.sqlcipher.** { *; }
+-keep class net.sqlcipher.database.** { *; }
+-dontwarn net.sqlcipher.**
+-dontwarn net.sqlcipher.database.**
+
+# ----------------------------------------------------------------------------
+# 2.2. BOUNCY CASTLE CRYPTOGRAPHY (Argon2id, ASN.1)
+# ----------------------------------------------------------------------------
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
 
 # ----------------------------------------------------------------------------
 # 3. JETPACK ROOM DATABASE ENTITIES & DAOS
@@ -78,13 +90,11 @@
 -keep class androidx.biometric.** { *; }
 
 # ----------------------------------------------------------------------------
-# 7. LOG STRIPPING (PURGE DEBUG LOGS FROM PRODUCTION APK)
+# 7. LOG STRIPPING (PURGE VERBOSE/DEBUG LOGS FROM PRODUCTION APK)
 # ----------------------------------------------------------------------------
 -assumenosideeffects class android.util.Log {
     public static boolean isLoggable(java.lang.String, int);
     public static int v(...);
     public static int d(...);
     public static int i(...);
-    public static int w(...);
-    public static int e(...);
 }
