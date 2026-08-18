@@ -41,15 +41,41 @@ Java_com_example_security_NativeBridge_munlockBuffer(JNIEnv *env, jobject /* thi
     }
 }
 
-// Obfuscated String Decryption (Example XOR)
+// Advanced Manual Obfuscation (Simulating OLLVM -fla, -bcf, -sub)
+// Applied via Clang attribute noinline and opaque constants
+__attribute__((noinline)) int opaquePredicate1(int x) {
+    return (x * x + x) % 2 == 0;
+}
+
+__attribute__((noinline)) int opaquePredicate2(int y) {
+    volatile int a = y;
+    volatile int b = a + 1;
+    return (a * b) % 2 == 0;
+}
+
+__attribute__((noinline)) void substituteInstructions(volatile int* acc) {
+    int a = *acc & 0xFF;
+    int b = 0x42;
+    // (a ^ b) + 2*(a & b) == a + b
+    int sub = (a ^ b) + 2 * (a & b);
+    *acc = (*acc & 0xFF00) | (sub & 0xFF);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_security_NativeBridge_getSecretString(JNIEnv *env, jobject /* this */, jint id) {
-    // Basic XOR string encryption in native layer
-    // Real implementation would use OLLVM -fla, -bcf, -sub
-    char secret[] = { 0x55, 0x47, 0x45, 0x48, 0x41, 0x00 }; // "frida" ^ 0x33 -> 66 72 69 64 61 -> 55 47 45 48 41
-    if (id == 1) {
+    // Basic XOR string encryption in native layer with split functions
+    volatile int bogus = 0;
+    if (!opaquePredicate1(id)) {
+        bogus = 1;
+    }
+    
+    char secret[] = { 0x55, 0x47, 0x45, 0x48, 0x41, 0x00 }; // "frida" ^ 0x33
+    if (id == 1 || bogus) {
         for (int i = 0; i < 5; i++) {
             secret[i] ^= 0x33;
+        }
+        if (bogus) {
+            return env->NewStringUTF("BOGUS");
         }
         return env->NewStringUTF(secret);
     }
@@ -58,29 +84,43 @@ Java_com_example_security_NativeBridge_getSecretString(JNIEnv *env, jobject /* t
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_example_security_NativeBridge_runObfuscatedCheck(JNIEnv *env, jobject /* this */) {
-    // Native control flow flattening and opaque predicates
+    // Native control flow flattening and opaque predicates (OLLVM simulation)
     volatile int state = 1;
     volatile int accumulator = 0xA5A5;
     
     while(state != 0) {
-        if (state == 1) {
-            // Opaque predicate
-            int x = 5;
-            if ((x * x + x) % 2 == 0) {
-                accumulator ^= 0x3C3C;
-                state = 2;
-            } else {
-                state = 99;
-            }
-        } else if (state == 2) {
-            // Instruction substitution
-            int a = accumulator & 0xFF;
-            int b = 0x42;
-            int sub = (a ^ b) + 2*(a & b);
-            accumulator = (accumulator & 0xFF00) | (sub & 0xFF);
-            state = 0;
-        } else {
-            state = 0;
+        switch (state) {
+            case 1:
+                if (opaquePredicate1(5)) {
+                    accumulator ^= 0x3C3C;
+                    state = 3;
+                } else {
+                    state = 99;
+                }
+                break;
+            case 2:
+                // Unreachable state (bogus control flow)
+                accumulator = 0xDEAD;
+                state = 0;
+                break;
+            case 3:
+                if (opaquePredicate2(10)) {
+                    state = 4;
+                } else {
+                    state = 2; // Bogus
+                }
+                break;
+            case 4:
+                substituteInstructions(&accumulator);
+                state = 0;
+                break;
+            case 99:
+                accumulator = -1;
+                state = 0;
+                break;
+            default:
+                state = 0;
+                break;
         }
     }
     return accumulator;
