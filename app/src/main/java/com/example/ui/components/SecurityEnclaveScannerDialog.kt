@@ -592,7 +592,7 @@ private fun FuturisticRadarGauge(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = if (isScanning) "--" else "$score",
+                text = if (isScanning) "--" else if (score >= 100) "9.9" else String.format(java.util.Locale.US, "%.1f", score / 10f),
                 color = Color.White,
                 fontSize = 38.sp,
                 fontWeight = FontWeight.Bold,
@@ -600,7 +600,7 @@ private fun FuturisticRadarGauge(
                 lineHeight = 40.sp
             )
             Text(
-                text = "OUT OF 100",
+                text = "OUT OF 10",
                 color = MutedSlate,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,

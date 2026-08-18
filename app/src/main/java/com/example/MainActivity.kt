@@ -68,6 +68,9 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Anti-Tamper: Immediately kill process if memory or code integrity is compromised in production
+        com.example.security.NativeIntegrityVerifier.failClosedIfTampered(this)
+        
         // Anti-Malware Killswitch Evaluation
         val isRooted = try {
             com.example.security.RootDetectionManager.isDeviceRooted(applicationContext) && !com.example.security.RootDetectionManager.isEmulator()

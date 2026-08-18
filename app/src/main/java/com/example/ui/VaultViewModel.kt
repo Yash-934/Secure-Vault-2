@@ -267,10 +267,10 @@ class VaultViewModel(
             )
         }
 
-        if (consecutiveFailedAttempts == 4) {
+        if (consecutiveFailedAttempts == 5) {
             startLockoutCountdown(30)
-        } else if (consecutiveFailedAttempts in 5..9) {
-            startLockoutCountdown(30 + (consecutiveFailedAttempts - 4) * 15)
+        } else if (consecutiveFailedAttempts in 6..9) {
+            startLockoutCountdown(30 + (consecutiveFailedAttempts - 5) * 15)
         }
 
         return false

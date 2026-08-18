@@ -1577,8 +1577,9 @@ private fun EmbeddedRadarScanner(
                     fontFamily = FontFamily.Monospace
                 )
             } else {
+                val formattedScore = if (score >= 100) "9.9/10" else String.format(java.util.Locale.US, "%.1f/10", score / 10f)
                 Text(
-                    text = "$score%",
+                    text = formattedScore,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
