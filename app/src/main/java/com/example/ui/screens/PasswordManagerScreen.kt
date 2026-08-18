@@ -543,9 +543,8 @@ fun PasswordCardItem(
                     )
                     IconButton(
                         onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Username", item.usernameOrEmail))
-                            Toast.makeText(context, "Username copied", Toast.LENGTH_SHORT).show()
+                            com.example.security.ClipboardProtectionHelper.copyToClipboardWithAutoClear(context, "Username", item.usernameOrEmail)
+                            Toast.makeText(context, "Username copied (Auto-clears in 15s)", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.size(26.dp)
                     ) {
@@ -595,9 +594,8 @@ fun PasswordCardItem(
 
                 IconButton(
                     onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Password", decryptedPassword))
-                        Toast.makeText(context, "Password copied to clipboard", Toast.LENGTH_SHORT).show()
+                        com.example.security.ClipboardProtectionHelper.copyToClipboardWithAutoClear(context, "Password", decryptedPassword)
+                        Toast.makeText(context, "Password copied to clipboard (Auto-clears in 15s)", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.size(26.dp)
                 ) {
