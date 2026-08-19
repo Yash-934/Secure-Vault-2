@@ -32,6 +32,7 @@ import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.HelpScreen
 import com.example.ui.screens.CalculatorScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.EncryptionInspectorScreen
 import com.example.ui.screens.IntruderLogsScreen
 import com.example.ui.screens.LockScreen
 import com.example.ui.screens.MediaViewerScreen
@@ -378,6 +379,9 @@ fun VaultNavHost(
                 onNavigateToPasswords = {
                     navController.navigate(NavRoutes.PasswordManager.route)
                 },
+                onNavigateToEncryptionInspector = {
+                    navController.navigate(NavRoutes.EncryptionInspector.route)
+                },
                 onHelpClick = {
                     navController.navigate(NavRoutes.Help.route)
                 },
@@ -494,6 +498,13 @@ fun VaultNavHost(
             PasswordManagerScreen(
                 isDecoy = vaultMode == VaultMode.DECOY,
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        // 10. Encryption Inspector Screen
+        composable(NavRoutes.EncryptionInspector.route) {
+            EncryptionInspectorScreen(
+                onBackClick = { navController.popBackStack() }
             )
         }
     }

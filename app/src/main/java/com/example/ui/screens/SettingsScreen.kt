@@ -152,6 +152,7 @@ fun SettingsScreen(
     onEmbedStegoClick: () -> Unit = {},
     onExtractStegoClick: () -> Unit = {},
     onNavigateToPasswords: () -> Unit = {},
+    onNavigateToEncryptionInspector: () -> Unit = {},
     onHelpClick: () -> Unit = {},
     onAboutClick: () -> Unit = {}
 ) {
@@ -534,6 +535,20 @@ fun SettingsScreen(
                         onClick = onNavigateToPasswords
                     )
                 }
+
+                // Row 3: Encryption Inspector (6 Cryptographic Engines)
+                CyberSettingTile(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("encryption_inspector_card"),
+                    icon = Icons.Default.Shield,
+                    iconTint = BrightCyan,
+                    label = "ENCRYPTION INSPECTOR",
+                    status = "6 ACTIVE",
+                    statusColor = PassGreen,
+                    subtitle = "Verify SQLCipher, AES-256-GCM, Stego, Backups & Stream",
+                    onClick = onNavigateToEncryptionInspector
+                )
             }
 
             // SECTION 2: AUTHENTICATION & ZERO-TRUST

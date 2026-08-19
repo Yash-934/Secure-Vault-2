@@ -106,7 +106,7 @@ class MainActivity : FragmentActivity() {
                 // Dynamically update Anti-Screen Capture (FLAG_SECURE)
                 // In production, FLAG_SECURE is always enforced. It is bypassed only on BuildConfig.DEBUG or Emulator.
                 LaunchedEffect(settings.isScreenProtectionEnabled, currentRoute, isUnlocked) {
-                    val forceSecure = currentRoute in listOf("auth", "root_warning") || !isUnlocked
+                    val forceSecure = currentRoute in listOf("auth", "root_warning", "encryption_inspector") || !isUnlocked
                     val isDebugOrEmulator = BuildConfig.DEBUG || com.example.security.RootDetectionManager.isEmulator()
                     if (!isDebugOrEmulator) {
                         if (forceSecure || settings.isScreenProtectionEnabled) {

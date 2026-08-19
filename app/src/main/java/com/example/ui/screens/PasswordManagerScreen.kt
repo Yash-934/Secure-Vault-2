@@ -543,7 +543,7 @@ fun PasswordCardItem(
                     )
                     IconButton(
                         onClick = {
-                            com.example.security.ClipboardProtectionHelper.copyToClipboardWithAutoClear(context, "Username", item.usernameOrEmail)
+                            com.example.security.ClipboardProtectionHelper.copyWithAutoClear(context, "Username", item.usernameOrEmail)
                             Toast.makeText(context, "Username copied (Auto-clears in 15s)", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.size(26.dp)
@@ -594,7 +594,7 @@ fun PasswordCardItem(
 
                 IconButton(
                     onClick = {
-                        com.example.security.ClipboardProtectionHelper.copyToClipboardWithAutoClear(context, "Password", decryptedPassword)
+                        com.example.security.ClipboardProtectionHelper.copyWithAutoClear(context, "Password", decryptedPassword)
                         Toast.makeText(context, "Password copied to clipboard (Auto-clears in 15s)", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.size(26.dp)
