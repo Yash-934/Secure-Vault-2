@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -37,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EnhancedEncryption
@@ -94,6 +99,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.security.BackupAnalysisResult
 import com.example.security.EncryptionComponentReport
 import com.example.security.EncryptionInspectorEngine
 import com.example.security.EncryptionInspectorReport
@@ -110,6 +116,7 @@ private val CardBorderColor = Color(0xFF0E253A)
 private val NeonCyan = Color(0xFF00F5D4)
 private val NeonGreen = Color(0xFF00FF66)
 private val NeonPurple = Color(0xFF9D4EDD)
+private val AmberYellow = Color(0xFFFFB703)
 private val PanicRed = Color(0xFFFF2A55)
 private val MutedSlate = Color(0xFF6C7E93)
 private val LightText = Color(0xFFE2E8F0)
@@ -127,6 +134,30 @@ fun EncryptionInspectorScreen(
     var isRunningSelfTest by remember { mutableStateOf(false) }
     var expandedComponentId by remember { mutableStateOf<String?>("database") }
     var showTerminalLogs by remember { mutableStateOf(true) }
+
+    // Backup File Analysis State
+    var backupAnalysisResult by remember { mutableStateOf<BackupAnalysisResult?>(null) }
+    var isAnalyzingBackup by remember { mutableStateOf(false) }
+
+    // File Picker for Backup Analysis
+    val backupFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isAnalyzingBackup = true
+                try {
+                    val result = EncryptionInspectorEngine.analyzeBackupFile(context, uri)
+                    backupAnalysisResult = result
+                    Toast.makeText(context, "Backup Analysis Completed", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Analysis Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isAnalyzingBackup = false
+                }
+            }
+        }
+    }
 
     // Load initial report on launch
     LaunchedEffect(Unit) {
@@ -232,6 +263,7 @@ fun EncryptionInspectorScreen(
                 HeroTelemetryCard(
                     report = report,
                     isRunningSelfTest = isRunningSelfTest,
+                    isAnalyzingBackup = isAnalyzingBackup,
                     beaconAlpha = beaconAlpha,
                     onRunSelfTest = {
                         coroutineScope.launch {
@@ -241,11 +273,30 @@ fun EncryptionInspectorScreen(
                             report = EncryptionInspectorEngine.inspectAll(context)
                             isRunningSelfTest = false
                         }
+                    },
+                    onSelectBackupFile = {
+                        backupFilePickerLauncher.launch(arrayOf("*/*"))
                     }
                 )
             }
 
-            // 2. DYNAMIC SELF-TEST TELEMETRY HUD (If executed)
+            // 2. BACKUP FILE CRYPTOGRAPHIC AUDIT CARD (If analyzed or analyzing)
+            if (backupAnalysisResult != null || isAnalyzingBackup) {
+                item {
+                    BackupAnalysisCard(
+                        result = backupAnalysisResult,
+                        isAnalyzing = isAnalyzingBackup,
+                        onReAnalyze = {
+                            backupFilePickerLauncher.launch(arrayOf("*/*"))
+                        },
+                        onDismiss = {
+                            backupAnalysisResult = null
+                        }
+                    )
+                }
+            }
+
+            // 3. DYNAMIC SELF-TEST TELEMETRY HUD (If executed)
             if (selfTestResult != null || isRunningSelfTest) {
                 item {
                     SelfTestTerminalCard(
@@ -257,7 +308,7 @@ fun EncryptionInspectorScreen(
                 }
             }
 
-            // 3. SECTION HEADER: 6 CRYPTOGRAPHIC SUBSYSTEMS
+            // 4. SECTION HEADER: 6 CRYPTOGRAPHIC SUBSYSTEMS
             item {
                 Row(
                     modifier = Modifier
@@ -294,7 +345,7 @@ fun EncryptionInspectorScreen(
                 }
             }
 
-            // 4. THE 6 DETAILED ENCRYPTION COMPONENT CARDS
+            // 5. THE 6 DETAILED ENCRYPTION COMPONENT CARDS
             val components = report?.components ?: emptyList()
             items(components, key = { it.componentId }) { comp ->
                 val isExpanded = expandedComponentId == comp.componentId
@@ -307,7 +358,7 @@ fun EncryptionInspectorScreen(
                 )
             }
 
-            // 5. SECURITY & ZERO-LEAKAGE ASSURANCE BANNER
+            // 6. SECURITY & ZERO-LEAKAGE ASSURANCE BANNER
             item {
                 SecurityAssuranceBanner()
             }
@@ -316,14 +367,16 @@ fun EncryptionInspectorScreen(
 }
 
 /**
- * Top Hero Card featuring radar telemetry, status badges, and the Run Self-Test action.
+ * Top Hero Card featuring radar telemetry, status badges, and dual actions (Self-Test & Backup Analysis).
  */
 @Composable
 private fun HeroTelemetryCard(
     report: EncryptionInspectorReport?,
     isRunningSelfTest: Boolean,
+    isAnalyzingBackup: Boolean,
     beaconAlpha: Float,
-    onRunSelfTest: () -> Unit
+    onRunSelfTest: () -> Unit,
+    onSelectBackupFile: () -> Unit
 ) {
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val lastVerified = remember(report?.timestamp) {
@@ -455,68 +508,445 @@ private fun HeroTelemetryCard(
                 }
             }
 
-            // Last Verified row + Self-Test Button
+            // Last Verified row + Dual Actions (Run Self-Test & Analyze Backup)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "LAST VERIFIED: $lastVerified",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MutedSlate,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Button 1: Run Self-Test
+                    Button(
+                        onClick = onRunSelfTest,
+                        enabled = !isRunningSelfTest && !isAnalyzingBackup,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonCyan,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("run_encryption_self_test_button"),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+                    ) {
+                        if (isRunningSelfTest) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(13.dp),
+                                color = Color.Black,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "TESTING...",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Speed,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "SELF-TEST",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    // Button 2: Analyze Backup File
+                    Button(
+                        onClick = onSelectBackupFile,
+                        enabled = !isRunningSelfTest && !isAnalyzingBackup,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonPurple,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .testTag("analyze_backup_file_button"),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+                    ) {
+                        if (isAnalyzingBackup) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(13.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "ANALYZING...",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.FolderZip,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "ANALYZE BACKUP",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Deep Backup File Cryptographic Analysis Card.
+ * Renders file metadata, Security Level Score (0 to 5), Magic Header, KDF suite,
+ * Cipher mode, hardware binding status, and security recommendations.
+ */
+@Composable
+private fun BackupAnalysisCard(
+    result: BackupAnalysisResult?,
+    isAnalyzing: Boolean,
+    onReAnalyze: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("backup_analysis_result_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF040E1B)),
+        border = BorderStroke(
+            1.2.dp,
+            if (result?.securityScore ?: 0 >= 4) NeonPurple else if (result?.securityScore ?: 0 > 0) AmberYellow else PanicRed
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Title Bar + Dismiss Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "LAST VERIFIED",
-                        fontSize = 8.5.sp,
-                        color = MutedSlate,
-                        fontFamily = FontFamily.Monospace
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(NeonPurple.copy(alpha = 0.2f))
+                            .border(1.dp, NeonPurple.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderZip,
+                            contentDescription = null,
+                            tint = NeonPurple,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "BACKUP SECURITY ANALYSIS",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "DEEP CRYPTOGRAPHIC ENVELOPE AUDIT",
+                            fontSize = 8.5.sp,
+                            color = NeonPurple,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close Analysis",
+                        tint = MutedSlate,
+                        modifier = Modifier.size(18.dp)
                     )
+                }
+            }
+
+            if (isAnalyzing) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = NeonPurple,
+                        strokeWidth = 2.5.dp
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = lastVerified,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        text = "Inspecting Magic Headers, KDF Parameters & AEAD Frames...",
+                        fontSize = 11.sp,
                         color = LightText,
                         fontFamily = FontFamily.Monospace
                     )
                 }
-
-                Button(
-                    onClick = onRunSelfTest,
-                    enabled = !isRunningSelfTest,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = Color.Black
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.testTag("run_encryption_self_test_button")
+            } else if (result != null) {
+                // File Identification Bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PitchBlackBg)
+                        .border(0.8.dp, CardBorderColor, RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isRunningSelfTest) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            color = Color.Black,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "TESTING...",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
+                            text = result.fileName,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Size: ${result.formattedSize} • SHA-256: ${result.sha256Hex}",
+                            fontSize = 8.5.sp,
+                            color = MutedSlate,
                             fontFamily = FontFamily.Monospace
                         )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Speed,
-                            contentDescription = null,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                }
+
+                // Security Level & Rating Banner
+                val badgeColor = when {
+                    result.securityScore >= 5 -> NeonGreen
+                    result.securityScore >= 4 -> NeonCyan
+                    result.securityScore >= 2 -> AmberYellow
+                    else -> PanicRed
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(badgeColor.copy(alpha = 0.12f))
+                        .border(1.dp, badgeColor.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = if (result.securityScore >= 4) Icons.Default.Shield else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = badgeColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "SECURITY RATING: ${result.securityScore}/5",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = badgeColor,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = result.securityLevelTitle,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = LightText,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        // Score Stars / Indicators
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            repeat(5) { index ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(if (index < result.securityScore) badgeColor else CardBorderColor)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Cryptographic Specifications Matrix
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF020912))
+                        .border(0.8.dp, CardBorderColor, RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "CRYPTOGRAPHIC PARAMETERS & SPECS",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = NeonCyan,
+                        fontFamily = FontFamily.Monospace
+                    )
+
+                    SpecRow(label = "Format & Container", value = result.formatName)
+                    SpecRow(label = "Magic Header", value = result.magicHeader)
+                    SpecRow(label = "Key Derivation (KDF)", value = result.kdfSuite)
+                    result.kdfParams.forEach { (k, v) ->
+                        SpecRow(label = "  ↳ $k", value = v, isSub = true)
+                    }
+                    SpecRow(label = "Cipher Mode & Suite", value = result.cipherSuite)
+                    result.cipherParams.forEach { (k, v) ->
+                        SpecRow(label = "  ↳ $k", value = v, isSub = true)
+                    }
+                    SpecRow(label = "Hardware TEE Binding", value = result.hardwareBindingStatus)
+                    SpecRow(label = "Framing Architecture", value = result.framingArchitecture)
+                    SpecRow(label = "Integrity Check", value = result.integrityVerdict)
+                }
+
+                // Recommendations & Security Advice
+                if (result.recommendations.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF030E1C))
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
-                            text = "RUN SELF-TEST",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
+                            text = "SECURITY ADVISORY & AUDIT FINDINGS:",
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = LightText,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        result.recommendations.forEach { rec ->
+                            Row(verticalAlignment = Alignment.Top) {
+                                Text(
+                                    text = "• ",
+                                    fontSize = 9.sp,
+                                    color = NeonPurple,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = rec,
+                                    fontSize = 8.5.sp,
+                                    color = MutedSlate,
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Pick Another File Button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = onReAnalyze,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CardBorderColor,
+                            contentColor = NeonCyan
+                        ),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderZip,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "ANALYZE ANOTHER FILE",
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SpecRow(label: String, value: String, isSub: Boolean = false) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = if (isSub) 8.sp else 8.5.sp,
+            color = if (isSub) MutedSlate.copy(alpha = 0.8f) else MutedSlate,
+            fontFamily = FontFamily.Monospace
+        )
+        Text(
+            text = value,
+            fontSize = if (isSub) 8.sp else 8.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isSub) LightText.copy(alpha = 0.9f) else LightText,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -1008,3 +1438,4 @@ private fun getComponentIcon(componentId: String): ImageVector {
         else -> Icons.Default.Security
     }
 }
+
