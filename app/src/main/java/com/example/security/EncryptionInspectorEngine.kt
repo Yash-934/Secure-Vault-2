@@ -636,7 +636,9 @@ object EncryptionInspectorEngine {
                 if (sampleRead > 0) {
                     digest.update(hashSample, 0, sampleRead)
                 }
-                sha256Hex = bytesToHex(digest.digest()).take(16) + "..." + bytesToHex(digest.digest()).takeLast(8)
+                val hashBytes = digest.digest()
+                val hashHex = bytesToHex(hashBytes)
+                sha256Hex = if (hashHex.length >= 24) hashHex.take(16) + "..." + hashHex.takeLast(8) else hashHex
 
                 telemetry.add("[HEADER AUDIT] Read $readHeaderCount header bytes: ${bytesToHex(headerBuf)}")
 

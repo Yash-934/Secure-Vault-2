@@ -117,6 +117,7 @@ private val NeonCyan = Color(0xFF00F5D4)
 private val NeonGreen = Color(0xFF00FF66)
 private val NeonPurple = Color(0xFF9D4EDD)
 private val AmberYellow = Color(0xFFFFB703)
+private val CyberAmber = Color(0xFFFF9F1C)
 private val PanicRed = Color(0xFFFF2A55)
 private val MutedSlate = Color(0xFF6C7E93)
 private val LightText = Color(0xFFE2E8F0)
@@ -124,7 +125,9 @@ private val LightText = Color(0xFFE2E8F0)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EncryptionInspectorScreen(
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onPickerLaunched: () -> Unit = {},
+    onPickerFinished: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -143,6 +146,7 @@ fun EncryptionInspectorScreen(
     val backupFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
+        onPickerFinished()
         if (uri != null) {
             coroutineScope.launch {
                 isAnalyzingBackup = true
@@ -275,6 +279,7 @@ fun EncryptionInspectorScreen(
                         }
                     },
                     onSelectBackupFile = {
+                        onPickerLaunched()
                         backupFilePickerLauncher.launch(arrayOf("*/*"))
                     }
                 )
@@ -287,6 +292,7 @@ fun EncryptionInspectorScreen(
                         result = backupAnalysisResult,
                         isAnalyzing = isAnalyzingBackup,
                         onReAnalyze = {
+                            onPickerLaunched()
                             backupFilePickerLauncher.launch(arrayOf("*/*"))
                         },
                         onDismiss = {
@@ -579,8 +585,8 @@ private fun HeroTelemetryCard(
                         onClick = onSelectBackupFile,
                         enabled = !isRunningSelfTest && !isAnalyzingBackup,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonPurple,
-                            contentColor = Color.White
+                            containerColor = CyberAmber,
+                            contentColor = Color(0xFF040C16)
                         ),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
@@ -591,7 +597,7 @@ private fun HeroTelemetryCard(
                         if (isAnalyzingBackup) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(13.dp),
-                                color = Color.White,
+                                color = Color(0xFF040C16),
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -605,7 +611,8 @@ private fun HeroTelemetryCard(
                             Icon(
                                 imageVector = Icons.Default.FolderZip,
                                 contentDescription = null,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(14.dp),
+                                tint = Color(0xFF040C16)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
@@ -642,7 +649,7 @@ private fun BackupAnalysisCard(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF040E1B)),
         border = BorderStroke(
             1.2.dp,
-            if (result?.securityScore ?: 0 >= 4) NeonPurple else if (result?.securityScore ?: 0 > 0) AmberYellow else PanicRed
+            if (result?.securityScore ?: 0 >= 4) CyberAmber else if (result?.securityScore ?: 0 > 0) AmberYellow else PanicRed
         )
     ) {
         Column(
@@ -662,14 +669,14 @@ private fun BackupAnalysisCard(
                         modifier = Modifier
                             .size(28.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(NeonPurple.copy(alpha = 0.2f))
-                            .border(1.dp, NeonPurple.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
+                            .background(CyberAmber.copy(alpha = 0.2f))
+                            .border(1.dp, CyberAmber.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.FolderZip,
                             contentDescription = null,
-                            tint = NeonPurple,
+                            tint = CyberAmber,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -685,7 +692,7 @@ private fun BackupAnalysisCard(
                         Text(
                             text = "DEEP CRYPTOGRAPHIC ENVELOPE AUDIT",
                             fontSize = 8.5.sp,
-                            color = NeonPurple,
+                            color = CyberAmber,
                             fontFamily = FontFamily.Monospace
                         )
                     }
@@ -714,7 +721,7 @@ private fun BackupAnalysisCard(
                 ) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
-                        color = NeonPurple,
+                        color = CyberAmber,
                         strokeWidth = 2.5.dp
                     )
                     Spacer(modifier = Modifier.width(12.dp))
@@ -875,7 +882,7 @@ private fun BackupAnalysisCard(
                                 Text(
                                     text = "• ",
                                     fontSize = 9.sp,
-                                    color = NeonPurple,
+                                    color = CyberAmber,
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
@@ -898,16 +905,18 @@ private fun BackupAnalysisCard(
                     Button(
                         onClick = onReAnalyze,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = CardBorderColor,
-                            contentColor = NeonCyan
+                            containerColor = CyberAmber.copy(alpha = 0.15f),
+                            contentColor = CyberAmber
                         ),
+                        border = BorderStroke(1.dp, CyberAmber.copy(alpha = 0.4f)),
                         shape = RoundedCornerShape(6.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.FolderZip,
                             contentDescription = null,
-                            modifier = Modifier.size(13.dp)
+                            modifier = Modifier.size(13.dp),
+                            tint = CyberAmber
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(

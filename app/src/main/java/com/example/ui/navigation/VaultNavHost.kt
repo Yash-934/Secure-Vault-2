@@ -504,7 +504,9 @@ fun VaultNavHost(
         // 10. Encryption Inspector Screen
         composable(NavRoutes.EncryptionInspector.route) {
             EncryptionInspectorScreen(
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                onPickerLaunched = { vaultViewModel.onSystemPickerLaunched() },
+                onPickerFinished = { vaultViewModel.onSystemPickerFinished() }
             )
         }
     }
