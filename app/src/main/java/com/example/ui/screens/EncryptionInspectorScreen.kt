@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -42,6 +45,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EnhancedEncryption
@@ -55,6 +60,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
@@ -121,6 +127,17 @@ private val CyberAmber = Color(0xFFFF9F1C)
 private val PanicRed = Color(0xFFFF2A55)
 private val MutedSlate = Color(0xFF6C7E93)
 private val LightText = Color(0xFFE2E8F0)
+
+private fun copyToClipboard(context: Context, text: String, label: String = "Quantum Vault Security Summary") {
+    try {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText(label, text)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(context, "Security Summary Copied to Clipboard", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Copy failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -234,6 +251,23 @@ fun EncryptionInspectorScreen(
                 actions = {
                     IconButton(
                         onClick = {
+                            val summary = EncryptionInspectorEngine.generateShareableSecuritySummary(
+                                report = report,
+                                selfTestResult = selfTestResult,
+                                backupResult = backupAnalysisResult
+                            )
+                            copyToClipboard(context, summary)
+                        },
+                        modifier = Modifier.testTag("encryption_inspector_copy_summary_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy Security Summary",
+                            tint = NeonCyan
+                        )
+                    }
+                    IconButton(
+                        onClick = {
                             coroutineScope.launch {
                                 report = EncryptionInspectorEngine.inspectAll(context)
                             }
@@ -262,6 +296,11 @@ fun EncryptionInspectorScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             contentPadding = PaddingValues(top = 10.dp, bottom = 32.dp)
         ) {
+            // 0. PLAY STORE COMPLIANCE & PRIVACY ASSURANCE BANNER
+            item {
+                PlayStoreSecurityDisclaimerBanner()
+            }
+
             // 1. HERO CRYPTOGRAPHIC TELEMETRY CARD
             item {
                 HeroTelemetryCard(
@@ -281,6 +320,14 @@ fun EncryptionInspectorScreen(
                     onSelectBackupFile = {
                         onPickerLaunched()
                         backupFilePickerLauncher.launch(arrayOf("*/*"))
+                    },
+                    onCopySummary = {
+                        val summary = EncryptionInspectorEngine.generateShareableSecuritySummary(
+                            report = report,
+                            selfTestResult = selfTestResult,
+                            backupResult = backupAnalysisResult
+                        )
+                        copyToClipboard(context, summary)
                     }
                 )
             }
@@ -373,7 +420,63 @@ fun EncryptionInspectorScreen(
 }
 
 /**
- * Top Hero Card featuring radar telemetry, status badges, and dual actions (Self-Test & Backup Analysis).
+ * Top Play Store Compliance and Zero-Trust Privacy Assurance Banner
+ */
+@Composable
+private fun PlayStoreSecurityDisclaimerBanner() {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("play_store_security_disclaimer_card"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF061525)),
+        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(NeonCyan.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Shield,
+                    contentDescription = null,
+                    tint = NeonCyan,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = "PLAY STORE COMPLIANCE & PRIVACY ASSURANCE",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    color = NeonCyan,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.5.sp
+                )
+                Text(
+                    text = "Metadata only. No keys or decrypted data are displayed.",
+                    fontSize = 8.5.sp,
+                    color = LightText,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 12.sp
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Top Hero Card featuring radar telemetry, status badges, and triple actions (Self-Test, Backup Analysis, Copy Summary).
  */
 @Composable
 private fun HeroTelemetryCard(
@@ -382,7 +485,8 @@ private fun HeroTelemetryCard(
     isAnalyzingBackup: Boolean,
     beaconAlpha: Float,
     onRunSelfTest: () -> Unit,
-    onSelectBackupFile: () -> Unit
+    onSelectBackupFile: () -> Unit,
+    onCopySummary: () -> Unit
 ) {
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val lastVerified = remember(report?.timestamp) {
@@ -514,7 +618,7 @@ private fun HeroTelemetryCard(
                 }
             }
 
-            // Last Verified row + Dual Actions (Run Self-Test & Analyze Backup)
+            // Last Verified row + Actions
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -624,6 +728,35 @@ private fun HeroTelemetryCard(
                         }
                     }
                 }
+
+                // Button 3: Copy Security Summary Button
+                Button(
+                    onClick = onCopySummary,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0C243B),
+                        contentColor = NeonCyan
+                    ),
+                    border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.35f)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("copy_security_summary_button"),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = NeonCyan
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "COPY SECURITY SUMMARY",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
     }
@@ -632,7 +765,7 @@ private fun HeroTelemetryCard(
 /**
  * Deep Backup File Cryptographic Analysis Card.
  * Renders file metadata, Security Level Score (0 to 5), Magic Header, KDF suite,
- * Cipher mode, hardware binding status, and security recommendations.
+ * Cipher mode, hardware binding status, masked raw header hex dump, and security recommendations.
  */
 @Composable
 private fun BackupAnalysisCard(
@@ -641,6 +774,8 @@ private fun BackupAnalysisCard(
     onReAnalyze: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -763,6 +898,33 @@ private fun BackupAnalysisCard(
                     }
                 }
 
+                // Play Store Notice Box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF081829))
+                        .border(0.8.dp, NeonCyan.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = NeonCyan,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = result.playStoreSecurityNote,
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = LightText,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
                 // Security Level & Rating Banner
                 val badgeColor = when {
                     result.securityScore >= 5 -> NeonGreen
@@ -860,6 +1022,88 @@ private fun BackupAnalysisCard(
                     SpecRow(label = "Integrity Check", value = result.integrityVerdict)
                 }
 
+                // Raw Header Hex Dump (First 128 Bytes) Expandable Section
+                if (result.rawHeaderHexDump.isNotBlank()) {
+                    var isHexDumpExpanded by remember { mutableStateOf(false) }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF02070F))
+                            .border(0.8.dp, CardBorderColor, RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isHexDumpExpanded = !isHexDumpExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Code,
+                                    contentDescription = null,
+                                    tint = CyberAmber,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "RAW HEADER HEX DUMP (MAX 128 BYTES)",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CyberAmber,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Icon(
+                                imageVector = if (isHexDumpExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                tint = MutedSlate,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        AnimatedVisibility(
+                            visible = isHexDumpExpanded,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                            ) {
+                                Text(
+                                    text = "• Header truncated to first 128 bytes.\n• Wrapped key payloads are masked as [Wrapped Key: [Encrypted] - X bytes].\n• No raw keys or plaintext data are exposed.",
+                                    fontSize = 8.sp,
+                                    color = MutedSlate,
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 11.sp
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(PitchBlackBg)
+                                        .border(0.5.dp, CardBorderColor, RoundedCornerShape(6.dp))
+                                        .padding(8.dp)
+                                ) {
+                                    Text(
+                                        text = result.rawHeaderHexDump,
+                                        fontSize = 8.sp,
+                                        color = NeonCyan,
+                                        fontFamily = FontFamily.Monospace,
+                                        lineHeight = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Recommendations & Security Advice
                 if (result.recommendations.isNotEmpty()) {
                     Column(
@@ -897,11 +1141,44 @@ private fun BackupAnalysisCard(
                     }
                 }
 
-                // Pick Another File Button
+                // Action Buttons: Copy Audit & Pick Another File
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    Button(
+                        onClick = {
+                            val summary = EncryptionInspectorEngine.generateShareableSecuritySummary(
+                                report = null,
+                                selfTestResult = null,
+                                backupResult = result
+                            )
+                            copyToClipboard(context, summary)
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF0D253A),
+                            contentColor = NeonCyan
+                        ),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = NeonCyan
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "COPY AUDIT",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
                     Button(
                         onClick = onReAnalyze,
                         colors = ButtonDefaults.buttonColors(
@@ -910,18 +1187,19 @@ private fun BackupAnalysisCard(
                         ),
                         border = BorderStroke(1.dp, CyberAmber.copy(alpha = 0.4f)),
                         shape = RoundedCornerShape(6.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        modifier = Modifier.weight(1.2f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.FolderZip,
                             contentDescription = null,
-                            modifier = Modifier.size(13.dp),
+                            modifier = Modifier.size(12.dp),
                             tint = CyberAmber
                         )
-                        Spacer(modifier = Modifier.width(5.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "ANALYZE ANOTHER FILE",
-                            fontSize = 9.5.sp,
+                            text = "ANALYZE ANOTHER",
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )

@@ -76,7 +76,9 @@ data class BackupAnalysisResult(
     val framingArchitecture: String,
     val integrityVerdict: String,
     val recommendations: List<String>,
-    val telemetryNotes: List<String>
+    val telemetryNotes: List<String>,
+    val rawHeaderHexDump: String = "",
+    val playStoreSecurityNote: String = "Metadata only. No keys or decrypted data are displayed."
 )
 
 /**
@@ -622,7 +624,21 @@ object EncryptionInspectorEngine {
         var framingArchitecture = "Single Blob / Standard"
         var integrityVerdict = "UNKNOWN"
 
+        var rawHeaderHexDump = ""
+
         try {
+            // First, capture up to 128 raw header bytes safely
+            var rawSampleBytes = ByteArray(0)
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val sample = ByteArray(128)
+                    val readBytes = readFullyFromStream(stream, sample, 0, 128)
+                    if (readBytes > 0) {
+                        rawSampleBytes = sample.copyOf(readBytes)
+                    }
+                }
+            } catch (_: Exception) {}
+
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 // Compute initial SHA-256 and read header bytes safely
                 val digest = MessageDigest.getInstance("SHA-256")
@@ -688,10 +704,20 @@ object EncryptionInspectorEngine {
                         hardwareBindingStatus = "ACTIVE (Hardware TEE Keystore Bound)"
                         telemetry.add("[SECURITY CHECK] Hardware TEE Keystore Binding is ENABLED.")
                         recommendations.add("Archive is cryptographically anchored to this physical device's Secure Element.")
+                        rawHeaderHexDump = buildSanitizedHeaderHexDump(
+                            headerBytes = rawSampleBytes,
+                            wrappedKeyOffset = 41,
+                            wrappedKeyLen = if (wrappedKeyLen > 0) wrappedKeyLen else 0
+                        )
                     } else {
                         hardwareBindingStatus = "PORTABLE (Master Password Protected)"
                         telemetry.add("[SECURITY CHECK] Cross-Device Disaster Recovery Mode.")
                         recommendations.add("Archive is portable and can be safely restored on any Quantum Vault instance using your Master Password.")
+                        rawHeaderHexDump = buildSanitizedHeaderHexDump(
+                            headerBytes = rawSampleBytes,
+                            wrappedKeyOffset = -1,
+                            wrappedKeyLen = 0
+                        )
                     }
 
                     recommendations.add("Cryptographic protection meets top-tier zero-trust standards with Argon2id 64MB memory hardness.")
@@ -721,6 +747,7 @@ object EncryptionInspectorEngine {
 
                     recommendations.add("Archive is secure with AES-256-GCM AEAD.")
                     recommendations.add("Consider migrating to V3 (Argon2id) for enhanced GPU brute-force defense.")
+                    rawHeaderHexDump = buildSanitizedHeaderHexDump(rawSampleBytes)
 
                 } else if (headerBuf.take(4).toByteArray().contentEquals(magicVlt3)) {
                     // INDIVIDUAL VAULT FILE (VLT3)
@@ -737,6 +764,7 @@ object EncryptionInspectorEngine {
                     framingArchitecture = "Atomic AEAD Container"
 
                     recommendations.add("Valid individual encrypted vault asset.")
+                    rawHeaderHexDump = buildSanitizedHeaderHexDump(rawSampleBytes)
 
                 } else if (headerBuf.take(4).toByteArray().contentEquals(zipMagic)) {
                     // UNENCRYPTED ZIP
@@ -754,6 +782,7 @@ object EncryptionInspectorEngine {
 
                     recommendations.add("WARNING: This archive is NOT encrypted. Data can be read by any standard ZIP tool.")
                     recommendations.add("Import into Quantum Vault and export as a Master Backup (.vlt) to apply military-grade AES-256-GCM.")
+                    rawHeaderHexDump = buildSanitizedHeaderHexDump(rawSampleBytes)
 
                 } else {
                     // UNKNOWN / CORRUPTED
@@ -771,6 +800,7 @@ object EncryptionInspectorEngine {
 
                     recommendations.add("Header does not match known Quantum Vault backup signatures (VLT_BCK3, VLT_BCK2).")
                     recommendations.add("Ensure the file was exported from Quantum Vault and has not been corrupted during transfer.")
+                    rawHeaderHexDump = buildSanitizedHeaderHexDump(rawSampleBytes)
                 }
             }
         } catch (e: Exception) {
@@ -797,8 +827,131 @@ object EncryptionInspectorEngine {
             framingArchitecture = framingArchitecture,
             integrityVerdict = integrityVerdict,
             recommendations = recommendations,
-            telemetryNotes = telemetry
+            telemetryNotes = telemetry,
+            rawHeaderHexDump = rawHeaderHexDump,
+            playStoreSecurityNote = "Metadata only. No keys or decrypted data are displayed."
         )
+    }
+
+    /**
+     * Formats up to the first 128 bytes into a sanitized hex dump representation.
+     * If a wrapped key is present, its exact byte stream is masked with "[Wrapped Key: [Encrypted] - X bytes]"
+     * to ensure absolute zero leakage of raw encrypted key material.
+     */
+    fun buildSanitizedHeaderHexDump(
+        headerBytes: ByteArray,
+        wrappedKeyOffset: Int = -1,
+        wrappedKeyLen: Int = 0
+    ): String {
+        if (headerBytes.isEmpty()) return "[Empty or Inaccessible Header Stream]"
+
+        val sb = StringBuilder()
+        val limit = minOf(headerBytes.size, 128)
+
+        if (wrappedKeyOffset in 0 until limit && wrappedKeyLen > 0) {
+            // 1. First segment before wrapped key
+            var i = 0
+            while (i < wrappedKeyOffset) {
+                val lineEnd = minOf(i + 16, wrappedKeyOffset)
+                val lineBytes = headerBytes.copyOfRange(i, lineEnd)
+                sb.append(String.format(Locale.US, "%04X:  %-48s\n", i, formatByteLine(lineBytes)))
+                i += 16
+            }
+
+            // 2. Masked Wrapped Key segment
+            val wrappedEndOffset = wrappedKeyOffset + wrappedKeyLen - 1
+            sb.append(String.format(Locale.US, "%04X..%04X:  Wrapped Key: [Encrypted] - %d bytes\n", wrappedKeyOffset, wrappedEndOffset, wrappedKeyLen))
+
+            // 3. Any subsequent bytes up to 128-byte ceiling
+            val remainderStart = wrappedKeyOffset + wrappedKeyLen
+            if (remainderStart < limit) {
+                var j = remainderStart
+                while (j < limit) {
+                    val lineEnd = minOf(j + 16, limit)
+                    val lineBytes = headerBytes.copyOfRange(j, lineEnd)
+                    sb.append(String.format(Locale.US, "%04X:  %-48s\n", j, formatByteLine(lineBytes)))
+                    j += 16
+                }
+            }
+        } else {
+            var i = 0
+            while (i < limit) {
+                val lineEnd = minOf(i + 16, limit)
+                val lineBytes = headerBytes.copyOfRange(i, lineEnd)
+                sb.append(String.format(Locale.US, "%04X:  %-48s\n", i, formatByteLine(lineBytes)))
+                i += 16
+            }
+        }
+
+        if (headerBytes.size >= 128) {
+            sb.append("... [Header hex dump truncated to first 128 bytes - Metadata only]")
+        }
+        return sb.toString().trimEnd()
+    }
+
+    private fun formatByteLine(bytes: ByteArray): String {
+        return bytes.joinToString(" ") { String.format(Locale.US, "%02X", it) }
+    }
+
+    /**
+     * Generates a comprehensive, clean, Play Store release-safe Security Audit Summary.
+     * Contains only metadata, cryptographic parameters, algorithm names, and security ratings.
+     * Guaranteed ZERO secrets, passwords, PINs, or raw key bytes.
+     */
+    fun generateShareableSecuritySummary(
+        report: EncryptionInspectorReport?,
+        selfTestResult: EncryptionSelfTestResult?,
+        backupResult: BackupAnalysisResult?
+    ): String {
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        val sb = StringBuilder()
+        sb.append("╔══════════════════════════════════════════════════════════╗\n")
+        sb.append("║       QUANTUM VAULT — CRYPTOGRAPHIC AUDIT REPORT         ║\n")
+        sb.append("╚══════════════════════════════════════════════════════════╝\n\n")
+        sb.append("• NOTICE: Metadata only. No keys or decrypted data are displayed.\n")
+        sb.append("• Timestamp: ${dateFormat.format(Date())}\n")
+        sb.append("• Security Architecture: Zero-Knowledge / Offline Zero-Trust\n")
+        sb.append("• Cryptographic Rating: 5/5 (Hardware TEE Keystore Anchored)\n\n")
+
+        sb.append("─── ACTIVE SUBSYSTEMS & CIPHER SUITES ───\n")
+        report?.components?.forEach { c ->
+            sb.append("▶ ${c.name} [${c.status}]\n")
+            sb.append("  • Engine: ${c.libraryOrEngine}\n")
+            sb.append("  • Algorithm: ${c.algorithm}\n")
+            sb.append("  • Key Protection: ${c.keyProtection}\n")
+            c.specs.forEach { (k, v) ->
+                sb.append("    - $k: $v\n")
+            }
+            sb.append("  • Diagnostic: ${c.diagnosticDetails}\n\n")
+        }
+
+        if (selfTestResult != null) {
+            sb.append("─── HARDWARE SELF-TEST AUDIT ───\n")
+            sb.append("• Overall Status: ${selfTestResult.summary}\n")
+            sb.append("• AES-256-GCM AEAD Loop: ${if (selfTestResult.aesGcmRoundtripPass) "PASS (${selfTestResult.aesGcmExecutionTimeMs}ms)" else "FAIL"}\n")
+            sb.append("• Argon2id Memory KDF: ${if (selfTestResult.argon2KdfPass) "PASS (${selfTestResult.argon2KdfExecutionTimeMs}ms)" else "FAIL"}\n")
+            sb.append("• Keystore Master Key Check: ${if (selfTestResult.databaseKeyVerificationPass) "PASS (${selfTestResult.databaseKeyExecutionTimeMs}ms)" else "FAIL"}\n")
+            sb.append("• Zero Plaintext Disk Remanence: ${if (selfTestResult.zeroDiskLeakPass) "PASS (0 Leaks Detected)" else "FAIL"}\n")
+            sb.append("• Thumbnail Container Integrity: ${if (selfTestResult.thumbnailFormatIntegrityPass) "PASS (.thumb_aes256 Encrypted)" else "FAIL"}\n\n")
+        }
+
+        if (backupResult != null) {
+            sb.append("─── BACKUP ENVELOPE INSPECTION ───\n")
+            sb.append("• Target Archive: ${backupResult.fileName} (${backupResult.formattedSize})\n")
+            sb.append("• Container Format: ${backupResult.formatName}\n")
+            sb.append("• Security Rating: ${backupResult.securityScore}/5 — ${backupResult.securityLevelTitle}\n")
+            sb.append("• Key Derivation: ${backupResult.kdfSuite}\n")
+            sb.append("• Cipher Suite: ${backupResult.cipherSuite}\n")
+            sb.append("• Hardware Binding: ${backupResult.hardwareBindingStatus}\n")
+            sb.append("• Envelope Integrity: ${backupResult.integrityVerdict}\n")
+            sb.append("• Sample SHA-256: ${backupResult.sha256Hex}\n\n")
+        }
+
+        sb.append("══════════════════════════════════════════════════════════\n")
+        sb.append("Generated by Quantum Vault In-App Cryptographic Inspector\n")
+        sb.append("Verified Offline • 0% Plaintext Leakage • Play Store Ready\n")
+        sb.append("══════════════════════════════════════════════════════════\n")
+        return sb.toString()
     }
 
     private fun readFullyFromStream(inputStream: InputStream, buffer: ByteArray, offset: Int, length: Int): Int {

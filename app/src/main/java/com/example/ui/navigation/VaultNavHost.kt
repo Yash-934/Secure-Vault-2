@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -503,11 +504,24 @@ fun VaultNavHost(
 
         // 10. Encryption Inspector Screen
         composable(NavRoutes.EncryptionInspector.route) {
-            EncryptionInspectorScreen(
-                onBackClick = { navController.popBackStack() },
-                onPickerLaunched = { vaultViewModel.onSystemPickerLaunched() },
-                onPickerFinished = { vaultViewModel.onSystemPickerFinished() }
-            )
+            if (vaultMode == VaultMode.LOCKED) {
+                LaunchedEffect(Unit) {
+                    val target = if (settings.isCamouflageEnabled) {
+                        if (settings.camouflageType == "NOTES") NavRoutes.Notes.route else NavRoutes.Calculator.route
+                    } else {
+                        NavRoutes.Lock.route
+                    }
+                    navController.navigate(target) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            } else {
+                EncryptionInspectorScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onPickerLaunched = { vaultViewModel.onSystemPickerLaunched() },
+                    onPickerFinished = { vaultViewModel.onSystemPickerFinished() }
+                )
+            }
         }
     }
 
