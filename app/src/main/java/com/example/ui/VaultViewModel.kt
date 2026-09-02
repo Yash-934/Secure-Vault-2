@@ -176,6 +176,14 @@ class VaultViewModel(
         simulateLoading()
     }
 
+    fun unlockWithBiometrics(authPayload: ByteArray): Boolean {
+        if (authPayload.isEmpty()) {
+            return false
+        }
+        unlockRealVault()
+        return true
+    }
+
     fun unlockDecoyVault() {
         _vaultMode.value = VaultMode.DECOY
         _isUnlocked.value = true

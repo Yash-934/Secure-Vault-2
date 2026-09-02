@@ -569,7 +569,7 @@ private fun HeroTelemetryCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "MILITARY GRADE",
+                        text = "HARDENED ENCLAVE",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
                         color = NeonCyan,

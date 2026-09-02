@@ -12,7 +12,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
+import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -40,10 +43,15 @@ data class VaultSettings(
 class SettingsDataStore(private val context: Context) {
 
     companion object {
+        private val authMutex = Mutex()
+
         private val IS_INITIALIZED_KEY = booleanPreferencesKey("is_vault_initialized")
         private val MASTER_PIN_HASH_KEY = stringPreferencesKey("master_pin_hash")
+        private val MASTER_PIN_SALT_KEY = stringPreferencesKey("master_pin_salt_hex")
         private val DECOY_PIN_HASH_KEY = stringPreferencesKey("decoy_pin_hash")
+        private val DECOY_PIN_SALT_KEY = stringPreferencesKey("decoy_pin_salt_hex")
         private val KILL_PIN_HASH_KEY = stringPreferencesKey("kill_pin_hash")
+        private val KILL_PIN_SALT_KEY = stringPreferencesKey("kill_pin_salt_hex")
         private val KILL_PIN_ENABLED_KEY = booleanPreferencesKey("kill_pin_enabled")
         private val BIOMETRICS_ENABLED_KEY = booleanPreferencesKey("biometrics_enabled")
         private val PANIC_FLIP_ENABLED_KEY = booleanPreferencesKey("panic_flip_enabled")
@@ -59,19 +67,33 @@ class SettingsDataStore(private val context: Context) {
         private val FAILED_ATTEMPTS_COUNT_KEY = intPreferencesKey("failed_attempts_count")
         private val LOCKOUT_EXPIRATION_TIMESTAMP_KEY = longPreferencesKey("lockout_expiration_ts")
 
-        // Domain-separated fixed salt bytes for PBKDF2 credential derivation
-        private val SALT_MASTER_PIN = "QVLT_MASTER_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
-        private val SALT_DECOY_PIN = "QVLT_DECOY_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
-        private val SALT_KILL_PIN = "QVLT_KILL_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
         private const val PBKDF2_ITERATIONS = 12000
         private const val KEY_LENGTH_BITS = 256
+
+        fun generateRandomSalt(): ByteArray {
+            val salt = ByteArray(16)
+            SecureRandom().nextBytes(salt)
+            return salt
+        }
+
+        fun bytesToHex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+        fun hexToBytes(hex: String): ByteArray {
+            if (hex.length % 2 != 0) return ByteArray(0)
+            val result = ByteArray(hex.length / 2)
+            for (i in result.indices) {
+                val byteVal = hex.substring(i * 2, i * 2 + 2).toIntOrNull(16) ?: return ByteArray(0)
+                result[i] = byteVal.toByte()
+            }
+            return result
+        }
 
         fun hashPin(pin: String, salt: ByteArray): String {
             if (pin.isEmpty()) return ""
             val spec = PBEKeySpec(pin.toCharArray(), salt, PBKDF2_ITERATIONS, KEY_LENGTH_BITS)
             val skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
             val hash = skf.generateSecret(spec).encoded
-            return hash.joinToString("") { "%02x".format(it) }
+            return bytesToHex(hash)
         }
 
         fun constantTimeEquals(a: String, b: String): Boolean {
@@ -103,38 +125,44 @@ class SettingsDataStore(private val context: Context) {
         )
     }
 
-    suspend fun initializeCredentials(masterPin: String) {
-        val masterHash = hashPin(masterPin, SALT_MASTER_PIN)
+    suspend fun initializeCredentials(masterPin: String) = authMutex.withLock {
+        val salt = generateRandomSalt()
+        val masterHash = hashPin(masterPin, salt)
         context.dataStore.edit { prefs ->
             prefs[IS_INITIALIZED_KEY] = true
             prefs[MASTER_PIN_HASH_KEY] = masterHash
+            prefs[MASTER_PIN_SALT_KEY] = bytesToHex(salt)
             prefs[FAILED_ATTEMPTS_COUNT_KEY] = 0
             prefs[LOCKOUT_EXPIRATION_TIMESTAMP_KEY] = 0L
         }
     }
 
-    suspend fun verifyMasterPin(pin: String): Boolean {
+    suspend fun verifyMasterPin(pin: String): Boolean = authMutex.withLock {
         if (pin.isEmpty()) return false
         val prefs = context.dataStore.data.first()
         val isInit = prefs[IS_INITIALIZED_KEY] ?: false
         if (!isInit) return false
         val storedHash = prefs[MASTER_PIN_HASH_KEY] ?: return false
-        val computedHash = hashPin(pin, SALT_MASTER_PIN)
+        val saltHex = prefs[MASTER_PIN_SALT_KEY]
+        val salt = if (!saltHex.isNullOrEmpty()) hexToBytes(saltHex) else "QVLT_MASTER_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
+        val computedHash = hashPin(pin, salt)
         return constantTimeEquals(storedHash, computedHash)
     }
 
-    suspend fun verifyDecoyPin(pin: String): Boolean {
+    suspend fun verifyDecoyPin(pin: String): Boolean = authMutex.withLock {
         if (pin.isEmpty()) return false
         val prefs = context.dataStore.data.first()
         val isInit = prefs[IS_INITIALIZED_KEY] ?: false
         if (!isInit) return false
         val storedHash = prefs[DECOY_PIN_HASH_KEY] ?: return false
         if (storedHash.isEmpty()) return false
-        val computedHash = hashPin(pin, SALT_DECOY_PIN)
+        val saltHex = prefs[DECOY_PIN_SALT_KEY]
+        val salt = if (!saltHex.isNullOrEmpty()) hexToBytes(saltHex) else "QVLT_DECOY_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
+        val computedHash = hashPin(pin, salt)
         return constantTimeEquals(storedHash, computedHash)
     }
 
-    suspend fun verifyKillPin(pin: String): Boolean {
+    suspend fun verifyKillPin(pin: String): Boolean = authMutex.withLock {
         if (pin.isEmpty()) return false
         val prefs = context.dataStore.data.first()
         val isInit = prefs[IS_INITIALIZED_KEY] ?: false
@@ -142,29 +170,37 @@ class SettingsDataStore(private val context: Context) {
         if (!isInit || !isEnabled) return false
         val storedHash = prefs[KILL_PIN_HASH_KEY] ?: return false
         if (storedHash.isEmpty()) return false
-        val computedHash = hashPin(pin, SALT_KILL_PIN)
+        val saltHex = prefs[KILL_PIN_SALT_KEY]
+        val salt = if (!saltHex.isNullOrEmpty()) hexToBytes(saltHex) else "QVLT_KILL_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
+        val computedHash = hashPin(pin, salt)
         return constantTimeEquals(storedHash, computedHash)
     }
 
-    suspend fun updateMasterPin(newPin: String) {
-        val newHash = hashPin(newPin, SALT_MASTER_PIN)
+    suspend fun updateMasterPin(newPin: String) = authMutex.withLock {
+        val salt = generateRandomSalt()
+        val newHash = hashPin(newPin, salt)
         context.dataStore.edit { prefs ->
             prefs[IS_INITIALIZED_KEY] = true
             prefs[MASTER_PIN_HASH_KEY] = newHash
+            prefs[MASTER_PIN_SALT_KEY] = bytesToHex(salt)
         }
     }
 
-    suspend fun updateDecoyPin(newPin: String) {
-        val newHash = if (newPin.isNotBlank()) hashPin(newPin, SALT_DECOY_PIN) else ""
+    suspend fun updateDecoyPin(newPin: String) = authMutex.withLock {
+        val salt = generateRandomSalt()
+        val newHash = if (newPin.isNotBlank()) hashPin(newPin, salt) else ""
         context.dataStore.edit { prefs ->
             prefs[DECOY_PIN_HASH_KEY] = newHash
+            prefs[DECOY_PIN_SALT_KEY] = if (newPin.isNotBlank()) bytesToHex(salt) else ""
         }
     }
 
-    suspend fun updateKillPin(newPin: String) {
-        val newHash = if (newPin.isNotBlank()) hashPin(newPin, SALT_KILL_PIN) else ""
+    suspend fun updateKillPin(newPin: String) = authMutex.withLock {
+        val salt = generateRandomSalt()
+        val newHash = if (newPin.isNotBlank()) hashPin(newPin, salt) else ""
         context.dataStore.edit { prefs ->
             prefs[KILL_PIN_HASH_KEY] = newHash
+            prefs[KILL_PIN_SALT_KEY] = if (newPin.isNotBlank()) bytesToHex(salt) else ""
         }
     }
 
@@ -173,24 +209,38 @@ class SettingsDataStore(private val context: Context) {
         return prefs[FAILED_ATTEMPTS_COUNT_KEY] ?: 0
     }
 
-    suspend fun recordFailedAttempt(): Int {
+    suspend fun recordFailedAttempt(): Int = authMutex.withLock {
         var count = 0
         context.dataStore.edit { prefs ->
             val current = prefs[FAILED_ATTEMPTS_COUNT_KEY] ?: 0
             count = current + 1
             prefs[FAILED_ATTEMPTS_COUNT_KEY] = count
+
+            // Progressive Rate-Limiting Backoff
+            val lockoutSeconds = when {
+                count < 4 -> 0
+                count == 4 -> 30
+                count == 5 -> 60
+                count == 6 -> 300 // 5 minutes
+                else -> 1800     // 30 minutes
+            }
+
+            if (lockoutSeconds > 0) {
+                val expirationTs = System.currentTimeMillis() + (lockoutSeconds * 1000L)
+                prefs[LOCKOUT_EXPIRATION_TIMESTAMP_KEY] = expirationTs
+            }
         }
         return count
     }
 
-    suspend fun resetFailedAttempts() {
+    suspend fun resetFailedAttempts() = authMutex.withLock {
         context.dataStore.edit { prefs ->
             prefs[FAILED_ATTEMPTS_COUNT_KEY] = 0
             prefs[LOCKOUT_EXPIRATION_TIMESTAMP_KEY] = 0L
         }
     }
 
-    suspend fun setLockoutExpiration(expirationTimestamp: Long) {
+    suspend fun setLockoutExpiration(expirationTimestamp: Long) = authMutex.withLock {
         context.dataStore.edit { prefs ->
             prefs[LOCKOUT_EXPIRATION_TIMESTAMP_KEY] = expirationTimestamp
         }

@@ -16,8 +16,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Advanced 20-Point Military-Grade Security Diagnostic & Hardening Engine.
- * Guaranteed zero user data access, zero network usage, strictly offline.
+ * Cryptographic Security Diagnostic & Integrity Hardening Engine.
+ * Zero user data access, zero network usage, strictly offline evaluation.
  */
 @Singleton
 class SecurityAuditEngine @Inject constructor(
@@ -380,7 +380,7 @@ class SecurityAuditEngine @Inject constructor(
             val appInfo = context.applicationInfo
             (appInfo.flags and ApplicationInfo.FLAG_ALLOW_BACKUP) == 0
         } catch (_: Exception) {
-            true
+            false
         }
     }
 
@@ -440,8 +440,7 @@ class SecurityAuditEngine @Inject constructor(
             }
             keyStore.containsAlias(alias)
         } catch (_: Exception) {
-            // Emulators or environments without Keystore provider might fail gracefully
-            true
+            false
         }
     }
 

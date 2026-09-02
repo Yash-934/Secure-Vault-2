@@ -86,7 +86,7 @@ fun SecurityArchitectureDialog(
                         letterSpacing = 1.sp
                     )
                     Text(
-                        text = "Rating: ULTRA-HIGH (Military-Grade)",
+                        text = "Rating: ULTRA-HIGH (Hardware-Backed)",
                         fontSize = 11.sp,
                         color = VaultNeonGreen
                     )

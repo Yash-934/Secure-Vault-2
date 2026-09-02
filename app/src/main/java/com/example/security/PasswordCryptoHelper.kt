@@ -11,66 +11,16 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 object PasswordCryptoHelper {
-    private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
-    private const val KEY_ALIAS = "QuantumVaultPasswordMasterKey"
     private const val ALGORITHM = "AES/GCM/NoPadding"
     private const val TAG_LENGTH_BIT = 128
     private const val IV_LENGTH_BYTE = 12
 
-    private val keyStore: KeyStore? = try {
-        KeyStore.getInstance(KEYSTORE_PROVIDER).apply {
-            load(null)
-        }
-    } catch (_: Exception) {
-        null
-    }
-
-    private var fallbackJvmKey: SecretKey? = null
-
-    private fun getOrCreateKey(): SecretKey {
-        if (keyStore != null) {
-            try {
-                val existingKey = keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
-                if (existingKey != null) {
-                    return existingKey.secretKey
-                }
-
-                val keyGenerator = KeyGenerator.getInstance(
-                    KeyProperties.KEY_ALGORITHM_AES,
-                    KEYSTORE_PROVIDER
-                )
-                val keyGenSpec = KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .setRandomizedEncryptionRequired(true)
-                    .build()
-
-                keyGenerator.init(keyGenSpec)
-                return keyGenerator.generateKey()
-            } catch (_: Exception) {
-                // Fallback for JVM test runner environments
-            }
-        }
-
-        return fallbackJvmKey ?: synchronized(this) {
-            fallbackJvmKey ?: run {
-                val kg = KeyGenerator.getInstance("AES")
-                kg.init(256)
-                val k = kg.generateKey()
-                fallbackJvmKey = k
-                k
-            }
-        }
-    }
+    private fun getKey(): SecretKey = VaultKeyManager.getPasswordMasterKey()
 
     fun encryptText(plainText: String): String {
         if (plainText.isEmpty()) return ""
         return try {
-            val key = getOrCreateKey()
+            val key = getKey()
             val cipher = Cipher.getInstance(ALGORITHM)
             val iv = ByteArray(IV_LENGTH_BYTE)
             SecureRandom().nextBytes(iv)
@@ -91,7 +41,7 @@ object PasswordCryptoHelper {
             if (combined.size < IV_LENGTH_BYTE + 16) return ""
             val iv = combined.copyOfRange(0, IV_LENGTH_BYTE)
             val cipherBytes = combined.copyOfRange(IV_LENGTH_BYTE, combined.size)
-            val key = getOrCreateKey()
+            val key = getKey()
             val cipher = Cipher.getInstance(ALGORITHM)
             val spec = GCMParameterSpec(TAG_LENGTH_BIT, iv)
             cipher.init(Cipher.DECRYPT_MODE, key, spec)

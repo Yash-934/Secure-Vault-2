@@ -91,6 +91,11 @@ fun SecurePdfViewer(
     // Helper method to securely zero-out bytes and delete temp file
     fun cleanupTempFile() {
         try {
+            currentPageBitmap?.recycle()
+            currentPageBitmap = null
+        } catch (_: Exception) {}
+
+        try {
             pdfRenderer?.close()
             pdfRenderer = null
         } catch (_: Exception) {}

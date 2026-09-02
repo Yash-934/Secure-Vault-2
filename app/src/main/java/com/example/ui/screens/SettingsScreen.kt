@@ -483,7 +483,7 @@ fun SettingsScreen(
                         label = "ARCHITECTURE",
                         status = "ULTRA-HIGH",
                         statusColor = PassGreen,
-                        subtitle = "Military-Grade TEE",
+                        subtitle = "Hardware-Backed TEE",
                         onClick = { showSecurityArchitectureDialog = true }
                     )
 

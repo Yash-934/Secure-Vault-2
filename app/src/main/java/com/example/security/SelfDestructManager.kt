@@ -15,43 +15,28 @@ object SelfDestructManager {
 
     suspend fun executeNuclearSelfDestruct(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            // 1. Close and delete Room database
+            // 1. Close and delete Room databases (both real and decoy)
             try {
                 val db = AppDatabase.getDatabase(context)
                 db.close()
                 context.deleteDatabase("secure_vault_db")
+                context.deleteDatabase("secure_vault_decoy_db")
             } catch (e: Exception) {
                 e.printStackTrace()
             }
 
-            // 2. Wipe /shred files in Context.filesDir and datastore recursively
+            // 2. Wipe / shred files in Context.filesDir and datastore recursively
             shredDirectory(context.filesDir)
             val datastoreDir = File(context.filesDir.parent, "datastore")
             if (datastoreDir.exists()) shredDirectory(datastoreDir)
             val sharedPrefsDir = File(context.filesDir.parent, "shared_prefs")
             if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir)
 
-            // 3. Wipe /shred files in Context.cacheDir recursively
+            // 3. Wipe / shred files in Context.cacheDir recursively
             shredDirectory(context.cacheDir)
 
-            // 4. Reset Keystore keys
-            try {
-                val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-                val aliasesToDelete = listOf(
-                    "VaultMasterKey",
-                    "SecureVaultAES256MasterKey",
-                    "SecureVaultDexKey",
-                    "SecureVaultHardwareAttestationKey_v2",
-                    "QuantumVaultDbKeyWrapMaster"
-                )
-                aliasesToDelete.forEach { alias ->
-                    if (keyStore.containsAlias(alias)) {
-                        keyStore.deleteEntry(alias)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            // 4. Destroy ALL Keystore keys via central VaultKeyManager
+            VaultKeyManager.destroyAllKeys()
 
             // 5. Ultimate wipe using OS ActivityManager (terminates app)
             try {

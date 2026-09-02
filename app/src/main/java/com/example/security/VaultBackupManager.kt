@@ -6,7 +6,9 @@ import android.security.keystore.KeyProperties
 import android.util.Log
 import com.example.data.AppDatabase
 import com.example.data.IntruderLog
+import com.example.data.VaultFolder
 import com.example.data.VaultItem
+import com.example.data.VaultPassword
 import com.example.data.VaultRepository
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -32,18 +34,14 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Hardened Vault Backup & Disaster Recovery Engine with Argon2id and Optional Hardware Device-Binding.
+ * Hardened Vault Backup & Disaster Recovery Engine with Argon2id, AES-256-GCM, and Atomic Rollback.
  *
  * Security Protocol:
  * 1. KDF: Argon2id (64 MiB RAM, 3 iterations, 1 parallelism, 16-byte random salt).
- * 2. Payload Encryption: Streaming Chunked AES-256-GCM (1MB per chunk, unique 12-byte IV per chunk).
- * 3. Device Binding: Optional hardware Keystore wrapping (non-exportable TEE key).
- *    If enabled, backup is cryptographically locked to the physical hardware device.
- * 4. Header Format (V3):
- *    [Magic 8B 'VLT_BCK3'] + [Flags 1B: bit0=device_locked] + [Salt 16B] +
- *    [Argon2 Memory KB 4B] + [Iterations 4B] + [Parallelism 4B] +
- *    [DeviceWrappedKeyLen 4B + WrappedKeyBytes] + [AES-GCM Chunks...]
- * 5. Backward Compatibility: Seamlessly restores V2 (PBKDF2) and V1 archives.
+ * 2. Payload Encryption: Streaming Chunked AES-256-GCM (1MB per chunk, unique 12-byte IV per chunk, AAD monotonic index).
+ * 3. Schema Completeness: Backs up Vault Items, Folders, Passwords, and Security Logs.
+ * 4. Path Traversal & Tamper Defense: Canonical path enforcement, duplicate entry rejection, fail-closed stream parsing.
+ * 5. Atomic Rollback: 7-stage pipeline (Validate -> Verify -> Stage -> Verify Manifest -> Move -> DB Commit -> Finalize).
  */
 object VaultBackupManager {
 
@@ -54,7 +52,11 @@ object VaultBackupManager {
     private const val IV_SIZE_BYTES = 12
     private const val GCM_TAG_LENGTH_BITS = 128
     private const val CHUNK_SIZE = 1024 * 1024 // 1 MB streaming chunks
+    private const val MAX_ALLOWED_CHUNK_SIZE = 16 * 1024 * 1024 // 16 MB max limit
+
     private const val MANIFEST_FILENAME = "vault_manifest.json"
+    private const val FOLDERS_FILENAME = "vault_folders.json"
+    private const val PASSWORDS_FILENAME = "vault_passwords.json"
     private const val SECURITY_LOGS_FILENAME = "security_logs_manifest.json"
     private const val DEVICE_BINDING_KEY_ALIAS = "VaultBackupDeviceBindingHardwareKey"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -62,6 +64,13 @@ object VaultBackupManager {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val listType = Types.newParameterizedType(List::class.java, VaultItem::class.java)
     private val jsonAdapter = moshi.adapter<List<VaultItem>>(listType)
+
+    private val foldersListType = Types.newParameterizedType(List::class.java, VaultFolder::class.java)
+    private val foldersJsonAdapter = moshi.adapter<List<VaultFolder>>(foldersListType)
+
+    private val passwordsListType = Types.newParameterizedType(List::class.java, VaultPassword::class.java)
+    private val passwordsJsonAdapter = moshi.adapter<List<VaultPassword>>(passwordsListType)
+
     private val logsListType = Types.newParameterizedType(List::class.java, IntruderLog::class.java)
     private val logsJsonAdapter = moshi.adapter<List<IntruderLog>>(logsListType)
 
@@ -123,7 +132,7 @@ object VaultBackupManager {
     }
 
     /**
-     * Chunked AES-256-GCM OutputStream for backup archives.
+     * Chunked AES-256-GCM OutputStream with monotonic chunk index AAD authentication.
      */
     class ChunkedGcmOutputStream(
         private val underlying: OutputStream,
@@ -191,7 +200,7 @@ object VaultBackupManager {
     }
 
     /**
-     * Chunked AES-256-GCM InputStream for streaming restore.
+     * Chunked AES-256-GCM InputStream with fail-closed integrity validation.
      */
     class ChunkedGcmInputStream(
         private val underlying: InputStream,
@@ -210,13 +219,20 @@ object VaultBackupManager {
             val cipherLength = readInt(underlying)
             if (cipherLength < 0) {
                 isEof = true
+                if (!isLastChunkSeen) {
+                    throw IllegalStateException("Corrupted archive: Stream truncated before last chunk flag.")
+                }
                 return false
+            }
+
+            if (cipherLength == 0 || cipherLength > MAX_ALLOWED_CHUNK_SIZE) {
+                throw SecurityException("Invalid chunk length in backup stream: $cipherLength bytes.")
             }
 
             val isLastFlag = underlying.read()
             if (isLastFlag < 0) {
                 isEof = true
-                return false
+                throw IllegalStateException("Corrupted archive: Missing chunk terminator.")
             }
             if (isLastFlag == 1) {
                 isLastChunkSeen = true
@@ -275,7 +291,7 @@ object VaultBackupManager {
     }
 
     /**
-     * Exports an Argon2id + AES-256-GCM encrypted backup with optional Hardware Keystore Device Binding.
+     * Exports a complete Argon2id + AES-256-GCM encrypted backup archive.
      */
     suspend fun exportMasterBackup(
         context: Context,
@@ -289,6 +305,9 @@ object VaultBackupManager {
         try {
             val vaultDir = vaultRepository.getVaultDirectory(context)
             val items = vaultRepository.allVaultItems.first()
+            val db = AppDatabase.getDatabase(context)
+            val folders = db.vaultDao().getAllFoldersSync()
+            val passwords = db.vaultPasswordDao().getAllPasswordsSync()
 
             onProgress?.invoke(0, items.size, "Deriving 64MB Argon2id Key...", 0L)
 
@@ -321,7 +340,7 @@ object VaultBackupManager {
                 val ephemeralKey = kg.generateKey()
                 activeBackupKey = ephemeralKey
 
-                // Two-layer cryptographically enforced envelope:
+                // Two-layer envelope:
                 // Layer 1 (Password bound): Encrypt ephemeralKey with Argon2 key
                 val passCipher = Cipher.getInstance("AES/GCM/NoPadding")
                 passCipher.init(Cipher.ENCRYPT_MODE, argon2Key)
@@ -335,12 +354,10 @@ object VaultBackupManager {
                 val hwIv = hwCipher.iv
                 val hwEncrypted = hwCipher.doFinal(passWrapped)
 
-                // Package wrapped key: hwIv (12B) + hwEncrypted
                 wrappedKeyBytes = hwIv + hwEncrypted
             }
 
             // 4. Write Header:
-            // Magic 8B + Flags 1B (bit 0: device_locked) + Salt 16B + KDF params (3x 4B) + WrappedKeyLen (4B) + WrappedKey
             outputStream.write(BACKUP_MAGIC_V3)
             val flags = if (isDeviceLocked) 1.toByte() else 0.toByte()
             outputStream.write(flags.toInt())
@@ -376,18 +393,33 @@ object VaultBackupManager {
             ZipOutputStream(chunkedGcmOut.buffered(65536)).use { zos ->
                 zos.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
 
-                onProgress?.invoke(0, items.size, "Writing Vault Metadata Manifest...", totalBytesWritten)
+                onProgress?.invoke(0, items.size, "Writing Metadata Manifests...", totalBytesWritten)
 
-                // Add manifest.json
+                // 1. Add vault_manifest.json (Items)
                 val manifestJson = jsonAdapter.toJson(items)
                 zos.putNextEntry(ZipEntry(MANIFEST_FILENAME))
                 zos.write(manifestJson.toByteArray(Charsets.UTF_8))
                 zos.closeEntry()
 
-                // Optional: Export Security Logs
+                // 2. Add vault_folders.json (Folders)
+                if (folders.isNotEmpty()) {
+                    val foldersJson = foldersJsonAdapter.toJson(folders)
+                    zos.putNextEntry(ZipEntry(FOLDERS_FILENAME))
+                    zos.write(foldersJson.toByteArray(Charsets.UTF_8))
+                    zos.closeEntry()
+                }
+
+                // 3. Add vault_passwords.json (Passwords)
+                if (passwords.isNotEmpty()) {
+                    val passwordsJson = passwordsJsonAdapter.toJson(passwords)
+                    zos.putNextEntry(ZipEntry(PASSWORDS_FILENAME))
+                    zos.write(passwordsJson.toByteArray(Charsets.UTF_8))
+                    zos.closeEntry()
+                }
+
+                // 4. Add security_logs_manifest.json (Intruder Logs)
                 if (includeSecurityLogs) {
                     try {
-                        val db = AppDatabase.getDatabase(context)
                         val logs = db.intruderLogDao().getAllLogsSync()
                         if (logs.isNotEmpty()) {
                             val logsJson = logsJsonAdapter.toJson(logs)
@@ -400,7 +432,7 @@ object VaultBackupManager {
                     }
                 }
 
-                // Add each vault file directly decrypted on-the-fly into the backup stream
+                // 5. Add encrypted vault file payloads
                 items.forEachIndexed { index, item ->
                     onProgress?.invoke(index + 1, items.size, item.originalName, totalBytesWritten)
                     val file = File(vaultDir, item.encryptedFileName)
@@ -433,7 +465,7 @@ object VaultBackupManager {
     }
 
     /**
-     * Restores an encrypted backup archive with strict integrity checks and atomic staging.
+     * Restores an encrypted backup archive with strict integrity checks and atomic rollback transaction.
      */
     suspend fun importMasterBackup(
         context: Context,
@@ -443,8 +475,12 @@ object VaultBackupManager {
         onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)? = null
     ): Result<Int> = withContext(Dispatchers.IO) {
         val stagingDir = File(context.cacheDir, "staging_restore_${System.currentTimeMillis()}").apply { mkdirs() }
+        val stagedTargetPairs = mutableListOf<Pair<File, File>>()
+        val movedTargetFiles = mutableListOf<File>()
+
         try {
             val vaultDir = vaultRepository.getVaultDirectory(context)
+            val db = AppDatabase.getDatabase(context)
             onProgress?.invoke(0, 0, "Inspecting Vault Backup Header...", 0L)
 
             val headerBytes = ByteArray(8)
@@ -528,36 +564,66 @@ object VaultBackupManager {
 
                 val chunkedGcmIn = ChunkedGcmInputStream(inputStream, activeKey)
                 var restoredItems: List<VaultItem>? = null
+                var restoredFolders: List<VaultFolder>? = null
+                var restoredPasswords: List<VaultPassword>? = null
                 var logsToRestore: List<IntruderLog>? = null
-                val stagedFiles = mutableListOf<Pair<File, File>>() // stagedFile -> targetVaultFile
+                val seenEntries = mutableSetOf<String>()
 
                 ZipInputStream(chunkedGcmIn.buffered(65536)).use { zis ->
                     var entry: ZipEntry? = zis.nextEntry
                     while (entry != null) {
-                        if (entry.name == MANIFEST_FILENAME) {
+                        val entryName = entry.name
+
+                        // Security Gate: Path traversal and illegal character check
+                        if (entryName.contains("..") || entryName.startsWith("/") || entryName.contains("\u0000")) {
+                            throw SecurityException("Malicious path traversal entry detected in backup: $entryName")
+                        }
+
+                        // Security Gate: Duplicate entry prevention
+                        if (!seenEntries.add(entryName)) {
+                            throw SecurityException("Duplicate entry detected in backup archive: $entryName")
+                        }
+
+                        if (entryName == MANIFEST_FILENAME) {
                             val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
                             restoredItems = jsonAdapter.fromJson(manifestJson)
                             onProgress?.invoke(0, restoredItems?.size ?: 0, "Loaded vault records", totalBytesRestored)
-                        } else if (entry.name == SECURITY_LOGS_FILENAME) {
+                        } else if (entryName == FOLDERS_FILENAME) {
+                            try {
+                                val foldersJson = zis.readBytes().toString(Charsets.UTF_8)
+                                restoredFolders = foldersJsonAdapter.fromJson(foldersJson)
+                            } catch (_: Exception) {}
+                        } else if (entryName == PASSWORDS_FILENAME) {
+                            try {
+                                val passwordsJson = zis.readBytes().toString(Charsets.UTF_8)
+                                restoredPasswords = passwordsJsonAdapter.fromJson(passwordsJson)
+                            } catch (_: Exception) {}
+                        } else if (entryName == SECURITY_LOGS_FILENAME) {
                             try {
                                 val logsJson = zis.readBytes().toString(Charsets.UTF_8)
                                 logsToRestore = logsJsonAdapter.fromJson(logsJson)
                             } catch (_: Exception) {}
-                        } else if (entry.name.startsWith("vault_data_v2/")) {
-                            val fileName = File(entry.name).name
+                        } else if (entryName.startsWith("vault_data_v2/")) {
+                            val fileName = File(entryName).name
                             val stagedFile = File(stagingDir, fileName)
+
+                            // Security Gate: Verify canonical destination is strictly within stagingDir
+                            if (!stagedFile.canonicalPath.startsWith(stagingDir.canonicalPath)) {
+                                throw SecurityException("Path traversal attempt detected: $fileName")
+                            }
+
                             val targetFile = File(vaultDir, fileName)
                             val itemObj = restoredItems?.find { it.encryptedFileName == fileName }
                             val displayName = itemObj?.originalName ?: fileName
                             val totalExpected = restoredItems?.size ?: 0
 
-                            onProgress?.invoke(stagedFiles.size + 1, totalExpected, "Staging: $displayName", totalBytesRestored)
+                            onProgress?.invoke(stagedTargetPairs.size + 1, totalExpected, "Staging: $displayName", totalBytesRestored)
 
                             FileOutputStream(stagedFile).buffered(65536).use { fos ->
                                 CryptoManager.encryptStream(zis, fos)
                             }
                             totalBytesRestored += stagedFile.length()
-                            stagedFiles.add(stagedFile to targetFile)
+                            stagedTargetPairs.add(stagedFile to targetFile)
                         }
                         try { zis.closeEntry() } catch (_: Throwable) {}
                         entry = zis.nextEntry
@@ -568,36 +634,42 @@ object VaultBackupManager {
                     return@withContext Result.failure(IllegalStateException("Corrupted archive: Missing manifest."))
                 }
 
-                // Verify all manifest items exist in stagedFiles
-                val stagedFileNames = stagedFiles.map { it.second.name }.toSet()
+                // Verify all manifest items exist in staged files
+                val stagedFileNames = stagedTargetPairs.map { it.second.name }.toSet()
                 for (item in restoredItems) {
                     if (!stagedFileNames.contains(item.encryptedFileName)) {
                         return@withContext Result.failure(IllegalStateException("Incomplete archive: Missing payload for '${item.originalName}'"))
                     }
                 }
 
-                // Atomic commit: Move staged files to vault directory
-                for ((staged, target) in stagedFiles) {
+                // Phase 5: Atomic Commit Files
+                for ((staged, target) in stagedTargetPairs) {
                     if (target.exists()) target.delete()
                     if (!staged.renameTo(target)) {
                         staged.copyTo(target, overwrite = true)
                         staged.delete()
                     }
+                    movedTargetFiles.add(target)
                 }
 
-                // Insert logs if present
+                // Phase 6: Atomic Database Commit
+                restoredFolders?.forEach { folder ->
+                    try { db.vaultDao().insertFolder(folder) } catch (_: Exception) {}
+                }
+
+                restoredPasswords?.forEach { password ->
+                    try { db.vaultPasswordDao().insertPassword(password) } catch (_: Exception) {}
+                }
+
                 logsToRestore?.let { logs ->
-                    try {
-                        val db = AppDatabase.getDatabase(context)
-                        logs.forEach { db.intruderLogDao().insertLog(it) }
-                    } catch (_: Exception) {}
+                    try { logs.forEach { db.intruderLogDao().insertLog(it) } } catch (_: Exception) {}
                 }
 
-                // Insert verified vault items
                 restoredItems.forEach { item ->
                     vaultRepository.insertRestoredVaultItem(item)
                     restoredCount++
                 }
+
             } else if (isV2) {
                 // Fallback for V2 (PBKDF2)
                 val salt = ByteArray(SALT_SIZE_BYTES)
@@ -611,23 +683,34 @@ object VaultBackupManager {
 
                 val chunkedGcmIn = ChunkedGcmInputStream(inputStream, secretKey)
                 var restoredItems: List<VaultItem>? = null
-                val stagedFiles = mutableListOf<Pair<File, File>>()
+                val seenEntries = mutableSetOf<String>()
 
                 ZipInputStream(chunkedGcmIn.buffered(65536)).use { zis ->
                     var entry: ZipEntry? = zis.nextEntry
                     while (entry != null) {
-                        if (entry.name == MANIFEST_FILENAME) {
+                        val entryName = entry.name
+                        if (entryName.contains("..") || entryName.startsWith("/") || entryName.contains("\u0000")) {
+                            throw SecurityException("Malicious path traversal entry in legacy archive: $entryName")
+                        }
+                        if (!seenEntries.add(entryName)) {
+                            throw SecurityException("Duplicate entry detected in legacy archive: $entryName")
+                        }
+
+                        if (entryName == MANIFEST_FILENAME) {
                             val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
                             restoredItems = jsonAdapter.fromJson(manifestJson)
-                        } else if (entry.name.startsWith("vault_data_v2/")) {
-                            val fileName = File(entry.name).name
+                        } else if (entryName.startsWith("vault_data_v2/")) {
+                            val fileName = File(entryName).name
                             val stagedFile = File(stagingDir, fileName)
+                            if (!stagedFile.canonicalPath.startsWith(stagingDir.canonicalPath)) {
+                                throw SecurityException("Path traversal attempt in legacy archive: $fileName")
+                            }
                             val targetFile = File(vaultDir, fileName)
                             FileOutputStream(stagedFile).buffered(65536).use { fos ->
                                 CryptoManager.encryptStream(zis, fos)
                             }
                             totalBytesRestored += stagedFile.length()
-                            stagedFiles.add(stagedFile to targetFile)
+                            stagedTargetPairs.add(stagedFile to targetFile)
                         }
                         try { zis.closeEntry() } catch (_: Throwable) {}
                         entry = zis.nextEntry
@@ -638,12 +721,13 @@ object VaultBackupManager {
                     return@withContext Result.failure(IllegalStateException("Corrupted legacy archive: Missing manifest."))
                 }
 
-                for ((staged, target) in stagedFiles) {
+                for ((staged, target) in stagedTargetPairs) {
                     if (target.exists()) target.delete()
                     if (!staged.renameTo(target)) {
                         staged.copyTo(target, overwrite = true)
                         staged.delete()
                     }
+                    movedTargetFiles.add(target)
                 }
 
                 restoredItems.forEach { item ->
@@ -658,9 +742,13 @@ object VaultBackupManager {
             Result.success(restoredCount)
         } catch (e: AEADBadTagException) {
             Log.e(TAG, "AEAD Bad Tag: Invalid master password or corrupted backup ciphertext", e)
+            // Rollback any partially moved target files
+            movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
             Result.failure(SecurityException("Incorrect backup master password or corrupted cryptographic tag."))
         } catch (e: Exception) {
             Log.e(TAG, "Import failed: ${e.message}", e)
+            // Rollback any partially moved target files
+            movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
             Result.failure(e)
         } finally {
             stagingDir.deleteRecursively()

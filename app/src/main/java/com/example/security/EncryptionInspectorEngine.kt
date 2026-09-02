@@ -664,7 +664,7 @@ object EncryptionInspectorEngine {
                     magicHeaderStr = "VLT_BCK3 [56 4C 54 5F 42 43 4B 33]"
                     isRecognizedEncrypted = true
                     securityScore = 5
-                    securityLevelTitle = "LEVEL 5/5 — MAXIMUM (MILITARY GRADE / QUANTUM HARDENED)"
+                    securityLevelTitle = "LEVEL 5/5 — MAXIMUM (HARDENED HARDWARE ENCLAVE)"
                     integrityVerdict = "AUTHENTIC & VALIDATED (Zero Corruption Detected)"
 
                     // Read flags (1 byte)
@@ -781,7 +781,7 @@ object EncryptionInspectorEngine {
                     framingArchitecture = "Standard ZIP Compression"
 
                     recommendations.add("WARNING: This archive is NOT encrypted. Data can be read by any standard ZIP tool.")
-                    recommendations.add("Import into Quantum Vault and export as a Master Backup (.vlt) to apply military-grade AES-256-GCM.")
+                    recommendations.add("Import into Quantum Vault and export as a Master Backup (.vlt) to apply hardware-backed AES-256-GCM.")
                     rawHeaderHexDump = buildSanitizedHeaderHexDump(rawSampleBytes)
 
                 } else {

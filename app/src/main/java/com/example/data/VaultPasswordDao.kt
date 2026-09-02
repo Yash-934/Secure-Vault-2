@@ -13,6 +13,9 @@ interface VaultPasswordDao {
     @Query("SELECT * FROM vault_passwords ORDER BY isFavorite DESC, updatedTimestamp DESC")
     fun getAllPasswords(): Flow<List<VaultPassword>>
 
+    @Query("SELECT * FROM vault_passwords ORDER BY isFavorite DESC, updatedTimestamp DESC")
+    suspend fun getAllPasswordsSync(): List<VaultPassword>
+
     @Query("SELECT * FROM vault_passwords WHERE title LIKE '%' || :query || '%' OR usernameOrEmail LIKE '%' || :query || '%' OR category LIKE '%' || :query || '%' ORDER BY isFavorite DESC, updatedTimestamp DESC")
     fun searchPasswords(query: String): Flow<List<VaultPassword>>
 

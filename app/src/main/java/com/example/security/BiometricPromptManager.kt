@@ -4,37 +4,32 @@ import android.content.Context
 import android.os.Build
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
-import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
-import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import javax.crypto.Cipher
 
 /**
- * Biometric & Device Credential Authentication Manager.
+ * Biometric & Hardware Keystore Authentication Manager.
  * 
- * Security Logic:
- * Uses AndroidX Biometric library to require authenticating via Fingerprint, Face ID,
- * or Device PIN/Pattern/Password before unlocking vault access.
+ * Enforces hardware cryptographic binding:
+ * Authentication is bound to a user-authenticated Keystore AES key (setUserAuthenticationRequired(true)).
+ * An unlock payload is derived strictly via the authenticated Cipher in CryptoObject.
  */
 class BiometricPromptManager(private val context: Context) {
 
     sealed interface AuthResult {
-        object Success : AuthResult
+        data class Success(val authPayload: ByteArray) : AuthResult
         data class Error(val message: String) : AuthResult
         object HardwareUnavailable : AuthResult
         object NotEnrolled : AuthResult
         object Cancelled : AuthResult
     }
 
-    private val allowedAuthenticators = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        BIOMETRIC_STRONG or BIOMETRIC_WEAK or DEVICE_CREDENTIAL
-    } else {
-        BIOMETRIC_STRONG or BIOMETRIC_WEAK
-    }
+    private val allowedAuthenticators = BIOMETRIC_STRONG
 
     /**
-     * Checks if Biometric or Device PIN authentication is available on the device.
+     * Checks if Strong Biometric authentication is available on the device.
      */
     fun canAuthenticate(): Boolean {
         val biometricManager = BiometricManager.from(context)
@@ -42,21 +37,54 @@ class BiometricPromptManager(private val context: Context) {
         return status == BiometricManager.BIOMETRIC_SUCCESS
     }
 
+    private fun createBiometricCryptoObject(): BiometricPrompt.CryptoObject? {
+        return try {
+            val key = VaultKeyManager.getOrCreateBiometricMasterKey()
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            BiometricPrompt.CryptoObject(cipher)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /**
-     * Displays the Biometric / Device PIN authentication dialog.
+     * Displays the Cryptographic Biometric authentication dialog.
      */
     fun showBiometricPrompt(
         activity: FragmentActivity,
-        title: String = "Secure Vault Unlock",
-        subtitle: String = "Authenticate to access encrypted files",
+        title: String = "Vault Biometric Unlock",
+        subtitle: String = "Hardware-authenticated cryptographic unlock",
         onResult: (AuthResult) -> Unit
     ) {
+        val cryptoObject = createBiometricCryptoObject()
+        if (cryptoObject == null) {
+            onResult(AuthResult.Error("Hardware cryptographic biometric key unavailable"))
+            return
+        }
+
         val executor = ContextCompat.getMainExecutor(activity)
 
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 super.onAuthenticationSucceeded(result)
-                onResult(AuthResult.Success)
+                val authCipher = result.cryptoObject?.cipher
+                if (authCipher == null) {
+                    onResult(AuthResult.Error("Cryptographic object missing in biometric callback"))
+                    return
+                }
+
+                try {
+                    val challenge = "QVLT_BIOMETRIC_AUTH_CHALLENGE_${System.currentTimeMillis()}".toByteArray(Charsets.UTF_8)
+                    val proof = authCipher.doFinal(challenge)
+                    if (proof != null && proof.isNotEmpty()) {
+                        onResult(AuthResult.Success(proof))
+                    } else {
+                        onResult(AuthResult.Error("Cryptographic authorization verification returned empty proof"))
+                    }
+                } catch (e: Exception) {
+                    onResult(AuthResult.Error("Cryptographic proof derivation failed: ${e.message}"))
+                }
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -72,24 +100,18 @@ class BiometricPromptManager(private val context: Context) {
 
             override fun onAuthenticationFailed() {
                 super.onAuthenticationFailed()
-                onResult(AuthResult.Error("Authentication failed. Please try again."))
+                onResult(AuthResult.Error("Biometric authentication rejected by sensor"))
             }
         }
 
-        val promptInfoBuilder = BiometricPrompt.PromptInfo.Builder()
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
             .setTitle(title)
             .setSubtitle(subtitle)
             .setAllowedAuthenticators(allowedAuthenticators)
+            .setNegativeButtonText("Cancel")
+            .build()
 
-        // For Android API < 30 without DEVICE_CREDENTIAL in authenticators, set negative button
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-            (allowedAuthenticators and DEVICE_CREDENTIAL) == 0
-        ) {
-            promptInfoBuilder.setNegativeButtonText("Cancel")
-        }
-
-        val promptInfo = promptInfoBuilder.build()
         val biometricPrompt = BiometricPrompt(activity, executor, callback)
-        biometricPrompt.authenticate(promptInfo)
+        biometricPrompt.authenticate(promptInfo, cryptoObject)
     }
 }

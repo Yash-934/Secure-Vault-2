@@ -84,7 +84,7 @@ fun HelpScreen(onBackClick: () -> Unit) {
 
             HelpExpandableCard(
                 title = "1. The Basics (Importing & Exporting)",
-                content = "Importing Files:\nTap the '+' button in the vault to securely import photos, videos, and documents from your public gallery.\n\nDelete Original from Gallery:\nWhen prompted, you can choose to automatically delete the original unencrypted file from your public gallery after a successful import. This requires granting a one-time permission.\n\nExporting / Restoring:\nSelect any item in your vault and tap the 'Export' icon to decrypt it and restore it back to your public gallery.\n\nMilitary-Grade Encryption:\nEvery file is individually encrypted using AES-256-GCM before it is written to the vault. Your raw files do not exist anywhere on the storage."
+                content = "Importing Files:\nTap the '+' button in the vault to securely import photos, videos, and documents from your public gallery.\n\nDelete Original from Gallery:\nWhen prompted, you can choose to automatically delete the original unencrypted file from your public gallery after a successful import. This requires granting a one-time permission.\n\nExporting / Restoring:\nSelect any item in your vault and tap the 'Export' icon to decrypt it and restore it back to your public gallery.\n\nHardware-Backed Encryption:\nEvery file is individually encrypted using AES-256-GCM before it is written to the vault. Your raw files do not exist anywhere on the storage."
             )
 
             HelpExpandableCard(

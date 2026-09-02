@@ -209,12 +209,16 @@ class MainActivity : FragmentActivity() {
         if (biometricPromptManager.canAuthenticate()) {
             biometricPromptManager.showBiometricPrompt(
                 activity = this,
-                title = "Secure Vault Unlock",
-                subtitle = "Authenticate with Fingerprint, Face ID or PIN to unlock"
+                title = "Vault Biometric Unlock",
+                subtitle = "Authenticate with strong biometrics to unlock"
             ) { result ->
                 when (result) {
                     is BiometricPromptManager.AuthResult.Success -> {
-                        vaultViewModel.unlockRealVault()
+                        val unlocked = vaultViewModel.unlockWithBiometrics(result.authPayload)
+                        if (!unlocked) {
+                            Toast.makeText(this, "Biometric authorization verification failed", Toast.LENGTH_SHORT).show()
+                            vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", "Cryptographic verification payload failed")
+                        }
                     }
                     is BiometricPromptManager.AuthResult.Error -> {
                         Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
@@ -223,8 +227,6 @@ class MainActivity : FragmentActivity() {
                     else -> {}
                 }
             }
-        } else {
-            // Devices without biometric hardware configured stay on the Lock Screen
         }
     }
 

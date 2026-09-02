@@ -25,6 +25,9 @@ interface VaultDao {
     @Query("SELECT * FROM vault_folders ORDER BY createdTimestamp ASC")
     fun getAllFolders(): Flow<List<VaultFolder>>
 
+    @Query("SELECT * FROM vault_folders ORDER BY createdTimestamp ASC")
+    suspend fun getAllFoldersSync(): List<VaultFolder>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFolder(folder: VaultFolder)
 

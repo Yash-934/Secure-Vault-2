@@ -56,26 +56,38 @@ abstract class AppDatabase : RoomDatabase() {
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val appCtx = context.applicationContext
+                var sqlCipherLoaded = false
                 try {
                     SQLiteDatabase.loadLibs(appCtx)
+                    sqlCipherLoaded = true
                 } catch (e: UnsatisfiedLinkError) {
                     Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
                 } catch (e: Exception) {
                     Log.w(TAG, "SQLCipher load error", e)
                 }
 
-                val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
-                val factory = SupportFactory(passphrase)
+                val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = false)
+                val factory = if (sqlCipherLoaded) {
+                    try {
+                        SupportFactory(passphrase)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Failed to create SupportFactory: ${t.message}")
+                        null
+                    }
+                } else null
 
-                val db = Room.databaseBuilder(
+                val builder = Room.databaseBuilder(
                     appCtx,
                     AppDatabase::class.java,
                     "secure_vault_db"
                 )
-                    .openHelperFactory(factory)
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-                    .fallbackToDestructiveMigrationOnDowngrade()
-                    .build()
+
+                if (factory != null) {
+                    builder.openHelperFactory(factory)
+                }
+
+                val db = builder.build()
 
                 VaultLogger.log(appCtx, TAG, "Initialized primary encrypted Room database with SQLCipher")
                 INSTANCE = db
@@ -86,26 +98,38 @@ abstract class AppDatabase : RoomDatabase() {
         fun getDecoyDatabase(context: Context): AppDatabase {
             return DECOY_INSTANCE ?: synchronized(this) {
                 val appCtx = context.applicationContext
+                var sqlCipherLoaded = false
                 try {
                     SQLiteDatabase.loadLibs(appCtx)
+                    sqlCipherLoaded = true
                 } catch (e: UnsatisfiedLinkError) {
                     Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
                 } catch (e: Exception) {
                     Log.w(TAG, "SQLCipher load error", e)
                 }
 
-                val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
-                val factory = SupportFactory(passphrase)
+                val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = true)
+                val factory = if (sqlCipherLoaded) {
+                    try {
+                        SupportFactory(passphrase)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Failed to create SupportFactory: ${t.message}")
+                        null
+                    }
+                } else null
 
-                val db = Room.databaseBuilder(
+                val builder = Room.databaseBuilder(
                     appCtx,
                     AppDatabase::class.java,
-                    "decoy_vault_db"
+                    "secure_vault_decoy_db"
                 )
-                    .openHelperFactory(factory)
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-                    .fallbackToDestructiveMigrationOnDowngrade()
-                    .build()
+
+                if (factory != null) {
+                    builder.openHelperFactory(factory)
+                }
+
+                val db = builder.build()
 
                 VaultLogger.log(appCtx, TAG, "Initialized decoy encrypted Room database with SQLCipher")
                 DECOY_INSTANCE = db

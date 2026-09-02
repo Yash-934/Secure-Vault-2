@@ -392,7 +392,7 @@ private fun FuturisticCyberPinScreen(
                 Spacer(modifier = Modifier.height(2.dp))
 
                 Text(
-                    text = "MILITARY-GRADE ENCRYPTED ENCLAVE",
+                    text = "AES-256-GCM ENCRYPTED ENCLAVE",
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF00E5FF),
@@ -1052,7 +1052,7 @@ private fun FuturisticCyberLockoutScreen(
 
                 // Subtitle
                 Text(
-                    text = "MILITARY-GRADE ENCRYPTED ENCLAVE",
+                    text = "AES-256-GCM ENCRYPTED ENCLAVE",
                     fontSize = 10.5.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF00E5FF),

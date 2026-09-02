@@ -7,7 +7,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Military-Grade Argon2id Key Derivation Function (KDF).
+ * Memory-Hard Argon2id Key Derivation Function (KDF).
  * 
  * Configured with extreme memory-hardness (64 MiB RAM, 3 iterations) to resist
  * GPU, FPGA, and ASIC brute-force password cracking attacks.

@@ -15,7 +15,7 @@ import java.net.Socket
 import java.security.MessageDigest
 
 /**
- * Advanced Military-Grade Anti-Tamper, Anti-Frida, Anti-Xposed, Anti-Emulator & Code Integrity Engine.
+ * Advanced Anti-Tamper, Anti-Frida, Anti-Xposed, Anti-Emulator & Code Integrity Engine.
  *
  * Implements comprehensive defense layers:
  * 1. Runtime Debugging & Ptrace attaching detection (GDB/LLDB/JDWP/TracerPid)

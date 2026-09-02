@@ -20,20 +20,31 @@ object VaultLogger {
     private const val MAX_LOG_SIZE_BYTES = 512 * 1024 // 512 KB rotate limit
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
+    private val SENSITIVE_REGEX = Regex("(?i)(pin|password|secret|key|salt|iv|payload|dek|masterkey)[:=]\\s*([^\n,;\\s]+)")
+
+    private fun sanitize(input: String): String {
+        return SENSITIVE_REGEX.replace(input) { matchResult ->
+            "${matchResult.groupValues[1]}=[REDACTED]"
+        }
+    }
+
     @Synchronized
     fun log(context: Context, tag: String, message: String) {
+        val sanitized = sanitize(message)
         val timestamp = dateFormat.format(Date())
-        val formattedEntry = "[$timestamp] [$tag] $message"
-        Log.i(tag, message)
+        val formattedEntry = "[$timestamp] [$tag] $sanitized"
+        Log.i(tag, sanitized)
         appendToFile(context, formattedEntry)
     }
 
     @Synchronized
     fun logError(context: Context, tag: String, message: String, throwable: Throwable? = null) {
+        val sanitized = sanitize(message)
         val timestamp = dateFormat.format(Date())
         val stackTrace = throwable?.let { "\n" + Log.getStackTraceString(it) } ?: ""
-        val formattedEntry = "[$timestamp] [ERROR] [$tag] $message$stackTrace"
-        Log.e(tag, message, throwable)
+        val sanitizedStackTrace = sanitize(stackTrace)
+        val formattedEntry = "[$timestamp] [ERROR] [$tag] $sanitized$sanitizedStackTrace"
+        Log.e(tag, sanitized, throwable)
         appendToFile(context, formattedEntry)
     }
 

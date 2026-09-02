@@ -14,7 +14,7 @@ data class SecurityCheckItem(
  *
  * @param status Overall audit status ("PASS" or "FAIL").
  * @param score Weighted security score from 0 to 100.
- * @param securityGrade Formatted security tier (e.g., "9.9/10 - MILITARY HARDENED").
+ * @param securityGrade Formatted security tier (e.g., "HARDENED ENCLAVE").
  * @param checkResults Map of individual security diagnostic checks to boolean pass/fail status.
  * @param checkItems Detailed list of security check items with categories and weights.
  * @param timestamp System time in milliseconds when the audit was conducted.

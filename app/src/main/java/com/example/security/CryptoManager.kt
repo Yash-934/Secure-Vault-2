@@ -51,47 +51,10 @@ object CryptoManager {
     private var fallbackJvmKey: SecretKey? = null
 
     /**
-     * Retrieves the AES-256 key from the Android Keystore, or generates a new one if it doesn't exist.
+     * Retrieves the AES-256 master key from the centralized VaultKeyManager.
      */
     private fun getSecretKey(): SecretKey {
-        if (keyStore != null) {
-            try {
-                val existingKey = keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
-                if (existingKey != null) {
-                    return existingKey.secretKey
-                }
-
-                val keyGenerator = KeyGenerator.getInstance(
-                    KeyProperties.KEY_ALGORITHM_AES,
-                    ANDROID_KEYSTORE
-                )
-
-                val keyGenSpec = KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .setRandomizedEncryptionRequired(true)
-                    .build()
-
-                keyGenerator.init(keyGenSpec)
-                return keyGenerator.generateKey()
-            } catch (_: Exception) {
-                // Fallback for JVM test runner environments
-            }
-        }
-
-        return fallbackJvmKey ?: synchronized(this) {
-            fallbackJvmKey ?: run {
-                val kg = KeyGenerator.getInstance("AES")
-                kg.init(256)
-                val k = kg.generateKey()
-                fallbackJvmKey = k
-                k
-            }
-        }
+        return VaultKeyManager.getVaultMasterKey()
     }
 
     private val secureRandom = SecureRandom()

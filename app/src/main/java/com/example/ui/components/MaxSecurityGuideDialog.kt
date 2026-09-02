@@ -110,8 +110,8 @@ fun MaxSecurityGuideDialog(
                     number = "1",
                     icon = Icons.Default.Key,
                     iconTint = VaultPrimaryCyan,
-                    title = "Strong Backup Passwords (PBKDF2)",
-                    description = "When exporting Master Backups or Stego carrier images, always choose a complex password with 12+ characters (combining uppercase, lowercase, numbers, and symbols). AES-256-GCM encryption is mathematically unbreakable only when passwords resist dictionary and brute-force attacks."
+                    title = "Strong Backup Passwords (Argon2id)",
+                    description = "When exporting Master Backups or Stego carrier images, always choose a complex password with 12+ characters (combining uppercase, lowercase, numbers, and symbols). AES-256-GCM encryption provides industry-standard security against brute-force attacks when strong passwords are used."
                 )
 
                 SecurityDirectiveItem(
