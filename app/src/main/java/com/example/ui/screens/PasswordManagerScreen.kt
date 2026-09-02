@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -342,6 +343,20 @@ fun PasswordManagerScreen(
                                 scope.launch {
                                     passwordDao.updatePassword(item.copy(isFavorite = !item.isFavorite))
                                 }
+                            },
+                            onMigrateLegacy = {
+                                scope.launch {
+                                    val passRes = com.example.security.PasswordCryptoHelper.decryptPassword(item.encryptedPasswordBlob)
+                                    val notesRes = com.example.security.PasswordCryptoHelper.decryptPassword(item.encryptedNotesBlob)
+                                    val newPassBlob = if (passRes is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration) {
+                                        com.example.security.PasswordCryptoHelper.encryptText(passRes.legacyPlaintext)
+                                    } else item.encryptedPasswordBlob
+                                    val newNotesBlob = if (notesRes is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration) {
+                                        com.example.security.PasswordCryptoHelper.encryptText(notesRes.legacyPlaintext)
+                                    } else item.encryptedNotesBlob
+                                    passwordDao.updatePassword(item.copy(encryptedPasswordBlob = newPassBlob, encryptedNotesBlob = newNotesBlob))
+                                    Toast.makeText(context, "Migrated record to Quantum Vault V2 format", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         )
                     }
@@ -419,15 +434,35 @@ fun PasswordCardItem(
     item: VaultPassword,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    onMigrateLegacy: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var isPasswordVisible by remember { mutableStateOf(false) }
-    val decryptedPassword = remember(item.encryptedPasswordBlob) {
-        PasswordCryptoHelper.decryptText(item.encryptedPasswordBlob)
+
+    val passwordResult = remember(item.encryptedPasswordBlob) {
+        com.example.security.PasswordCryptoHelper.decryptPassword(item.encryptedPasswordBlob)
     }
-    val decryptedNotes = remember(item.encryptedNotesBlob) {
-        PasswordCryptoHelper.decryptText(item.encryptedNotesBlob)
+    val notesResult = remember(item.encryptedNotesBlob) {
+        com.example.security.PasswordCryptoHelper.decryptPassword(item.encryptedNotesBlob)
+    }
+
+    val isLegacy = passwordResult is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration ||
+                   notesResult is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration
+
+    val (decryptedPassword, canCopy) = when (passwordResult) {
+        is com.example.security.PasswordDecryptResult.Success -> passwordResult.plaintext to true
+        is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> passwordResult.legacyPlaintext to true
+        is com.example.security.PasswordDecryptResult.WrongKey -> "[INCORRECT KEY]" to false
+        is com.example.security.PasswordDecryptResult.CorruptCiphertext -> "[CORRUPTED DATA]" to false
+        is com.example.security.PasswordDecryptResult.VaultLocked -> "[VAULT LOCKED]" to false
+        is com.example.security.PasswordDecryptResult.KeyUnavailable -> "[KEY UNAVAILABLE]" to false
+    }
+
+    val decryptedNotes = when (notesResult) {
+        is com.example.security.PasswordDecryptResult.Success -> notesResult.plaintext
+        is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> notesResult.legacyPlaintext
+        else -> ""
     }
 
     val categoryIcon = when (item.category.lowercase()) {
@@ -594,17 +629,42 @@ fun PasswordCardItem(
 
                 IconButton(
                     onClick = {
-                        com.example.security.ClipboardProtectionHelper.copyWithAutoClear(context, "Password", decryptedPassword)
-                        Toast.makeText(context, "Password copied to clipboard (Auto-clears in 15s)", Toast.LENGTH_SHORT).show()
+                        if (canCopy) {
+                            com.example.security.ClipboardProtectionHelper.copyWithAutoClear(context, "Password", decryptedPassword)
+                            Toast.makeText(context, "Password copied to clipboard (Auto-clears in 15s)", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Cannot copy: Password not readable", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     modifier = Modifier.size(26.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.ContentCopy,
                         contentDescription = "Copy Password",
-                        tint = VaultPrimaryCyan,
+                        tint = if (canCopy) VaultPrimaryCyan else VaultTextSecondary,
                         modifier = Modifier.size(16.dp)
                     )
+                }
+            }
+
+            if (isLegacy && onMigrateLegacy != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Legacy format record detected",
+                        fontSize = 11.sp,
+                        color = VaultSecondaryNeonBlue
+                    )
+                    TextButton(
+                        onClick = onMigrateLegacy,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("MIGRATE TO V2", color = VaultPrimaryCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
@@ -646,14 +706,24 @@ fun AddEditPasswordDialog(
     var website by remember { mutableStateOf(initialEntity?.websiteOrUrl ?: "") }
     var notes by remember {
         mutableStateOf(
-            if (initialEntity != null) PasswordCryptoHelper.decryptText(initialEntity.encryptedNotesBlob)
-            else ""
+            if (initialEntity != null) {
+                when (val res = PasswordCryptoHelper.decryptPassword(initialEntity.encryptedNotesBlob)) {
+                    is com.example.security.PasswordDecryptResult.Success -> res.plaintext
+                    is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> res.legacyPlaintext
+                    else -> ""
+                }
+            } else ""
         )
     }
     var password by remember {
         mutableStateOf(
-            if (initialEntity != null) PasswordCryptoHelper.decryptText(initialEntity.encryptedPasswordBlob)
-            else ""
+            if (initialEntity != null) {
+                when (val res = PasswordCryptoHelper.decryptPassword(initialEntity.encryptedPasswordBlob)) {
+                    is com.example.security.PasswordDecryptResult.Success -> res.plaintext
+                    is com.example.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> res.legacyPlaintext
+                    else -> ""
+                }
+            } else ""
         )
     }
 

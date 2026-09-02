@@ -228,6 +228,7 @@ object VaultBackupManager {
         private var isLastChunkSeen = false
         private var isEof = false
         private var chunkIndex = 0L
+        private var chunksDecryptedCount = 0
 
         private fun loadNextChunk(): Boolean {
             if (isLastChunkSeen || isEof) return false
@@ -270,11 +271,20 @@ object VaultBackupManager {
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
             val aad = java.nio.ByteBuffer.allocate(8).putLong(chunkIndex++).array()
             cipher.updateAAD(aad)
-            val plain = cipher.doFinal(cipherBuffer)
+            val plain = try {
+                cipher.doFinal(cipherBuffer)
+            } catch (e: AEADBadTagException) {
+                if (chunkIndex <= 1L && chunksDecryptedCount == 0) {
+                    throw SecurityException("INCORRECT_BACKUP_PASSWORD: Password invalid for backup archive.", e)
+                } else {
+                    throw SecurityException("BACKUP_CORRUPTED: Backup archive is corrupted or cryptographic tag verification failed.", e)
+                }
+            }
 
             currentPlainChunk = plain
             chunkPos = 0
             chunkLen = plain.size
+            chunksDecryptedCount++
             return true
         }
 
@@ -576,7 +586,7 @@ object VaultBackupManager {
                         hwCipher.doFinal(hwEncrypted)
                     } catch (e: Exception) {
                         return@withContext Result.failure(
-                            SecurityException("Device-Locked Backup: Cannot restore on this hardware. Keystore signature mismatch.")
+                            SecurityException("WRONG_DEVICE: Device-Locked Backup cannot restore on this hardware. Keystore signature mismatch.")
                         )
                     }
 
@@ -590,7 +600,7 @@ object VaultBackupManager {
                         activeKey = SecretKeySpec(rawEphemeralKey, "AES")
                     } catch (e: Exception) {
                         return@withContext Result.failure(
-                            SecurityException("Incorrect backup master password.")
+                            SecurityException("INCORRECT_BACKUP_PASSWORD: Incorrect backup master password.")
                         )
                     }
                 } else {
@@ -817,11 +827,16 @@ object VaultBackupManager {
 
             onProgress?.invoke(restoredCount, restoredCount, "Restoration Complete ($restoredCount files)", totalBytesRestored)
             Result.success(restoredCount)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException during import: ${e.message}", e)
+            // Rollback any partially moved target files
+            movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
+            Result.failure(e)
         } catch (e: AEADBadTagException) {
             Log.e(TAG, "AEAD Bad Tag: Invalid master password or corrupted backup ciphertext", e)
             // Rollback any partially moved target files
             movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
-            Result.failure(SecurityException("Incorrect backup master password or corrupted cryptographic tag."))
+            Result.failure(SecurityException("INCORRECT_BACKUP_PASSWORD: Password invalid for backup archive.", e))
         } catch (e: Exception) {
             Log.e(TAG, "Import failed: ${e.message}", e)
             // Rollback any partially moved target files

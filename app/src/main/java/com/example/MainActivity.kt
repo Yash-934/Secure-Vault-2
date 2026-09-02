@@ -74,6 +74,14 @@ class MainActivity : FragmentActivity() {
         biometricPromptManager = BiometricPromptManager(this)
         panicSensorManager = PanicSensorManager(this)
 
+        // Validate biometric enrollment invariant on startup
+        lifecycleScope.launch {
+            com.example.security.VaultKeyManager.validateBiometricEnrollmentState(
+                applicationContext,
+                com.example.data.local.SettingsDataStore(applicationContext)
+            )
+        }
+
         // Clear any leftover temporary files from previous sessions
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             cleanCacheDirectory(applicationContext)
@@ -208,14 +216,18 @@ class MainActivity : FragmentActivity() {
                 is BiometricPromptManager.AuthResult.Success -> {
                     vaultViewModel.unlockRealVault()
                 }
+                is BiometricPromptManager.AuthResult.EnvelopeMissing -> {
+                    settingsViewModel.setBiometricsEnabled(false)
+                    Toast.makeText(this, "Biometric unlock not configured. Please unlock with your PIN.", Toast.LENGTH_LONG).show()
+                }
+                is BiometricPromptManager.AuthResult.KeyInvalidated -> {
+                    Toast.makeText(this, "Biometric enrollment changed. Please unlock with PIN to re-enroll.", Toast.LENGTH_LONG).show()
+                    com.example.security.VaultKeyManager.removeBiometricEnvelope(this)
+                    settingsViewModel.setBiometricsEnabled(false)
+                }
                 is BiometricPromptManager.AuthResult.Error -> {
                     Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
                     vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", result.message)
-                }
-                is BiometricPromptManager.AuthResult.KeyInvalidated -> {
-                    Toast.makeText(this, "Biometric enrollment changed. Re-enroll Quantum Vault biometric unlock.", Toast.LENGTH_LONG).show()
-                    com.example.security.VaultKeyManager.removeBiometricEnvelope(this)
-                    settingsViewModel.setBiometricsEnabled(false)
                 }
                 else -> {}
             }

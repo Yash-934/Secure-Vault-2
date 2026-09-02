@@ -184,6 +184,11 @@ class VaultViewModel(
     val decryptedBytes: StateFlow<ByteArray?> = _decryptedBytes.asStateFlow()
 
     fun unlockRealVault() {
+        if (!com.example.security.VaultKeyManager.isRealVaultAuthorized()) {
+            _vaultMode.value = VaultMode.LOCKED
+            _isUnlocked.value = false
+            return
+        }
         _vaultMode.value = VaultMode.REAL
         _isUnlocked.value = true
         simulateLoading()
@@ -191,7 +196,11 @@ class VaultViewModel(
 
 
     fun unlockDecoyVault() {
-        
+        if (!com.example.security.VaultKeyManager.isDecoyVaultAuthorized()) {
+            _vaultMode.value = VaultMode.LOCKED
+            _isUnlocked.value = false
+            return
+        }
         _vaultMode.value = VaultMode.DECOY
         _isUnlocked.value = true
     }

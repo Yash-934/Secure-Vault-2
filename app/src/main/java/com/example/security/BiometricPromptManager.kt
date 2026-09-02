@@ -1,7 +1,6 @@
 package com.example.security
 
 import android.content.Context
-import android.os.Build
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
 import androidx.biometric.BiometricManager
@@ -9,7 +8,6 @@ import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import javax.crypto.Cipher
 
 class BiometricPromptManager(private val context: Context) {
 
@@ -26,6 +24,7 @@ class BiometricPromptManager(private val context: Context) {
     sealed interface AuthResult {
         object Success : AuthResult
         data class Error(val status: BiometricStatus? = null, val message: String) : AuthResult
+        object EnvelopeMissing : AuthResult
         object KeyInvalidated : AuthResult
         object Cancelled : AuthResult
     }
@@ -78,17 +77,11 @@ class BiometricPromptManager(private val context: Context) {
         }
 
         if (cryptoObject == null) {
-            onResult(AuthResult.Error(null, "CRYPTO_AUTHENTICATION_FAILURE: Cannot initialize cryptographic enrollment."))
+            onResult(AuthResult.Error(null, "CRYPTO_AUTHENTICATION_FAILURE: Real vault session must be authorized via PIN before enrolling biometrics."))
             return
         }
 
-        showPrompt(activity, "Enroll Biometric Unlock", "Authenticate to provision hardware vault key", cryptoObject, isEnrollment = true) { result ->
-            if (result is AuthResult.Success) {
-                // Should not happen directly as Success is returned only when unwrap is successful, but for enroll we need cipher
-            } else {
-                onResult(result)
-            }
-        }
+        showPrompt(activity, "Enroll Biometric Unlock", "Authenticate to provision hardware vault key", cryptoObject, isEnrollment = true, onResult = onResult)
     }
 
     fun showBiometricUnlockPrompt(
@@ -102,7 +95,7 @@ class BiometricPromptManager(private val context: Context) {
         }
 
         if (!VaultKeyManager.hasBiometricEnvelope(context)) {
-            onResult(AuthResult.Error(null, "ENVELOPE_MISSING: Cryptographic biometric envelope not found."))
+            onResult(AuthResult.EnvelopeMissing)
             return
         }
 
@@ -116,7 +109,7 @@ class BiometricPromptManager(private val context: Context) {
         }
 
         if (cryptoObject == null) {
-            onResult(AuthResult.Error(null, "KEY_MISSING or KEY_INVALIDATED: Hardware cryptographic key unavailable or corrupted."))
+            onResult(AuthResult.Error(null, "Hardware cryptographic key unavailable or corrupted."))
             return
         }
 
@@ -147,15 +140,14 @@ class BiometricPromptManager(private val context: Context) {
                         if (success) {
                             onResult(AuthResult.Success)
                         } else {
-                            onResult(AuthResult.Error(null, "ENVELOPE_CORRUPT: Failed to write biometric envelope."))
+                            onResult(AuthResult.Error(null, "Failed to provision biometric envelope."))
                         }
                     } else {
-                        // It's decrypt (unlock)
                         val success = VaultKeyManager.unwrapBiometricSessionKey(context, authCipher)
                         if (success) {
                             onResult(AuthResult.Success)
                         } else {
-                            onResult(AuthResult.Error(null, "CRYPTO_AUTHENTICATION_FAILURE: Authentication proof invalid or envelope corrupt."))
+                            onResult(AuthResult.Error(null, "Cryptographic authorization unwrap error: Sentinel check failed."))
                         }
                     }
                 } catch (e: KeyPermanentlyInvalidatedException) {

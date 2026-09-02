@@ -418,10 +418,36 @@ fun VaultNavHost(
             if (showMasterPinDialog) {
                 ChangePinDialog(
                     title = "Change Master PIN",
-                    subtitle = "This PIN unlocks your primary encrypted vault.",
+                    subtitle = "Verify your current Master PIN to rotate security keys without data loss.",
+                    requireCurrentPin = true,
                     onDismiss = { showMasterPinDialog = false },
                     onSavePin = {
                         settingsViewModel.updateMasterPin(context, it)
+                        showMasterPinDialog = false
+                    },
+                    onSavePinWithOld = { oldPin, newPin ->
+                        settingsViewModel.rotateMasterPin(context, oldPin, newPin) { result ->
+                            when (result) {
+                                is com.example.security.RotationResult.Success -> {
+                                    android.widget.Toast.makeText(context, "Master PIN rotated successfully.", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                is com.example.security.RotationResult.InvalidOldPin -> {
+                                    android.widget.Toast.makeText(context, "Current PIN is incorrect.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.WeakNewPin -> {
+                                    android.widget.Toast.makeText(context, "New PIN error: ${result.reason}", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.VrkUnwrapFailed -> {
+                                    android.widget.Toast.makeText(context, "Failed to unwrap existing vault key.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.WrapFailed -> {
+                                    android.widget.Toast.makeText(context, "Failed to wrap vault key with new PIN.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.CommitFailed -> {
+                                    android.widget.Toast.makeText(context, "Rotation commit failed: ${result.error}", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
                         showMasterPinDialog = false
                     }
                 )
@@ -430,10 +456,36 @@ fun VaultNavHost(
             if (showDecoyPinDialog) {
                 ChangePinDialog(
                     title = "Configure Decoy PIN",
-                    subtitle = "This PIN opens the fake decoy vault to protect you under duress.",
+                    subtitle = "Verify current Decoy PIN (if set) to reconfigure decoy credentials.",
+                    requireCurrentPin = settings.decoyPin.isNotEmpty(),
                     onDismiss = { showDecoyPinDialog = false },
                     onSavePin = {
                         settingsViewModel.updateDecoyPin(context, it)
+                        showDecoyPinDialog = false
+                    },
+                    onSavePinWithOld = { oldPin, newPin ->
+                        settingsViewModel.rotateDecoyPin(context, oldPin, newPin) { result ->
+                            when (result) {
+                                is com.example.security.RotationResult.Success -> {
+                                    android.widget.Toast.makeText(context, "Decoy PIN updated successfully.", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                is com.example.security.RotationResult.InvalidOldPin -> {
+                                    android.widget.Toast.makeText(context, "Current Decoy PIN is incorrect.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.WeakNewPin -> {
+                                    android.widget.Toast.makeText(context, "New Decoy PIN error: ${result.reason}", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.VrkUnwrapFailed -> {
+                                    android.widget.Toast.makeText(context, "Failed to unwrap existing decoy key.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.WrapFailed -> {
+                                    android.widget.Toast.makeText(context, "Failed to wrap decoy key.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                                is com.example.security.RotationResult.CommitFailed -> {
+                                    android.widget.Toast.makeText(context, "Decoy PIN update failed: ${result.error}", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
                         showDecoyPinDialog = false
                     }
                 )

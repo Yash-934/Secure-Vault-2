@@ -54,19 +54,65 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun rotateMasterPin(
+        context: Context,
+        oldPin: String,
+        newPin: String,
+        onResult: ((com.example.security.RotationResult) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val result = com.example.security.CredentialRotationManager.rotateMasterPin(
+                context = context,
+                oldPin = oldPin,
+                newPin = newPin,
+                settingsDataStore = settingsDataStore
+            )
+            onResult?.invoke(result)
+        }
+    }
+
     fun updateMasterPin(context: Context, newPin: String) {
         viewModelScope.launch {
-            settingsDataStore.updateMasterPin(newPin)
-            com.example.security.VaultKeyManager.initializeVrkWithPin(context, newPin, false)
+            com.example.security.CredentialRotationManager.rotateMasterPinWithActiveVrk(
+                context = context,
+                newPin = newPin,
+                settingsDataStore = settingsDataStore
+            )
+        }
+    }
+
+    fun rotateDecoyPin(
+        context: Context,
+        oldPin: String,
+        newPin: String,
+        onResult: ((com.example.security.RotationResult) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val result = com.example.security.CredentialRotationManager.rotateDecoyPin(
+                context = context,
+                oldPin = oldPin,
+                newPin = newPin,
+                settingsDataStore = settingsDataStore
+            )
+            onResult?.invoke(result)
         }
     }
 
     fun updateDecoyPin(context: Context, newPin: String) {
         viewModelScope.launch {
-            settingsDataStore.updateDecoyPin(newPin)
-            if (newPin.isNotBlank()) {
-                com.example.security.VaultKeyManager.initializeVrkWithPin(context, newPin, true)
-            }
+            com.example.security.CredentialRotationManager.rotateDecoyPin(
+                context = context,
+                oldPin = "",
+                newPin = newPin,
+                settingsDataStore = settingsDataStore
+            )
+        }
+    }
+
+    fun disableBiometrics(context: Context) {
+        viewModelScope.launch {
+            com.example.security.VaultKeyManager.removeBiometricEnvelope(context)
+            settingsDataStore.setBiometricsEnabled(false)
         }
     }
 

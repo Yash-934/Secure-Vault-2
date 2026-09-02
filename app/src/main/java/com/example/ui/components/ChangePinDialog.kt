@@ -46,9 +46,12 @@ import com.example.ui.theme.VaultTextSecondary
 fun ChangePinDialog(
     title: String,
     subtitle: String,
+    requireCurrentPin: Boolean = false,
     onDismiss: () -> Unit,
-    onSavePin: (newPin: String) -> Unit
+    onSavePin: (newPin: String) -> Unit,
+    onSavePinWithOld: ((oldPin: String, newPin: String) -> Unit)? = null
 ) {
+    var oldPin by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -81,6 +84,26 @@ fun ChangePinDialog(
                     fontSize = 12.sp,
                     color = VaultTextSecondary
                 )
+
+                if (requireCurrentPin) {
+                    OutlinedTextField(
+                        value = oldPin,
+                        onValueChange = {
+                            if (it.length <= 8) oldPin = it
+                            errorMsg = null
+                        },
+                        label = { Text("Current PIN") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = VaultPrimaryCyan,
+                            unfocusedBorderColor = VaultBorder,
+                            focusedLabelColor = VaultPrimaryCyan
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 OutlinedTextField(
                     value = newPin,
@@ -130,12 +153,18 @@ fun ChangePinDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (newPin.length < 4) {
+                    if (requireCurrentPin && oldPin.length < 4) {
+                        errorMsg = "Current PIN must be at least 4 digits."
+                    } else if (newPin.length < 4) {
                         errorMsg = "PIN must be at least 4 digits."
                     } else if (newPin != confirmPin) {
                         errorMsg = "PINs do not match."
                     } else {
-                        onSavePin(newPin)
+                        if (requireCurrentPin && onSavePinWithOld != null) {
+                            onSavePinWithOld(oldPin, newPin)
+                        } else {
+                            onSavePin(newPin)
+                        }
                     }
                 },
                 shape = RoundedCornerShape(10.dp),
