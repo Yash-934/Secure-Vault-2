@@ -16,6 +16,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -82,10 +83,14 @@ class QuantumVaultSecurityHardeningTest {
         val decrypted = PasswordCryptoHelper.decryptText(encrypted)
         assertEquals(plainText, decrypted)
 
-        // Tampering test: modify a byte in ciphertext blob, decryption MUST fail and return empty string
+        // Tampering test: modify a byte in ciphertext blob, decryption MUST fail
         val tampered = encrypted.substring(0, encrypted.length - 2) + "=="
-        val tamperedResult = PasswordCryptoHelper.decryptText(tampered)
-        assertEquals("", tamperedResult)
+        try {
+            PasswordCryptoHelper.decryptText(tampered)
+            fail("Decryption of tampered data should throw SecurityException")
+        } catch (e: SecurityException) {
+            // Expected
+        }
     }
 
     @Test

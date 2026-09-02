@@ -241,7 +241,7 @@ class SecurityAuditEngine @Inject constructor(
         val calculatedScore = ((passedWeight.toDouble() / totalWeight.toDouble()) * 100).toInt().coerceIn(0, 100)
 
         val grade = when {
-            calculatedScore >= 90 -> "HARDENED ENCLAVE"
+            calculatedScore >= 90 -> "HIGH SECURITY"
             calculatedScore >= 80 -> "HIGH SECURITY"
             calculatedScore >= 70 -> "ELEVATED PROTECTION"
             else -> "WARNING: ELEVATED RISK"

@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Log
+import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.IntruderLog
 import com.example.data.VaultFolder
@@ -55,13 +56,28 @@ object VaultBackupManager {
     private const val MAX_ALLOWED_CHUNK_SIZE = 16 * 1024 * 1024 // 16 MB max limit
 
     private const val MANIFEST_FILENAME = "vault_manifest.json"
+    private const val MANIFEST_METADATA_FILENAME = "backup_metadata_manifest.json"
     private const val FOLDERS_FILENAME = "vault_folders.json"
     private const val PASSWORDS_FILENAME = "vault_passwords.json"
     private const val SECURITY_LOGS_FILENAME = "security_logs_manifest.json"
     private const val DEVICE_BINDING_KEY_ALIAS = "VaultBackupDeviceBindingHardwareKey"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
+    @com.squareup.moshi.JsonClass(generateAdapter = true)
+    data class BackupManifestMetadata(
+        val formatVersion: Int = 3,
+        val itemsCount: Int = 0,
+        val foldersCount: Int = 0,
+        val passwordsCount: Int = 0,
+        val logsCount: Int = 0,
+        val hasFolders: Boolean = false,
+        val hasPasswords: Boolean = false,
+        val hasLogs: Boolean = false,
+        val createdAt: Long = System.currentTimeMillis()
+    )
+
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    private val metadataJsonAdapter = moshi.adapter(BackupManifestMetadata::class.java)
     private val listType = Types.newParameterizedType(List::class.java, VaultItem::class.java)
     private val jsonAdapter = moshi.adapter<List<VaultItem>>(listType)
 
@@ -395,6 +411,24 @@ object VaultBackupManager {
 
                 onProgress?.invoke(0, items.size, "Writing Metadata Manifests...", totalBytesWritten)
 
+                // 0. Add backup_metadata_manifest.json
+                val metadata = BackupManifestMetadata(
+                    formatVersion = 3,
+                    itemsCount = items.size,
+                    foldersCount = folders.size,
+                    passwordsCount = passwords.size,
+                    logsCount = if (includeSecurityLogs) {
+                        try { db.intruderLogDao().getAllLogsSync().size } catch (_: Exception) { 0 }
+                    } else 0,
+                    hasFolders = folders.isNotEmpty(),
+                    hasPasswords = passwords.isNotEmpty(),
+                    hasLogs = includeSecurityLogs
+                )
+                val metadataJson = metadataJsonAdapter.toJson(metadata)
+                zos.putNextEntry(ZipEntry(MANIFEST_METADATA_FILENAME))
+                zos.write(metadataJson.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+
                 // 1. Add vault_manifest.json (Items)
                 val manifestJson = jsonAdapter.toJson(items)
                 zos.putNextEntry(ZipEntry(MANIFEST_FILENAME))
@@ -472,6 +506,7 @@ object VaultBackupManager {
         masterPassword: String,
         inputStream: InputStream,
         vaultRepository: VaultRepository,
+        isReplaceMode: Boolean = false,
         onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)? = null
     ): Result<Int> = withContext(Dispatchers.IO) {
         val stagingDir = File(context.cacheDir, "staging_restore_${System.currentTimeMillis()}").apply { mkdirs() }
@@ -563,6 +598,7 @@ object VaultBackupManager {
                 }
 
                 val chunkedGcmIn = ChunkedGcmInputStream(inputStream, activeKey)
+                var metadata: BackupManifestMetadata? = null
                 var restoredItems: List<VaultItem>? = null
                 var restoredFolders: List<VaultFolder>? = null
                 var restoredPasswords: List<VaultPassword>? = null
@@ -584,25 +620,27 @@ object VaultBackupManager {
                             throw SecurityException("Duplicate entry detected in backup archive: $entryName")
                         }
 
-                        if (entryName == MANIFEST_FILENAME) {
+                        if (entryName == MANIFEST_METADATA_FILENAME) {
+                            val metaJson = zis.readBytes().toString(Charsets.UTF_8)
+                            metadata = metadataJsonAdapter.fromJson(metaJson)
+                                ?: throw IllegalStateException("Failed to parse backup metadata manifest")
+                        } else if (entryName == MANIFEST_FILENAME) {
                             val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
                             restoredItems = jsonAdapter.fromJson(manifestJson)
-                            onProgress?.invoke(0, restoredItems?.size ?: 0, "Loaded vault records", totalBytesRestored)
+                                ?: throw IllegalStateException("Failed to parse vault items manifest")
+                            onProgress?.invoke(0, restoredItems.size, "Loaded vault records", totalBytesRestored)
                         } else if (entryName == FOLDERS_FILENAME) {
-                            try {
-                                val foldersJson = zis.readBytes().toString(Charsets.UTF_8)
-                                restoredFolders = foldersJsonAdapter.fromJson(foldersJson)
-                            } catch (_: Exception) {}
+                            val foldersJson = zis.readBytes().toString(Charsets.UTF_8)
+                            restoredFolders = foldersJsonAdapter.fromJson(foldersJson)
+                                ?: throw IllegalStateException("Failed to parse folders dataset")
                         } else if (entryName == PASSWORDS_FILENAME) {
-                            try {
-                                val passwordsJson = zis.readBytes().toString(Charsets.UTF_8)
-                                restoredPasswords = passwordsJsonAdapter.fromJson(passwordsJson)
-                            } catch (_: Exception) {}
+                            val passwordsJson = zis.readBytes().toString(Charsets.UTF_8)
+                            restoredPasswords = passwordsJsonAdapter.fromJson(passwordsJson)
+                                ?: throw IllegalStateException("Failed to parse passwords dataset")
                         } else if (entryName == SECURITY_LOGS_FILENAME) {
-                            try {
-                                val logsJson = zis.readBytes().toString(Charsets.UTF_8)
-                                logsToRestore = logsJsonAdapter.fromJson(logsJson)
-                            } catch (_: Exception) {}
+                            val logsJson = zis.readBytes().toString(Charsets.UTF_8)
+                            logsToRestore = logsJsonAdapter.fromJson(logsJson)
+                                ?: throw IllegalStateException("Failed to parse security logs dataset")
                         } else if (entryName.startsWith("vault_data_v2/")) {
                             val fileName = File(entryName).name
                             val stagedFile = File(stagingDir, fileName)
@@ -631,7 +669,23 @@ object VaultBackupManager {
                 }
 
                 if (restoredItems == null) {
-                    return@withContext Result.failure(IllegalStateException("Corrupted archive: Missing manifest."))
+                    return@withContext Result.failure(IllegalStateException("Corrupted archive: Missing items manifest."))
+                }
+
+                // Verify metadata consistency if present
+                metadata?.let { meta ->
+                    if (meta.itemsCount != restoredItems.size) {
+                        throw IllegalStateException("Archive items count mismatch (expected ${meta.itemsCount}, found ${restoredItems.size})")
+                    }
+                    if (meta.hasFolders && restoredFolders == null) {
+                        throw IllegalStateException("Required folders dataset declared in manifest is missing from archive")
+                    }
+                    if (meta.hasPasswords && restoredPasswords == null) {
+                        throw IllegalStateException("Required passwords dataset declared in manifest is missing from archive")
+                    }
+                    if (meta.hasLogs && logsToRestore == null) {
+                        throw IllegalStateException("Required security logs dataset declared in manifest is missing from archive")
+                    }
                 }
 
                 // Verify all manifest items exist in staged files
@@ -641,6 +695,10 @@ object VaultBackupManager {
                         return@withContext Result.failure(IllegalStateException("Incomplete archive: Missing payload for '${item.originalName}'"))
                     }
                 }
+
+                // Fetch old items to clean up their files later if replacing
+                val oldItems = if (isReplaceMode) db.vaultDao().getAllItemsSync() else emptyList()
+                val restoredFileNames = restoredItems.map { it.encryptedFileName }.toSet()
 
                 // Phase 5: Atomic Commit Files
                 for ((staged, target) in stagedTargetPairs) {
@@ -652,22 +710,41 @@ object VaultBackupManager {
                     movedTargetFiles.add(target)
                 }
 
-                // Phase 6: Atomic Database Commit
-                restoredFolders?.forEach { folder ->
-                    try { db.vaultDao().insertFolder(folder) } catch (_: Exception) {}
+                // Phase 6: Atomic Database Transaction
+                db.runInTransaction {
+                    kotlinx.coroutines.runBlocking {
+                        if (isReplaceMode) {
+                            db.vaultDao().deleteAllItems()
+                            db.vaultDao().deleteAllFolders()
+                            db.vaultPasswordDao().deleteAll()
+                            db.intruderLogDao().clearLogs()
+                        }
+                        
+                        restoredFolders?.forEach { folder ->
+                            db.vaultDao().insertFolder(folder)
+                        }
+                        restoredPasswords?.forEach { password ->
+                            db.vaultPasswordDao().insertPassword(password)
+                        }
+                        logsToRestore?.forEach { log ->
+                            db.intruderLogDao().insertLog(log)
+                        }
+                        restoredItems.forEach { item ->
+                            vaultRepository.insertRestoredVaultItem(item)
+                            restoredCount++
+                        }
+                    }
                 }
-
-                restoredPasswords?.forEach { password ->
-                    try { db.vaultPasswordDao().insertPassword(password) } catch (_: Exception) {}
-                }
-
-                logsToRestore?.let { logs ->
-                    try { logs.forEach { db.intruderLogDao().insertLog(it) } } catch (_: Exception) {}
-                }
-
-                restoredItems.forEach { item ->
-                    vaultRepository.insertRestoredVaultItem(item)
-                    restoredCount++
+                
+                if (isReplaceMode) {
+                    val vaultDir = File(context.filesDir, "vault_data_v2")
+                    val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
+                    for (oldItem in oldItems) {
+                        if (!restoredFileNames.contains(oldItem.encryptedFileName)) {
+                            File(vaultDir, oldItem.encryptedFileName).delete()
+                            File(thumbDir, "${oldItem.encryptedFileName}.thumb_aes256").delete()
+                        }
+                    }
                 }
 
             } else if (isV2) {

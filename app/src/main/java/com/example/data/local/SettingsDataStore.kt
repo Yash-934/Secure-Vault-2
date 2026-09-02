@@ -69,6 +69,9 @@ class SettingsDataStore(private val context: Context) {
 
         private const val PBKDF2_ITERATIONS = 12000
         private const val KEY_LENGTH_BITS = 256
+        const val DOMAIN_MASTER = "quantum_vault_auth_domain_master:"
+        const val DOMAIN_DECOY = "quantum_vault_auth_domain_decoy:"
+        const val DOMAIN_KILL = "quantum_vault_auth_domain_kill:"
 
         fun generateRandomSalt(): ByteArray {
             val salt = ByteArray(16)
@@ -88,9 +91,14 @@ class SettingsDataStore(private val context: Context) {
             return result
         }
 
-        fun hashPin(pin: String, salt: ByteArray): String {
-            if (pin.isEmpty()) return ""
-            val spec = PBEKeySpec(pin.toCharArray(), salt, PBKDF2_ITERATIONS, KEY_LENGTH_BITS)
+        fun hashPin(pin: String, salt: ByteArray, domain: String = DOMAIN_MASTER): String {
+            if (pin.isEmpty() || salt.size < 16) return ""
+            val domainBytes = domain.toByteArray(Charsets.UTF_8)
+            val combinedSalt = ByteArray(domainBytes.size + salt.size)
+            System.arraycopy(domainBytes, 0, combinedSalt, 0, domainBytes.size)
+            System.arraycopy(salt, 0, combinedSalt, domainBytes.size, salt.size)
+
+            val spec = PBEKeySpec(pin.toCharArray(), combinedSalt, PBKDF2_ITERATIONS, KEY_LENGTH_BITS)
             val skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
             val hash = skf.generateSecret(spec).encoded
             return bytesToHex(hash)
@@ -127,7 +135,7 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun initializeCredentials(masterPin: String) = authMutex.withLock {
         val salt = generateRandomSalt()
-        val masterHash = hashPin(masterPin, salt)
+        val masterHash = hashPin(masterPin, salt, DOMAIN_MASTER)
         context.dataStore.edit { prefs ->
             prefs[IS_INITIALIZED_KEY] = true
             prefs[MASTER_PIN_HASH_KEY] = masterHash
@@ -143,9 +151,12 @@ class SettingsDataStore(private val context: Context) {
         val isInit = prefs[IS_INITIALIZED_KEY] ?: false
         if (!isInit) return false
         val storedHash = prefs[MASTER_PIN_HASH_KEY] ?: return false
-        val saltHex = prefs[MASTER_PIN_SALT_KEY]
-        val salt = if (!saltHex.isNullOrEmpty()) hexToBytes(saltHex) else "QVLT_MASTER_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
-        val computedHash = hashPin(pin, salt)
+        if (storedHash.isEmpty()) return false
+        val saltHex = prefs[MASTER_PIN_SALT_KEY] ?: return false
+        if (saltHex.isEmpty()) return false
+        val salt = hexToBytes(saltHex)
+        if (salt.size < 16) return false // Fail closed on corrupt/truncated salt
+        val computedHash = hashPin(pin, salt, DOMAIN_MASTER)
         return constantTimeEquals(storedHash, computedHash)
     }
 
@@ -156,9 +167,11 @@ class SettingsDataStore(private val context: Context) {
         if (!isInit) return false
         val storedHash = prefs[DECOY_PIN_HASH_KEY] ?: return false
         if (storedHash.isEmpty()) return false
-        val saltHex = prefs[DECOY_PIN_SALT_KEY]
-        val salt = if (!saltHex.isNullOrEmpty()) hexToBytes(saltHex) else "QVLT_DECOY_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
-        val computedHash = hashPin(pin, salt)
+        val saltHex = prefs[DECOY_PIN_SALT_KEY] ?: return false
+        if (saltHex.isEmpty()) return false
+        val salt = hexToBytes(saltHex)
+        if (salt.size < 16) return false // Fail closed on corrupt/truncated salt
+        val computedHash = hashPin(pin, salt, DOMAIN_DECOY)
         return constantTimeEquals(storedHash, computedHash)
     }
 
@@ -170,15 +183,17 @@ class SettingsDataStore(private val context: Context) {
         if (!isInit || !isEnabled) return false
         val storedHash = prefs[KILL_PIN_HASH_KEY] ?: return false
         if (storedHash.isEmpty()) return false
-        val saltHex = prefs[KILL_PIN_SALT_KEY]
-        val salt = if (!saltHex.isNullOrEmpty()) hexToBytes(saltHex) else "QVLT_KILL_SALT_2026_SECURE_AUTH".toByteArray(Charsets.UTF_8)
-        val computedHash = hashPin(pin, salt)
+        val saltHex = prefs[KILL_PIN_SALT_KEY] ?: return false
+        if (saltHex.isEmpty()) return false
+        val salt = hexToBytes(saltHex)
+        if (salt.size < 16) return false // Fail closed on corrupt/truncated salt
+        val computedHash = hashPin(pin, salt, DOMAIN_KILL)
         return constantTimeEquals(storedHash, computedHash)
     }
 
     suspend fun updateMasterPin(newPin: String) = authMutex.withLock {
         val salt = generateRandomSalt()
-        val newHash = hashPin(newPin, salt)
+        val newHash = hashPin(newPin, salt, DOMAIN_MASTER)
         context.dataStore.edit { prefs ->
             prefs[IS_INITIALIZED_KEY] = true
             prefs[MASTER_PIN_HASH_KEY] = newHash
@@ -188,7 +203,7 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateDecoyPin(newPin: String) = authMutex.withLock {
         val salt = generateRandomSalt()
-        val newHash = if (newPin.isNotBlank()) hashPin(newPin, salt) else ""
+        val newHash = if (newPin.isNotBlank()) hashPin(newPin, salt, DOMAIN_DECOY) else ""
         context.dataStore.edit { prefs ->
             prefs[DECOY_PIN_HASH_KEY] = newHash
             prefs[DECOY_PIN_SALT_KEY] = if (newPin.isNotBlank()) bytesToHex(salt) else ""
@@ -197,7 +212,7 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateKillPin(newPin: String) = authMutex.withLock {
         val salt = generateRandomSalt()
-        val newHash = if (newPin.isNotBlank()) hashPin(newPin, salt) else ""
+        val newHash = if (newPin.isNotBlank()) hashPin(newPin, salt, DOMAIN_KILL) else ""
         context.dataStore.edit { prefs ->
             prefs[KILL_PIN_HASH_KEY] = newHash
             prefs[KILL_PIN_SALT_KEY] = if (newPin.isNotBlank()) bytesToHex(salt) else ""

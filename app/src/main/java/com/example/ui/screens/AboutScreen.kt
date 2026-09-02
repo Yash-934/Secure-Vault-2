@@ -213,7 +213,7 @@ fun AboutScreen(onBackClick: () -> Unit) {
 
                     SecurityArchItem(
                         title = "Zero Cloud Telemetry",
-                        subtitle = "100% Air-gapped offline data custody"
+                        subtitle = "Offline data storage"
                     )
                 }
             }

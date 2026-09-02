@@ -34,6 +34,12 @@ interface VaultDao {
     @Query("DELETE FROM vault_folders WHERE name = :folderName")
     suspend fun deleteFolder(folderName: String)
 
+    @Query("DELETE FROM vault_folders")
+    suspend fun deleteAllFolders()
+
+    @Query("SELECT * FROM vault_items")
+    suspend fun getAllItemsSync(): List<VaultItem>
+
     @Query("UPDATE vault_items SET folderName = 'Root' WHERE folderName = :folderName")
     suspend fun resetItemsInFolderToRoot(folderName: String)
 

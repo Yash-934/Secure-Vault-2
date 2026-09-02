@@ -287,10 +287,10 @@ private fun SecurityScoreTabContent(
     onRunAudit: () -> Unit
 ) {
     val checkItems = auditResult?.checkItems ?: emptyList()
-    val totalChecks = if (checkItems.isNotEmpty()) checkItems.size else 20
-    val passedChecks = if (checkItems.isNotEmpty()) checkItems.count { it.passed } else 18
-    val targetScore = auditResult?.score ?: if (totalChecks > 0) ((passedChecks.toDouble() / totalChecks.toDouble()) * 100).toInt() else 91
-    val compliancePct = if (totalChecks > 0) ((passedChecks.toDouble() / totalChecks.toDouble()) * 100).toInt() else 90
+    val totalChecks = checkItems.size
+    val passedChecks = checkItems.count { it.passed }
+    val targetScore = auditResult?.score ?: 0
+    val compliancePct = if (totalChecks > 0) ((passedChecks.toDouble() / totalChecks.toDouble()) * 100).toInt() else 0
 
     // Animated score count-up
     val animatedScore by animateIntAsState(
@@ -334,7 +334,7 @@ private fun SecurityScoreTabContent(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = auditResult?.securityGrade ?: "HARDENED ENCLAVE",
+                                text = auditResult?.securityGrade ?: if (isAuditing) "SCANNING ENCLAVE..." else "AUDIT PENDING",
                                 color = Color.White,
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold
@@ -400,14 +400,14 @@ private fun SecurityScoreTabContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "$passedChecks / $totalChecks Hardening Checks Passed",
+                                text = if (totalChecks > 0) "$passedChecks / $totalChecks Hardening Checks Passed" else "Audit not yet executed",
                                 color = TextLight,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "$compliancePct% Compliant",
-                                color = NeonGreen,
+                                text = if (totalChecks > 0) "$compliancePct% Compliant" else "UNKNOWN",
+                                color = if (totalChecks > 0) NeonGreen else MutedSlate,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -417,11 +417,11 @@ private fun SecurityScoreTabContent(
             }
         }
 
-        // 2. SECTION HEADER: 20-POINT ZERO-KNOWLEDGE & HARDWARE ATTESTATION AUDIT
+        // 2. SECTION HEADER: 20-POINT SECURITY 20-POINT ZERO-KNOWLEDGE & HARDWARE HARDWARE ATTESTATION AUDIT
         item {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "20-POINT ZERO-KNOWLEDGE & HARDWARE\nATTESTATION AUDIT",
+                text = "20-POINT SECURITY 20-POINT ZERO-KNOWLEDGE & HARDWARE HARDWARE\nATTESTATION AUDIT",
                 color = NeonCyan,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -433,46 +433,19 @@ private fun SecurityScoreTabContent(
 
         // 3. EXPANDABLE 20 CHECK ITEMS
         if (checkItems.isEmpty()) {
-            val defaultChecks = listOf(
-                SecurityCheckItem(
-                    name = "Zero-Network Air-Gap",
-                    category = "Data Leakage Prevention",
-                    passed = true,
-                    weight = 10,
-                    description = "Verification that android.permission.INTERNET is completely absent from manifest.",
-                    terminalOutput = "PASS: Zero network permissions declared. Completely air-gapped from cloud."
-                ),
-                SecurityCheckItem(
-                    name = "Hardware Keystore Attestation",
-                    category = "Hardware & Biometrics",
-                    passed = true,
-                    weight = 10,
-                    description = "TEE / StrongBox backed cryptographic key generation with hardware attestation.",
-                    terminalOutput = "PASS: Hardware root of trust verified. Keys bound to device TEE."
-                ),
-                SecurityCheckItem(
-                    name = "Multi-Layer Root & KernelSU Detection",
-                    category = "System & Root Integrity",
-                    passed = true,
-                    weight = 10,
-                    description = "Detection of SU binaries, Magisk hide sockets, KernelSU, and APatch hooks.",
-                    terminalOutput = "PASS: 25+ SU binary paths & /proc mountinfo verified clean."
-                ),
-                SecurityCheckItem(
-                    name = "Package Root Utility Scanner",
-                    category = "System & Root Integrity",
-                    passed = true,
-                    weight = 8,
-                    description = "Scans installed packages for known rooting tools and exploit utilities.",
-                    terminalOutput = "PASS: Zero root management or hooking packages detected on device."
-                )
-            )
-            items(defaultChecks.size) { index ->
-                CheckItemCard(
-                    item = defaultChecks[index],
-                    isExpanded = expandedItemIndex == index,
-                    onToggleExpand = { onToggleExpand(index) }
-                )
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = CardNavyBg),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No audit results cached. Tap 'SCAN NOW' above to run live attestation and anti-tamper tests.",
+                        color = MutedSlate,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
             }
         } else {
             items(checkItems.size) { index ->
@@ -592,7 +565,7 @@ private fun FuturisticRadarGauge(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = if (isScanning) "--" else if (score >= 100) "9.9" else String.format(java.util.Locale.US, "%.1f", score / 10f),
+                text = if (isScanning) "--" else String.format(java.util.Locale.US, "%.1f", score / 10f),
                 color = Color.White,
                 fontSize = 38.sp,
                 fontWeight = FontWeight.Bold,
@@ -805,7 +778,7 @@ private fun IntrusionsTabContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (intruderLogs.isEmpty()) {
-            // ZERO BREACHES CARD
+            // NO BREACHES CARD
             Card(
                 colors = CardDefaults.cardColors(containerColor = CardNavyBg),
                 shape = RoundedCornerShape(18.dp),

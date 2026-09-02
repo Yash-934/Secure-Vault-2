@@ -214,10 +214,10 @@ class MainActivity : FragmentActivity() {
             ) { result ->
                 when (result) {
                     is BiometricPromptManager.AuthResult.Success -> {
-                        val unlocked = vaultViewModel.unlockWithBiometrics(result.authPayload)
+                        val unlocked = vaultViewModel.unlockWithBiometrics(result.unwrappedKey)
                         if (!unlocked) {
-                            Toast.makeText(this, "Biometric authorization verification failed", Toast.LENGTH_SHORT).show()
-                            vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", "Cryptographic verification payload failed")
+                            Toast.makeText(this, "Biometric cryptographic authorization failed", Toast.LENGTH_SHORT).show()
+                            vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", "Cryptographic key unwrap failed")
                         }
                     }
                     is BiometricPromptManager.AuthResult.Error -> {

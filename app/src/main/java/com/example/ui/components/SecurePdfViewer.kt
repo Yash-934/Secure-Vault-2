@@ -160,7 +160,7 @@ fun SecurePdfViewer(
                 pageCount = renderer.pageCount
                 currentPageIndex = 0
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("Security", "Exception caught")
             } finally {
                 isLoading = false
             }
@@ -183,7 +183,7 @@ fun SecurePdfViewer(
                 page.close()
                 currentPageBitmap = bitmap
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("Security", "Exception caught")
             }
         }
     }

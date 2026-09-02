@@ -227,7 +227,7 @@ fun EncryptionInspectorScreen(
                                 letterSpacing = 1.sp
                             )
                             Text(
-                                text = "ZERO-KNOWLEDGE ARCHITECTURE TELEMETRY",
+                                text = "ARCHITECTURE TELEMETRY",
                                 fontSize = 8.5.sp,
                                 color = NeonCyan,
                                 fontFamily = FontFamily.Monospace,
@@ -411,7 +411,7 @@ fun EncryptionInspectorScreen(
                 )
             }
 
-            // 6. SECURITY & ZERO-LEAKAGE ASSURANCE BANNER
+            // 6. SECURITY & SECURITY ASSURANCE BANNER
             item {
                 SecurityAssuranceBanner()
             }
@@ -522,7 +522,7 @@ private fun HeroTelemetryCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "ZERO-TRUST CRYPTO ENCLAVE",
+                        text = "CRYPTO ENCLAVE",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = Color.White,
@@ -569,7 +569,7 @@ private fun HeroTelemetryCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "HARDENED ENCLAVE",
+                        text = "SECURE ENCLAVE",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
                         color = NeonCyan,
@@ -589,7 +589,7 @@ private fun HeroTelemetryCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "100% OFFLINE",
+                        text = "OFFLINE STORAGE",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
                         color = NeonGreen,
@@ -609,7 +609,7 @@ private fun HeroTelemetryCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "ZERO-DISK",
+                        text = "IN-MEMORY",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
                         color = LightText,
@@ -1696,7 +1696,7 @@ private fun SecurityAssuranceBanner() {
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(
-                    text = "ZERO-PLAINTEXT / ZERO-KEY LEAK GUARANTEE",
+                    text = "PLAINTEXT REDUCTION MEASURES IN PLACE",
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,

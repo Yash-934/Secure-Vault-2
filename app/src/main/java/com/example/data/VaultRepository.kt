@@ -83,7 +83,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             val generatedId = vaultDao.insertVaultItem(newItem)
             newItem.copy(id = generatedId)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("Security", "Exception caught")
             null
         }
     }
@@ -354,7 +354,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
                 CryptoManager.decryptStreamToByteArray(inputStream, maxSizeBytes = 30 * 1024 * 1024L)
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            android.util.Log.e("Security", "Exception caught")
             null
         }
     }
@@ -446,7 +446,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
 
             uri
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("Security", "Exception caught")
             null
         }
     }

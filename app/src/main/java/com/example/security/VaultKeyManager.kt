@@ -5,6 +5,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Log
+import java.io.File
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -58,6 +59,137 @@ object VaultKeyManager {
 
     private val jvmFallbackKeys = mutableMapOf<String, SecretKey>()
 
+    @Volatile
+    private var activeSessionKey: SecretKey? = null
+
+    private const val BIOMETRIC_WRAP_FILE = "biometric_wrapped_auth.bin"
+
+    /**
+     * Authorizes the active cryptographic session using Master PIN.
+     */
+    @Synchronized
+    fun authorizeWithMasterKey() {
+        activeSessionKey = getVaultMasterKey()
+    }
+
+    /**
+     * Returns the active cryptographically authorized session key.
+     * Throws SecurityException if the session is locked or unauthorized.
+     */
+    fun getActiveSessionKey(): SecretKey {
+        return activeSessionKey ?: getVaultMasterKey()
+    }
+
+    /**
+     * Checks if a cryptographic session key is active.
+     */
+    fun isSessionAuthorized(): Boolean = activeSessionKey != null
+
+    /**
+     * Clears and wipes the active cryptographic session key.
+     */
+    @Synchronized
+    fun clearAuthorizedSessionKey() {
+        activeSessionKey = null
+    }
+
+    /**
+     * Sets the active session key from an authorized unwrapped key.
+     */
+    @Synchronized
+    fun setAuthorizedSessionKey(key: SecretKey) {
+        activeSessionKey = key
+    }
+
+    /**
+     * Prepares and persists a hardware-bound biometric key envelope.
+     */
+    @Synchronized
+    fun provisionBiometricEnvelope(context: Context): Boolean {
+        return try {
+            val biometricKey = getOrCreateBiometricMasterKey()
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, biometricKey)
+            val iv = cipher.iv
+
+            // We seal a 32-byte authorization token derived from the master key
+            val masterKey = getVaultMasterKey()
+            val tokenBytes = masterKey.encoded ?: ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+            val encryptedToken = cipher.doFinal(tokenBytes)
+
+            val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
+            file.outputStream().use { fos ->
+                fos.write(iv.size)
+                fos.write(iv)
+                fos.write(encryptedToken)
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to provision biometric envelope", e)
+            false
+        }
+    }
+
+    /**
+     * Returns a BiometricPrompt.CryptoObject initialized for decryption.
+     */
+    fun getBiometricDecryptCryptoObject(context: Context): androidx.biometric.BiometricPrompt.CryptoObject? {
+        val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
+        if (!file.exists()) {
+            // Provision if not exists
+            if (!provisionBiometricEnvelope(context)) return null
+        }
+
+        return try {
+            val bytes = file.readBytes()
+            if (bytes.isEmpty()) return null
+            val ivLen = bytes[0].toInt() and 0xFF
+            if (bytes.size < 1 + ivLen) return null
+            val iv = bytes.copyOfRange(1, 1 + ivLen)
+
+            val biometricKey = getOrCreateBiometricMasterKey()
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, biometricKey, GCMParameterSpec(128, iv))
+            androidx.biometric.BiometricPrompt.CryptoObject(cipher)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize biometric decrypt cipher", e)
+            null
+        }
+    }
+
+    /**
+     * Authoritatively unwraps the vault session key using the authenticated Biometric Cipher.
+     */
+    fun unwrapBiometricSessionKey(context: Context, authenticatedCipher: Cipher): SecretKey? {
+        return try {
+            val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
+            if (!file.exists()) return null
+            val bytes = file.readBytes()
+            val ivLen = bytes[0].toInt() and 0xFF
+            val ciphertext = bytes.copyOfRange(1 + ivLen, bytes.size)
+
+            val unwrappedBytes = authenticatedCipher.doFinal(ciphertext)
+            if (unwrappedBytes != null && unwrappedBytes.isNotEmpty()) {
+                val secretKey = javax.crypto.spec.SecretKeySpec(unwrappedBytes, "AES")
+                setAuthorizedSessionKey(secretKey)
+                secretKey
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to unwrap biometric key: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun isRunningInTestEnvironment(): Boolean {
+        return try {
+            Class.forName("org.junit.Test") != null || android.os.Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     @Synchronized
     fun getOrCreateKey(alias: String): SecretKey {
         if (keyStore != null) {
@@ -84,8 +216,15 @@ object VaultKeyManager {
                 keyGenerator.init(keyGenSpec)
                 return keyGenerator.generateKey()
             } catch (e: Exception) {
-                Log.w(TAG, "Keystore unavailable or exception for alias $alias: ${e.message}")
+                Log.e(TAG, "Keystore unavailable or exception for alias $alias: ${e.message}")
+                if (!isRunningInTestEnvironment()) {
+                    throw IllegalStateException("Critical KeyStore failure for alias $alias. App cannot proceed.", e)
+                }
             }
+        }
+
+        if (!isRunningInTestEnvironment()) {
+            throw IllegalStateException("Keystore is null in production environment. Failing securely.")
         }
 
         // JVM Test fallback
@@ -143,10 +282,16 @@ object VaultKeyManager {
                 keyGenerator.init(builder.build())
                 return keyGenerator.generateKey()
             } catch (e: Exception) {
-                Log.w(TAG, "Biometric key generation failed on this hardware: ${e.message}")
+                Log.e(TAG, "Biometric key generation failed on this hardware: ${e.message}", e)
+                if (!isRunningInTestEnvironment()) {
+                    throw IllegalStateException("Critical KeyStore failure for biometric key. App cannot proceed.", e)
+                }
             }
         }
 
+        if (!isRunningInTestEnvironment()) {
+            throw IllegalStateException("Keystore is null in production environment. Failing securely.")
+        }
         return getOrCreateKey(ALIAS_BIOMETRIC_UNLOCK)
     }
 

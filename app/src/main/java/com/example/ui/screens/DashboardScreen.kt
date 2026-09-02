@@ -191,7 +191,7 @@ fun DashboardScreen(
                 scanProgress += 5
             }
             isScanningVault = false
-            snackbarHostState.showSnackbar("VAULT INTEGRITY VERIFIED: ZERO LEAKS DETECTED")
+            snackbarHostState.showSnackbar("VAULT INTEGRITY VERIFIED: NO LEAKS DETECTED")
         }
     }
 

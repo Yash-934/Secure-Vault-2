@@ -675,7 +675,7 @@ private fun FuturisticCyberPinScreen(
                     modifier = Modifier.weight(1f)
                 )
                 CyberSpecBadge(
-                    label = "ZERO CLOUD",
+                    label = "OFFLINE",
                     activeColor = Color(0xFFFFB300),
                     modifier = Modifier.weight(1f)
                 )

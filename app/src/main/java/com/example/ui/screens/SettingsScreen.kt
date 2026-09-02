@@ -551,8 +551,8 @@ fun SettingsScreen(
                 )
             }
 
-            // SECTION 2: AUTHENTICATION & ZERO-TRUST
-            SectionHeader(title = "AUTHENTICATION & ZERO-TRUST")
+            // SECTION 2: AUTHENTICATION AUTHENTICATION & ZERO-TRUST SECURITY
+            SectionHeader(title = "AUTHENTICATION AUTHENTICATION & ZERO-TRUST SECURITY")
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1591,7 +1591,7 @@ private fun EmbeddedRadarScanner(
                     fontFamily = FontFamily.Monospace
                 )
             } else {
-                val formattedScore = if (score >= 100) "9.9/10" else String.format(java.util.Locale.US, "%.1f/10", score / 10f)
+                val formattedScore = String.format(java.util.Locale.US, "%.1f/10", score / 10f)
                 Text(
                     text = formattedScore,
                     fontSize = 24.sp,

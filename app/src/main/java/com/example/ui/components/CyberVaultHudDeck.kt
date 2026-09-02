@@ -167,7 +167,7 @@ fun CyberVaultHudDeck(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (isScanning) "SCANNING ($scanProgress%)" else "ZERO-TRUST MATRIX",
+                        text = if (isScanning) "SCANNING ($scanProgress%)" else "SECURITY MATRIX",
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = if (isScanning) BrightCyan else Color.White,

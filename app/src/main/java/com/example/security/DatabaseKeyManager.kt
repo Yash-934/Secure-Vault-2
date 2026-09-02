@@ -99,5 +99,25 @@ object DatabaseKeyManager {
         }
         return rawPassphrase
     }
+
+    /**
+     * Wipes all cached database passphrases and deletes preferences.
+     */
+    @Synchronized
+    fun destroyKeys(context: Context): Boolean {
+        return try {
+            cachedRealPassphrase?.fill(0)
+            cachedRealPassphrase = null
+            cachedDecoyPassphrase?.fill(0)
+            cachedDecoyPassphrase = null
+
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            prefs.edit().clear().commit()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to destroy database keys", e)
+            false
+        }
+    }
 }
 

@@ -19,7 +19,7 @@ object PasswordCryptoHelper {
 
     fun encryptText(plainText: String): String {
         if (plainText.isEmpty()) return ""
-        return try {
+        try {
             val key = getKey()
             val cipher = Cipher.getInstance(ALGORITHM)
             val iv = ByteArray(IV_LENGTH_BYTE)
@@ -28,17 +28,17 @@ object PasswordCryptoHelper {
             cipher.init(Cipher.ENCRYPT_MODE, key, spec)
             val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
             val combined = iv + encryptedBytes
-            Base64.encodeToString(combined, Base64.NO_WRAP)
+            return Base64.encodeToString(combined, Base64.NO_WRAP)
         } catch (e: Exception) {
-            ""
+            throw SecurityException("Failed to encrypt data", e)
         }
     }
 
     fun decryptText(cipherBlob: String): String {
         if (cipherBlob.isEmpty()) return ""
-        return try {
+        try {
             val combined = Base64.decode(cipherBlob, Base64.NO_WRAP)
-            if (combined.size < IV_LENGTH_BYTE + 16) return ""
+            if (combined.size < IV_LENGTH_BYTE + 16) throw SecurityException("Cipher blob too short")
             val iv = combined.copyOfRange(0, IV_LENGTH_BYTE)
             val cipherBytes = combined.copyOfRange(IV_LENGTH_BYTE, combined.size)
             val key = getKey()
@@ -46,9 +46,9 @@ object PasswordCryptoHelper {
             val spec = GCMParameterSpec(TAG_LENGTH_BIT, iv)
             cipher.init(Cipher.DECRYPT_MODE, key, spec)
             val decryptedBytes = cipher.doFinal(cipherBytes)
-            String(decryptedBytes, Charsets.UTF_8)
+            return String(decryptedBytes, Charsets.UTF_8)
         } catch (e: Exception) {
-            ""
+            throw SecurityException("Failed to decrypt data", e)
         }
     }
 

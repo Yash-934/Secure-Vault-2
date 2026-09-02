@@ -42,7 +42,7 @@ object CamouflageManager {
                 )
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("Security", "Exception caught")
         }
     }
 

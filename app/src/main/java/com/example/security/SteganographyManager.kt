@@ -177,7 +177,7 @@ object SteganographyManager {
                 extension = fileName.substringAfterLast(".")
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("Security", "Exception caught")
         }
 
         val baseName = if (fileName.contains(".")) fileName.substringBeforeLast(".") else fileName

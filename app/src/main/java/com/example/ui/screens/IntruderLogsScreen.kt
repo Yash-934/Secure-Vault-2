@@ -154,7 +154,7 @@ fun IntruderLogsScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Your vault has maintained 100% integrity with zero failed authentication breaches.",
+                            text = "No failed authentication attempts recorded.",
                             fontSize = 12.sp,
                             color = SubtitleText,
                             modifier = Modifier.padding(horizontal = 16.dp)

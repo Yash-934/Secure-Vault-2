@@ -171,20 +171,22 @@ class VaultViewModel(
     val decryptedBytes: StateFlow<ByteArray?> = _decryptedBytes.asStateFlow()
 
     fun unlockRealVault() {
+        com.example.security.VaultKeyManager.authorizeWithMasterKey()
         _vaultMode.value = VaultMode.REAL
         _isUnlocked.value = true
         simulateLoading()
     }
 
-    fun unlockWithBiometrics(authPayload: ByteArray): Boolean {
-        if (authPayload.isEmpty()) {
-            return false
-        }
-        unlockRealVault()
+    fun unlockWithBiometrics(unwrappedKey: javax.crypto.SecretKey): Boolean {
+        com.example.security.VaultKeyManager.setAuthorizedSessionKey(unwrappedKey)
+        _vaultMode.value = VaultMode.REAL
+        _isUnlocked.value = true
+        simulateLoading()
         return true
     }
 
     fun unlockDecoyVault() {
+        com.example.security.VaultKeyManager.authorizeWithMasterKey()
         _vaultMode.value = VaultMode.DECOY
         _isUnlocked.value = true
     }
@@ -393,7 +395,7 @@ class VaultViewModel(
                     )
                 )
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("Security", "Exception caught")
             }
         }
     }
@@ -404,7 +406,7 @@ class VaultViewModel(
                 val db = com.example.data.AppDatabase.getDatabase(context)
                 db.intruderLogDao().clearLogs()
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("Security", "Exception caught")
             }
         }
     }
@@ -566,9 +568,6 @@ class VaultViewModel(
             progress = 0.1f
         )
         viewModelScope.launch {
-            if (isReplaceMode) {
-                repository.deleteAllVaultItems(context)
-            }
             val tempStegoFile = java.io.File(context.cacheDir, "temp_incoming_stego_${System.currentTimeMillis()}.tmp")
             val tempExtractedBackupFile = java.io.File(context.cacheDir, "temp_extracted_backup_${System.currentTimeMillis()}.bin")
             try {
@@ -601,6 +600,7 @@ class VaultViewModel(
                             masterPassword,
                             inStream,
                             repository,
+                            isReplaceMode,
                             onProgress = { current, total, name, bytes ->
                                 val subProg = if (total > 0) (current.toFloat() / total.toFloat()) else 0.5f
                                 val scaledProg = 0.5f + (subProg * 0.45f)
@@ -754,10 +754,6 @@ class VaultViewModel(
         )
         viewModelScope.launch {
             try {
-                if (isReplaceMode) {
-                    repository.deleteAllVaultItems(context)
-                }
-                
                 val inputStream = context.contentResolver.openInputStream(sourceUri)
                 if (inputStream == null) {
                     _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
@@ -774,6 +770,7 @@ class VaultViewModel(
                         masterPassword,
                         stream,
                         repository,
+                        isReplaceMode,
                         onProgress = { current, total, name, bytes ->
                             val prog = if (total > 0) (current.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
                             _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
@@ -818,6 +815,7 @@ class VaultViewModel(
     }
 
     fun lockVault() {
+        com.example.security.VaultKeyManager.clearAuthorizedSessionKey()
         _vaultMode.value = VaultMode.LOCKED
         _isUnlocked.value = false
         closeViewer()

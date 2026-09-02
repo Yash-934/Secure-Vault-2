@@ -156,9 +156,14 @@ object EncryptionInspectorEngine {
                 // Verify SQLCipher database instance availability
                 val db = AppDatabase.getDatabase(context)
                 val isDbOpen = db.isOpen
-                dbCheckPassed = isDbOpen || true
-                diagnosticMessage = "PASS: 256-bit DB key unwrapped from TEE Keystore. SQLCipher PRAGMA key active."
+                dbCheckPassed = isDbOpen
+                diagnosticMessage = if (isDbOpen) {
+                    "PASS: 256-bit DB key unwrapped from TEE Keystore. SQLCipher PRAGMA key active."
+                } else {
+                    "FAIL: Database closed or SQLCipher key derivation failed."
+                }
             } else {
+                dbCheckPassed = false
                 diagnosticMessage = "FAIL: Database passphrase size mismatch (${passphrase.size} bytes)."
             }
         } catch (e: Exception) {
@@ -555,7 +560,7 @@ object EncryptionInspectorEngine {
         val allPassed = aesGcmPass && argon2Pass && dbKeyPass && zeroDiskLeakPass && thumbnailFormatPass
         val totalDuration = SystemClock.elapsedRealtime() - startTime
 
-        telemetryLogs.add("[SUMMARY] Diagnostic completed in ${totalDuration}ms. Result: ${if (allPassed) "ALL PASS (100%)" else "DEGRADED"}")
+        telemetryLogs.add("[SUMMARY] Diagnostic completed in ${totalDuration}ms. Result: ${if (allPassed) "ALL PASS" else "DEGRADED"}")
 
         EncryptionSelfTestResult(
             timestamp = System.currentTimeMillis(),
@@ -664,7 +669,7 @@ object EncryptionInspectorEngine {
                     magicHeaderStr = "VLT_BCK3 [56 4C 54 5F 42 43 4B 33]"
                     isRecognizedEncrypted = true
                     securityScore = 5
-                    securityLevelTitle = "LEVEL 5/5 — MAXIMUM (HARDENED HARDWARE ENCLAVE)"
+                    securityLevelTitle = "LEVEL 5/5 — MAXIMUM (HARDWARE ENCLAVE)"
                     integrityVerdict = "AUTHENTIC & VALIDATED (Zero Corruption Detected)"
 
                     // Read flags (1 byte)

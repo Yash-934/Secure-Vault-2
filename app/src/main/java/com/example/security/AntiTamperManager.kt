@@ -103,7 +103,7 @@ object AntiTamperManager {
         val isSafe = !debugger && !hook && !memory && dexReport.isChecksumValid && sigValid && !captureReport.isCaptureActive && nativeReport.isMemoryIntact
 
         val summary = if (isSafe) {
-            "All binary and runtime integrity checks passed (Shield Active • Score 9.9/10)"
+            "All binary and runtime integrity checks passed"
         } else {
             val issues = mutableListOf<String>()
             if (debugger) issues.add("Debugger/Ptrace Attached")

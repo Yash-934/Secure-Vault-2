@@ -1,54 +1,103 @@
 package com.example.security
 
 import android.content.Context
+import android.util.Log
 import com.example.data.AppDatabase
+import com.example.util.VaultLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.KeyStore
+
+enum class SelfDestructStatus {
+    COMPLETE,
+    PARTIAL,
+    FAILED
+}
+
+data class SelfDestructResult(
+    val status: SelfDestructStatus,
+    val keyDestructionResults: Map<String, Boolean>,
+    val databaseDestroyed: Boolean,
+    val storageWiped: Boolean,
+    val error: Throwable? = null
+)
 
 /**
  * Self-Destruct Nuclear Engine.
  * Securely shreds and wipes all internal storage, databases, cache, and Keystore entries.
  */
 object SelfDestructManager {
+    private const val TAG = "SelfDestructManager"
 
-    suspend fun executeNuclearSelfDestruct(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun executeNuclearSelfDestruct(context: Context): SelfDestructResult = withContext(Dispatchers.IO) {
+        var dbDestroyed = false
+        var storageWiped = false
+        var keyResults = emptyMap<String, Boolean>()
+
         try {
             // 1. Close and delete Room databases (both real and decoy)
             try {
                 val db = AppDatabase.getDatabase(context)
                 db.close()
+                val decoyDb = AppDatabase.getDecoyDatabase(context)
+                decoyDb.close()
                 context.deleteDatabase("secure_vault_db")
                 context.deleteDatabase("secure_vault_decoy_db")
+                DatabaseKeyManager.destroyKeys(context)
+                dbDestroyed = true
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Error closing/deleting databases during self-destruct", e)
             }
 
             // 2. Wipe / shred files in Context.filesDir and datastore recursively
-            shredDirectory(context.filesDir)
-            val datastoreDir = File(context.filesDir.parent, "datastore")
-            if (datastoreDir.exists()) shredDirectory(datastoreDir)
-            val sharedPrefsDir = File(context.filesDir.parent, "shared_prefs")
-            if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir)
+            try {
+                shredDirectory(context.filesDir)
+                val datastoreDir = File(context.filesDir.parent, "datastore")
+                if (datastoreDir.exists()) shredDirectory(datastoreDir)
+                val sharedPrefsDir = File(context.filesDir.parent, "shared_prefs")
+                if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir)
+                shredDirectory(context.cacheDir)
+                storageWiped = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Error wiping storage directories during self-destruct", e)
+            }
 
-            // 3. Wipe / shred files in Context.cacheDir recursively
-            shredDirectory(context.cacheDir)
+            // 3. Authoritatively destroy ALL Keystore keys via central VaultKeyManager
+            keyResults = VaultKeyManager.destroyAllKeys()
+            val allKeysDestroyed = keyResults.isNotEmpty() && keyResults.values.all { it }
 
-            // 4. Destroy ALL Keystore keys via central VaultKeyManager
-            VaultKeyManager.destroyAllKeys()
+            // 4. Status determination
+            val status = if (allKeysDestroyed && dbDestroyed && storageWiped) {
+                SelfDestructStatus.COMPLETE
+            } else if (keyResults.values.any { it } || dbDestroyed || storageWiped) {
+                SelfDestructStatus.PARTIAL
+            } else {
+                SelfDestructStatus.FAILED
+            }
 
             // 5. Ultimate wipe using OS ActivityManager (terminates app)
             try {
                 val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
                 activityManager.clearApplicationUserData()
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.w(TAG, "clearApplicationUserData skipped or unsupported in test runtime")
             }
 
-            Result.success(Unit)
+            SelfDestructResult(
+                status = status,
+                keyDestructionResults = keyResults,
+                databaseDestroyed = dbDestroyed,
+                storageWiped = storageWiped
+            )
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Fatal error during nuclear self-destruct", e)
+            SelfDestructResult(
+                status = SelfDestructStatus.FAILED,
+                keyDestructionResults = keyResults,
+                databaseDestroyed = dbDestroyed,
+                storageWiped = storageWiped,
+                error = e
+            )
         }
     }
 
@@ -69,10 +118,7 @@ object SelfDestructManager {
             if (file.exists() && file.canWrite()) {
                 val length = file.length()
                 if (length > 0) {
-                    // Crypto-shredding is primary: Destroying the DEK in metadata makes data irrecoverable.
-                    // This zeroization pass is a secondary best-effort physical overwrite.
                     file.outputStream().use { fos ->
-                        // Zero overwrite
                         val zeroes = ByteArray(8192)
                         var remaining = length
                         while (remaining > 0) {
