@@ -76,11 +76,18 @@ fun LockScreen(
     onPinSubmit: (pin: String) -> Unit,
     errorMessage: String? = null,
     errorTrigger: Int = 0,
-    lockoutSecondsRemaining: Int = 0
+    lockoutSecondsRemaining: Int = 0,
+    isSetupMode: Boolean = false
 ) {
     var enteredPin by remember { mutableStateOf("") }
     val isLockedOut = lockoutSecondsRemaining > 0
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    var setupPhase by remember { mutableStateOf(if (isSetupMode) 1 else 0) }
+    var setupFirstPin by remember { mutableStateOf("") }
+    var setupErrorMessage by remember { mutableStateOf<String?>(null) }
+    
+    val currentErrorMessage = setupErrorMessage ?: errorMessage
 
     // Generate scrambled digits once per LockScreen composition
     val scrambledDigits = remember {
@@ -88,10 +95,14 @@ fun LockScreen(
     }
 
     // Auto-clear PIN input when error occurs
-    LaunchedEffect(errorTrigger) {
-        if (errorTrigger > 0) {
+    LaunchedEffect(errorTrigger, setupErrorMessage) {
+        if ((errorTrigger > 0 && !isSetupMode) || setupErrorMessage != null) {
             enteredPin = ""
             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            if (setupErrorMessage != null) {
+                kotlinx.coroutines.delay(1500)
+                setupErrorMessage = null
+            }
         }
     }
 
@@ -106,13 +117,32 @@ fun LockScreen(
             enteredPin = enteredPin,
             scrambledDigits = scrambledDigits,
             isLockedOut = isLockedOut,
-            errorMessage = errorMessage,
+            errorMessage = currentErrorMessage,
+            isSetupMode = isSetupMode,
+            setupPhase = setupPhase,
             onDigitClick = { digit ->
                 if (!isLockedOut && enteredPin.length < 4) {
                     val newPin = enteredPin + digit
                     enteredPin = newPin
                     if (newPin.length == 4) {
-                        onPinSubmit(newPin)
+                        if (isSetupMode) {
+                            if (setupPhase == 1) {
+                                setupFirstPin = newPin
+                                setupPhase = 2
+                                enteredPin = ""
+                            } else if (setupPhase == 2) {
+                                if (newPin == setupFirstPin) {
+                                    onPinSubmit(newPin)
+                                } else {
+                                    setupErrorMessage = "PINs do not match. Try again."
+                                    setupPhase = 1
+                                    setupFirstPin = ""
+                                    enteredPin = ""
+                                }
+                            }
+                        } else {
+                            onPinSubmit(newPin)
+                        }
                     }
                 }
             },
@@ -132,6 +162,8 @@ private fun FuturisticCyberPinScreen(
     scrambledDigits: List<String>,
     isLockedOut: Boolean,
     errorMessage: String?,
+    isSetupMode: Boolean = false,
+    setupPhase: Int = 0,
     onDigitClick: (String) -> Unit,
     onBackspaceClick: () -> Unit,
     onAuthenticateClick: () -> Unit
@@ -261,7 +293,7 @@ private fun FuturisticCyberPinScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "QUANTUM ENCLAVE • AUTHENTICATION REQUIRED",
+                    text = if (isSetupMode) "QUANTUM ENCLAVE • INITIALIZATION REQUIRED" else "QUANTUM ENCLAVE • AUTHENTICATION REQUIRED",
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF00E5FF),
@@ -381,7 +413,11 @@ private fun FuturisticCyberPinScreen(
 
                 // Title
                 Text(
-                    text = "QUANTUM VAULT",
+                    text = if (isSetupMode) {
+                        if (setupPhase == 1) "SET MASTER PIN" else "CONFIRM MASTER PIN"
+                    } else {
+                        "QUANTUM VAULT"
+                    },
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Black,
                     color = Color.White,
@@ -392,7 +428,7 @@ private fun FuturisticCyberPinScreen(
                 Spacer(modifier = Modifier.height(2.dp))
 
                 Text(
-                    text = "AES-256-GCM ENCRYPTED ENCLAVE",
+                    text = if (isSetupMode) "SECURE ENCLAVE INITIALIZATION" else "AES-256-GCM ENCRYPTED ENCLAVE",
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF00E5FF),

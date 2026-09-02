@@ -192,33 +192,42 @@ fun VaultNavHost(
             val coroutineScope = rememberCoroutineScope()
             LockScreen(
                 onAuthenticateClick = onTriggerBiometrics,
+                isSetupMode = !settings.isInitialized,
                 onPinSubmit = { enteredPin ->
                     coroutineScope.launch {
-                        val success = vaultViewModel.authenticateWithPin(
-                            context = context,
-                            lifecycleOwner = lifecycleOwner,
-                            enteredPin = enteredPin,
-                            settings = settings
-                        )
-                        if (success) {
+                        if (!settings.isInitialized) {
+                            vaultViewModel.initializeCredentials(context, enteredPin)
                             pinErrorMessage = null
-                            if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
-                                vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
-                                navController.navigate(NavRoutes.Dashboard.route) {
-                                    popUpTo(NavRoutes.Lock.route) { inclusive = true }
-                                }
-                            } else {
-                                navController.navigate(NavRoutes.Dashboard.route) {
-                                    popUpTo(NavRoutes.Lock.route) { inclusive = true }
-                                }
+                            navController.navigate(NavRoutes.Dashboard.route) {
+                                popUpTo(NavRoutes.Lock.route) { inclusive = true }
                             }
                         } else {
-                            if (vaultViewModel.lockoutSecondsRemaining.value > 0) {
-                                pinErrorMessage = "Too many failed attempts! Cooldown active."
+                            val success = vaultViewModel.authenticateWithPin(
+                                context = context,
+                                lifecycleOwner = lifecycleOwner,
+                                enteredPin = enteredPin,
+                                settings = settings
+                            )
+                            if (success) {
+                                pinErrorMessage = null
+                                if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                                    vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
+                                    navController.navigate(NavRoutes.Dashboard.route) {
+                                        popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                                    }
+                                } else {
+                                    navController.navigate(NavRoutes.Dashboard.route) {
+                                        popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                                    }
+                                }
                             } else {
-                                pinErrorMessage = "Incorrect PIN. Please try again."
+                                if (vaultViewModel.lockoutSecondsRemaining.value > 0) {
+                                    pinErrorMessage = "Too many failed attempts! Cooldown active."
+                                } else {
+                                    pinErrorMessage = "Incorrect PIN. Please try again."
+                                }
+                                pinErrorTrigger++
                             }
-                            pinErrorTrigger++
                         }
                     }
                 },

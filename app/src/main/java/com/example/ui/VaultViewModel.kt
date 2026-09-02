@@ -223,6 +223,15 @@ class VaultViewModel(
         }
     }
 
+    suspend fun initializeCredentials(context: Context, masterPin: String) {
+        val settingsDataStore = com.example.data.local.SettingsDataStore(context)
+        settingsDataStore.initializeCredentials(masterPin)
+        unlockRealVault()
+        consecutiveFailedAttempts = 0
+        _lockoutSecondsRemaining.value = 0
+        settingsDataStore.resetFailedAttempts()
+    }
+
     suspend fun authenticateWithPin(
         context: Context,
         lifecycleOwner: androidx.lifecycle.LifecycleOwner?,
