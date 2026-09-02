@@ -55,9 +55,18 @@ data class ImportProgressState(
 )
 
 class VaultViewModel(
-    private val realRepository: VaultRepository,
-    private val decoyRepository: VaultRepository
+    private val appCtx: android.content.Context
 ) : ViewModel() {
+
+    private val realRepository by lazy {
+        val database = com.example.data.AppDatabase.getDatabase(appCtx)
+        com.example.data.VaultRepository(database.vaultDao(), "vault")
+    }
+
+    private val decoyRepository by lazy {
+        val database = com.example.data.AppDatabase.getDecoyDatabase(appCtx)
+        com.example.data.VaultRepository(database.vaultDao(), "decoy_vault")
+    }
 
     private val _vaultMode = MutableStateFlow(VaultMode.LOCKED)
     val vaultMode: StateFlow<VaultMode> = _vaultMode.asStateFlow()
@@ -115,7 +124,7 @@ class VaultViewModel(
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val folders: StateFlow<List<com.example.data.VaultFolder>> = _vaultMode.flatMapLatest { mode ->
-        if (mode == VaultMode.DECOY) decoyRepository.allFolders else realRepository.allFolders
+        if (mode == VaultMode.LOCKED) kotlinx.coroutines.flow.flowOf(emptyList()) else if (mode == VaultMode.DECOY) decoyRepository.allFolders else realRepository.allFolders
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -129,8 +138,12 @@ class VaultViewModel(
     val vaultItems: StateFlow<List<VaultItem>> = kotlinx.coroutines.flow.combine(_vaultMode, _selectedFolder, _filterTab) { mode, folder, tab ->
         Triple(mode, folder, tab)
     }.flatMapLatest { (mode, folder, tab) ->
-        val activeRepo = if (mode == VaultMode.DECOY) decoyRepository else realRepository
-        activeRepo.getItemsForFolderAndTab(folder, tab)
+        if (mode == VaultMode.LOCKED) {
+            kotlinx.coroutines.flow.flowOf(emptyList())
+        } else {
+            val activeRepo = if (mode == VaultMode.DECOY) decoyRepository else realRepository
+            activeRepo.getItemsForFolderAndTab(folder, tab)
+        }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -171,22 +184,14 @@ class VaultViewModel(
     val decryptedBytes: StateFlow<ByteArray?> = _decryptedBytes.asStateFlow()
 
     fun unlockRealVault() {
-        com.example.security.VaultKeyManager.authorizeWithMasterKey()
         _vaultMode.value = VaultMode.REAL
         _isUnlocked.value = true
         simulateLoading()
     }
 
-    fun unlockWithBiometrics(unwrappedKey: javax.crypto.SecretKey): Boolean {
-        com.example.security.VaultKeyManager.setAuthorizedSessionKey(unwrappedKey)
-        _vaultMode.value = VaultMode.REAL
-        _isUnlocked.value = true
-        simulateLoading()
-        return true
-    }
 
     fun unlockDecoyVault() {
-        com.example.security.VaultKeyManager.authorizeWithMasterKey()
+        
         _vaultMode.value = VaultMode.DECOY
         _isUnlocked.value = true
     }
@@ -226,6 +231,8 @@ class VaultViewModel(
     suspend fun initializeCredentials(context: Context, masterPin: String) {
         val settingsDataStore = com.example.data.local.SettingsDataStore(context)
         settingsDataStore.initializeCredentials(masterPin)
+        com.example.security.VaultKeyManager.initializeVrkWithPin(context, masterPin, isDecoy = false)
+        com.example.security.VaultKeyManager.authorizeWithPin(context, masterPin, isDecoy = false)
         unlockRealVault()
         consecutiveFailedAttempts = 0
         _lockoutSecondsRemaining.value = 0
@@ -254,22 +261,26 @@ class VaultViewModel(
 
         // 2. Check Master PIN
         if (settingsDataStore.verifyMasterPin(enteredPin)) {
-            unlockRealVault()
-            consecutiveFailedAttempts = 0
+            if (com.example.security.VaultKeyManager.authorizeWithPin(context, enteredPin, false)) {
+                unlockRealVault()
+                consecutiveFailedAttempts = 0
             _lockoutSecondsRemaining.value = 0
             lockoutJob?.cancel()
             settingsDataStore.resetFailedAttempts()
             return true
+            }
         }
 
         // 3. Check Decoy PIN
         if (settingsDataStore.verifyDecoyPin(enteredPin)) {
-            unlockDecoyVault()
-            consecutiveFailedAttempts = 0
+            if (com.example.security.VaultKeyManager.authorizeWithPin(context, enteredPin, true)) {
+                unlockDecoyVault()
+                consecutiveFailedAttempts = 0
             _lockoutSecondsRemaining.value = 0
             lockoutJob?.cancel()
             settingsDataStore.resetFailedAttempts()
             return true
+            }
         }
 
         // 4. Incorrect PIN
@@ -1113,13 +1124,12 @@ class VaultViewModel(
     }
 
     class Factory(
-        private val realRepository: VaultRepository,
-        private val decoyRepository: VaultRepository
+        private val context: android.content.Context
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(VaultViewModel::class.java)) {
-                return VaultViewModel(realRepository, decoyRepository) as T
+                return VaultViewModel(context) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }

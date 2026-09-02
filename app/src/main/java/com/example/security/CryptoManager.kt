@@ -54,7 +54,7 @@ object CryptoManager {
      * Retrieves the AES-256 master key from the centralized VaultKeyManager.
      */
     private fun getSecretKey(): SecretKey {
-        return VaultKeyManager.getActiveSessionKey()
+        return VaultKeyManager.getVaultMasterKey()
     }
 
     private val secureRandom = SecureRandom()

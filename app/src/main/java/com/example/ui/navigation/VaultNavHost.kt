@@ -50,6 +50,8 @@ fun VaultNavHost(
     vaultViewModel: VaultViewModel,
     settingsViewModel: SettingsViewModel,
     onTriggerBiometrics: () -> Unit,
+    onEnrollBiometrics: () -> Unit,
+    onDisableBiometrics: () -> Unit,
     onLockApp: () -> Unit
 ) {
     val vaultMode by vaultViewModel.vaultMode.collectAsStateWithLifecycle()
@@ -371,7 +373,9 @@ fun VaultNavHost(
                 isAuditing = isAuditing,
                 onRunAudit = { settingsViewModel.runSecurityAudit() },
                 onBackClick = { navController.popBackStack() },
-                onToggleBiometrics = { settingsViewModel.setBiometricsEnabled(it) },
+                onToggleBiometrics = { 
+                    if (it) onEnrollBiometrics() else onDisableBiometrics()
+                },
                 onChangeMasterPinClick = { showMasterPinDialog = true },
                 onChangeDecoyPinClick = { showDecoyPinDialog = true },
                 onTogglePanicFlip = { settingsViewModel.setPanicFlipEnabled(it) },
@@ -417,7 +421,7 @@ fun VaultNavHost(
                     subtitle = "This PIN unlocks your primary encrypted vault.",
                     onDismiss = { showMasterPinDialog = false },
                     onSavePin = {
-                        settingsViewModel.updateMasterPin(it)
+                        settingsViewModel.updateMasterPin(context, it)
                         showMasterPinDialog = false
                     }
                 )
@@ -429,7 +433,7 @@ fun VaultNavHost(
                     subtitle = "This PIN opens the fake decoy vault to protect you under duress.",
                     onDismiss = { showDecoyPinDialog = false },
                     onSavePin = {
-                        settingsViewModel.updateDecoyPin(it)
+                        settingsViewModel.updateDecoyPin(context, it)
                         showDecoyPinDialog = false
                     }
                 )

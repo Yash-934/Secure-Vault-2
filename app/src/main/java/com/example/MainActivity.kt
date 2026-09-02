@@ -47,16 +47,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var panicSensorManager: PanicSensorManager
 
     private val vaultViewModel: VaultViewModel by viewModels {
-        try {
-            val database = AppDatabase.getDatabase(applicationContext)
-            val decoyDatabase = AppDatabase.getDecoyDatabase(applicationContext)
-            val realRepository = VaultRepository(database.vaultDao(), "vault")
-            val decoyRepository = VaultRepository(decoyDatabase.vaultDao(), "decoy_vault")
-            VaultViewModel.Factory(realRepository, decoyRepository)
-        } catch (t: Throwable) {
-            VaultLogger.logError(applicationContext, "MainActivity", "Error creating databases for VaultViewModel", t)
-            throw t
-        }
+        VaultViewModel.Factory(applicationContext)
     }
 
     private val settingsViewModel: SettingsViewModel by viewModels {
@@ -196,6 +187,11 @@ class MainActivity : FragmentActivity() {
                         vaultViewModel = vaultViewModel,
                         settingsViewModel = settingsViewModel,
                         onTriggerBiometrics = { triggerBiometricAuth() },
+                        onEnrollBiometrics = { triggerBiometricEnroll() },
+                        onDisableBiometrics = {
+                            com.example.security.VaultKeyManager.removeBiometricEnvelope(this)
+                            settingsViewModel.setBiometricsEnabled(false)
+                        },
                         onLockApp = {
                             moveTaskToBack(false)
                         }
@@ -205,31 +201,49 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    
     private fun triggerBiometricAuth() {
-        if (biometricPromptManager.canAuthenticate()) {
-            biometricPromptManager.showBiometricPrompt(
-                activity = this,
-                title = "Vault Biometric Unlock",
-                subtitle = "Authenticate with strong biometrics to unlock"
-            ) { result ->
-                when (result) {
-                    is BiometricPromptManager.AuthResult.Success -> {
-                        val unlocked = vaultViewModel.unlockWithBiometrics(result.unwrappedKey)
-                        if (!unlocked) {
-                            Toast.makeText(this, "Biometric cryptographic authorization failed", Toast.LENGTH_SHORT).show()
-                            vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", "Cryptographic key unwrap failed")
-                        }
-                    }
-                    is BiometricPromptManager.AuthResult.Error -> {
-                        Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
-                        vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", result.message)
-                    }
-                    else -> {}
+        biometricPromptManager.showBiometricUnlockPrompt(this) { result ->
+            when (result) {
+                is BiometricPromptManager.AuthResult.Success -> {
+                    vaultViewModel.unlockRealVault()
                 }
+                is BiometricPromptManager.AuthResult.Error -> {
+                    Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
+                    vaultViewModel.logIntruderAttempt(applicationContext, "BIOMETRIC_FAILED", result.message)
+                }
+                is BiometricPromptManager.AuthResult.KeyInvalidated -> {
+                    Toast.makeText(this, "Biometric enrollment changed. Re-enroll Quantum Vault biometric unlock.", Toast.LENGTH_LONG).show()
+                    com.example.security.VaultKeyManager.removeBiometricEnvelope(this)
+                    settingsViewModel.setBiometricsEnabled(false)
+                }
+                else -> {}
             }
         }
     }
 
+    private fun triggerBiometricEnroll() {
+        biometricPromptManager.showBiometricEnrollPrompt(this) { result ->
+            when (result) {
+                is BiometricPromptManager.AuthResult.Success -> {
+                    settingsViewModel.setBiometricsEnabled(true)
+                    Toast.makeText(this, "Biometric unlock enrolled successfully.", Toast.LENGTH_SHORT).show()
+                }
+                is BiometricPromptManager.AuthResult.Error -> {
+                    settingsViewModel.setBiometricsEnabled(false)
+                    val msg = result.message
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                }
+                is BiometricPromptManager.AuthResult.KeyInvalidated -> {
+                    settingsViewModel.setBiometricsEnabled(false)
+                    Toast.makeText(this, "Biometric hardware state invalidated.", Toast.LENGTH_LONG).show()
+                }
+                else -> {
+                    settingsViewModel.setBiometricsEnabled(false)
+                }
+            }
+        }
+    }
     companion object {
         fun cleanCacheDirectory(context: android.content.Context) {
             try {

@@ -72,6 +72,8 @@ class QuantumVaultSecurityHardeningTest {
 
     @Test
     fun testP0_2_PasswordCryptoHelperAesGcmTamperProof() {
+        com.example.security.VaultKeyManager.initializeVrkWithPin(context, "1234")
+        com.example.security.VaultKeyManager.authorizeWithPin(context, "1234")
         val plainText = "SuperSecretBankPassword#2026!"
         val encrypted = PasswordCryptoHelper.encryptText(plainText)
 
@@ -122,6 +124,8 @@ class QuantumVaultSecurityHardeningTest {
 
     @Test
     fun testP0_4_FailClosedStreamCryptoIntegrity() {
+        com.example.security.VaultKeyManager.initializeVrkWithPin(context, "1234")
+        com.example.security.VaultKeyManager.authorizeWithPin(context, "1234")
         val payload = "TopSecretHardwareEncryptedDataStreamPayload".toByteArray(Charsets.UTF_8)
         val inStream = ByteArrayInputStream(payload)
         val encryptedOut = ByteArrayOutputStream()
@@ -222,6 +226,8 @@ class QuantumVaultSecurityHardeningTest {
 
     @Test
     fun testP0_8_DatabaseNoDestructiveMigrationOnDowngrade() {
+        com.example.security.VaultKeyManager.initializeVrkWithPin(context, "1234")
+        com.example.security.VaultKeyManager.authorizeWithPin(context, "1234")
         // Verify AppDatabase does not throw on valid instance creation
         val db = AppDatabase.getDatabase(context)
         assertNotNull(db)

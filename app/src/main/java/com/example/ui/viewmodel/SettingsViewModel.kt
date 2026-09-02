@@ -54,15 +54,19 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun updateMasterPin(newPin: String) {
+    fun updateMasterPin(context: Context, newPin: String) {
         viewModelScope.launch {
             settingsDataStore.updateMasterPin(newPin)
+            com.example.security.VaultKeyManager.initializeVrkWithPin(context, newPin, false)
         }
     }
 
-    fun updateDecoyPin(newPin: String) {
+    fun updateDecoyPin(context: Context, newPin: String) {
         viewModelScope.launch {
             settingsDataStore.updateDecoyPin(newPin)
+            if (newPin.isNotBlank()) {
+                com.example.security.VaultKeyManager.initializeVrkWithPin(context, newPin, true)
+            }
         }
     }
 
