@@ -144,7 +144,7 @@ fun SettingsScreen(
     onViewIntruderLogsClick: () -> Unit = {},
     onOpenStealthDialog: () -> Unit = {},
     onToggleKillPin: (Boolean) -> Unit = {},
-    onChangeKillPinClick: () -> Unit = {},
+    onChangeKillPinClick: (String) -> Unit = {},
     onToggleIntruderSelfie: (Boolean) -> Unit = {},
     onToggleDeadManSwitch: (Boolean) -> Unit = {},
     onChangeDeadManDays: (Int) -> Unit = {},
@@ -1319,7 +1319,7 @@ fun SettingsScreen(
                     subtitle = "Entering this PIN on lock screen will IMMEDIATELY execute nuclear self-destruct.",
                     onDismiss = { showChangeKillPinDialog = false },
                     onSavePin = { newPin ->
-                        onChangeKillPinClick()
+                        onChangeKillPinClick(newPin)
                         showChangeKillPinDialog = false
                     }
                 )
@@ -1327,7 +1327,6 @@ fun SettingsScreen(
 
             if (showConfirmSelfDestructDialog) {
                 NuclearSelfDestructDialog(
-                    masterPin = settings.masterPin,
                     onDismiss = { showConfirmSelfDestructDialog = false },
                     onConfirmSelfDestruct = {
                         showConfirmSelfDestructDialog = false

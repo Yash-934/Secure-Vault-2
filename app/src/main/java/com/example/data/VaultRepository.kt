@@ -250,48 +250,14 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
                     // We don't fail the import just because delete failed.
                 }
 
-                // Fallback for PhotoPicker or SAF URIs where direct delete throws exception and fails
+                // Fallback for MediaStore URIs where direct delete requires MediaStore permissions
                 if (!originalDeleted && deleteIntentSender == null) {
                     try {
                         val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                         
-                        // Try exact match first
-                        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.SIZE} = ?"
-                        val selectionArgs = arrayOf(originalName, sizeBytes.toString())
-                        
-                        contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), selection, selectionArgs, null)?.use { cursor ->
-                            if (cursor.moveToFirst()) {
-                                resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
-                            }
-                        }
-                        
-                        // Try size only match if exact match fails
-                        if (resolvedMediaStoreUri == null && sizeBytes > 0) {
-                            val sizeSelection = "${MediaStore.MediaColumns.SIZE} = ?"
-                            val sizeArgs = arrayOf(sizeBytes.toString())
-                            contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), sizeSelection, sizeArgs, null)?.use { cursor ->
-                                if (cursor.moveToFirst()) {
-                                    resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
-                                }
-                            }
-                        }
-
-                        // Try name match if size fails
-                        if (resolvedMediaStoreUri == null && originalName.isNotEmpty() && !originalName.startsWith("media_")) {
-                            val nameSelection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
-                            val nameArgs = arrayOf(originalName)
-                            contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), nameSelection, nameArgs, null)?.use { cursor ->
-                                if (cursor.moveToFirst()) {
-                                    resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
-                                }
-                            }
-                        }
-
-                        // Try extracting ID directly from Picker URI
-                        if (resolvedMediaStoreUri == null) {
-                            sourceUri.lastPathSegment?.toLongOrNull()?.let { id ->
-                                resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, id)
-                            }
+                        // Only resolve if source URI has a direct numeric ID
+                        sourceUri.lastPathSegment?.toLongOrNull()?.let { id ->
+                            resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, id)
                         }
 
                         resolvedMediaStoreUri?.let { mediaStoreUri ->
@@ -309,7 +275,7 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
                             }
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("VaultRepository", "Fallback MediaStore query/delete failed: ${e.message}")
+                        android.util.Log.e("VaultRepository", "MediaStore deletion failed: ${e.message}")
                     }
                 }
             }

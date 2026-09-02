@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -65,25 +66,33 @@ private val CardBorder = Color(0xFF2A1520)
  */
 @Composable
 fun NuclearSelfDestructDialog(
-    masterPin: String,
     onDismiss: () -> Unit,
     onConfirmSelfDestruct: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     var enteredPin by remember { mutableStateOf("") }
     var isPinVisible by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isVerifying by remember { mutableStateOf(false) }
 
     fun attemptVerification() {
         if (enteredPin.isBlank()) {
             errorMessage = "Please enter your Master PIN to authorize."
             return
         }
-        if (enteredPin != masterPin) {
-            errorMessage = "Invalid Master PIN. Nuclear wipe aborted."
-            return
+        isVerifying = true
+        coroutineScope.launch {
+            val settingsDataStore = com.example.data.local.SettingsDataStore(context)
+            val isValid = settingsDataStore.verifyMasterPin(enteredPin)
+            isVerifying = false
+            if (!isValid) {
+                errorMessage = "Invalid Master PIN. Nuclear wipe aborted."
+                return@launch
+            }
+            errorMessage = null
+            onConfirmSelfDestruct()
         }
-        errorMessage = null
-        onConfirmSelfDestruct()
     }
 
     AlertDialog(

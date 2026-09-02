@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.security.DatabaseKeyManager
 import com.example.util.VaultLogger
 import net.sqlcipher.database.SQLiteDatabase
@@ -20,6 +22,31 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         private const val TAG = "AppDatabase"
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `vault_folders` (`name` TEXT NOT NULL PRIMARY KEY, `createdTimestamp` INTEGER NOT NULL, `iconType` TEXT NOT NULL)")
+                db.execSQL("ALTER TABLE `vault_items` ADD COLUMN `folderName` TEXT NOT NULL DEFAULT 'Root'")
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `intruder_logs` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `timestamp` INTEGER NOT NULL, `attemptType` TEXT NOT NULL, `details` TEXT NOT NULL, `imagePath` TEXT)")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `vault_passwords` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `category` TEXT NOT NULL, `usernameOrEmail` TEXT NOT NULL, `encryptedPasswordBlob` TEXT NOT NULL, `websiteOrUrl` TEXT NOT NULL, `encryptedNotesBlob` TEXT NOT NULL, `isFavorite` INTEGER NOT NULL, `createdTimestamp` INTEGER NOT NULL, `updatedTimestamp` INTEGER NOT NULL)")
+            }
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Version 5 schema verification & index optimizations if needed
+            }
+        }
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
@@ -38,7 +65,6 @@ abstract class AppDatabase : RoomDatabase() {
                 }
 
                 val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
-                ensureDatabaseValid(appCtx, "secure_vault_db")
                 val factory = SupportFactory(passphrase)
 
                 val db = Room.databaseBuilder(
@@ -47,7 +73,8 @@ abstract class AppDatabase : RoomDatabase() {
                     "secure_vault_db"
                 )
                     .openHelperFactory(factory)
-                    .fallbackToDestructiveMigration(true)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
 
                 VaultLogger.log(appCtx, TAG, "Initialized primary encrypted Room database with SQLCipher")
@@ -68,7 +95,6 @@ abstract class AppDatabase : RoomDatabase() {
                 }
 
                 val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx)
-                ensureDatabaseValid(appCtx, "decoy_vault_db")
                 val factory = SupportFactory(passphrase)
 
                 val db = Room.databaseBuilder(
@@ -77,39 +103,13 @@ abstract class AppDatabase : RoomDatabase() {
                     "decoy_vault_db"
                 )
                     .openHelperFactory(factory)
-                    .fallbackToDestructiveMigration(true)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
 
                 VaultLogger.log(appCtx, TAG, "Initialized decoy encrypted Room database with SQLCipher")
                 DECOY_INSTANCE = db
                 db
-            }
-        }
-
-        private fun ensureDatabaseValid(context: Context, dbName: String) {
-            val dbFile = context.getDatabasePath(dbName)
-            if (dbFile.exists() && dbFile.length() >= 16) {
-                if (isPlaintextSqliteHeader(dbFile)) {
-                    VaultLogger.log(context, TAG, "Detected legacy unencrypted plaintext database: $dbName. Removing legacy file to migrate to SQLCipher.")
-                    try {
-                        context.deleteDatabase(dbName)
-                    } catch (e: Exception) {
-                        VaultLogger.logError(context, TAG, "Failed to delete legacy plaintext database: $dbName", e)
-                    }
-                } else {
-                    VaultLogger.log(context, TAG, "Verified encrypted SQLCipher database container exists for: $dbName (${dbFile.length()} bytes)")
-                }
-            }
-        }
-
-        private fun isPlaintextSqliteHeader(dbFile: File): Boolean {
-            return try {
-                val header = ByteArray(16)
-                FileInputStream(dbFile).use { it.read(header) }
-                val sqliteMagic = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
-                header.contentEquals(sqliteMagic)
-            } catch (e: Exception) {
-                false
             }
         }
     }

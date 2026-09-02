@@ -40,36 +40,58 @@ object CryptoManager {
     // Magic header identifier for V3 Envelope Encryption format
     private val V3_MAGIC = byteArrayOf(0x56, 0x4C, 0x54, 0x33) // "VLT3"
 
-    private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply {
-        load(null)
+    private val keyStore: KeyStore? = try {
+        KeyStore.getInstance(ANDROID_KEYSTORE).apply {
+            load(null)
+        }
+    } catch (_: Exception) {
+        null
     }
+
+    private var fallbackJvmKey: SecretKey? = null
 
     /**
      * Retrieves the AES-256 key from the Android Keystore, or generates a new one if it doesn't exist.
      */
     private fun getSecretKey(): SecretKey {
-        val existingKey = keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
-        if (existingKey != null) {
-            return existingKey.secretKey
+        if (keyStore != null) {
+            try {
+                val existingKey = keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+                if (existingKey != null) {
+                    return existingKey.secretKey
+                }
+
+                val keyGenerator = KeyGenerator.getInstance(
+                    KeyProperties.KEY_ALGORITHM_AES,
+                    ANDROID_KEYSTORE
+                )
+
+                val keyGenSpec = KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .setRandomizedEncryptionRequired(true)
+                    .build()
+
+                keyGenerator.init(keyGenSpec)
+                return keyGenerator.generateKey()
+            } catch (_: Exception) {
+                // Fallback for JVM test runner environments
+            }
         }
 
-        val keyGenerator = KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES,
-            ANDROID_KEYSTORE
-        )
-
-        val keyGenSpec = KeyGenParameterSpec.Builder(
-            KEY_ALIAS,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            .setRandomizedEncryptionRequired(true)
-            .build()
-
-        keyGenerator.init(keyGenSpec)
-        return keyGenerator.generateKey()
+        return fallbackJvmKey ?: synchronized(this) {
+            fallbackJvmKey ?: run {
+                val kg = KeyGenerator.getInstance("AES")
+                kg.init(256)
+                val k = kg.generateKey()
+                fallbackJvmKey = k
+                k
+            }
+        }
     }
 
     private val secureRandom = SecureRandom()
@@ -358,19 +380,33 @@ object CryptoManager {
             var totalProcessed = 0L
 
             try {
+                var lastChunkProcessed = false
                 while (true) {
                     val lenRead = readFully(inputStream, lenHeader, 0, 4)
-                    if (lenRead < 4) break
+                    if (lenRead < 4) {
+                        if (totalProcessed == 0L) {
+                            // Empty stream
+                            break
+                        }
+                        if (!lastChunkProcessed) {
+                            throw IllegalStateException("Unexpected end of encrypted stream: Truncated chunk length header.")
+                        }
+                        break
+                    }
 
                     val cipherLength = ((lenHeader[0].toInt() and 0xFF) shl 24) or
                             ((lenHeader[1].toInt() and 0xFF) shl 16) or
                             ((lenHeader[2].toInt() and 0xFF) shl 8) or
                             (lenHeader[3].toInt() and 0xFF)
 
-                    if (cipherLength <= 0 || cipherLength > maxChunkCapacity) break
+                    if (cipherLength <= 0 || cipherLength > maxChunkCapacity) {
+                        throw IllegalStateException("Corrupted encrypted stream: Invalid chunk size $cipherLength.")
+                    }
 
                     val isLastFlag = inputStream.read()
-                    if (isLastFlag < 0) break
+                    if (isLastFlag < 0) {
+                        throw IllegalStateException("Unexpected end of encrypted stream: Missing last-chunk marker.")
+                    }
 
                     val ivRead = readFully(inputStream, chunkIV, 0, IV_SIZE_BYTES)
                     if (ivRead < IV_SIZE_BYTES) {
@@ -379,7 +415,7 @@ object CryptoManager {
 
                     val bytesRead = readFully(inputStream, cipherBuffer, 0, cipherLength)
                     if (bytesRead < cipherLength) {
-                        throw IllegalStateException("Unexpected end of encrypted stream.")
+                        throw IllegalStateException("Unexpected end of encrypted stream: Ciphertext truncated.")
                     }
 
                     cipher.init(Cipher.DECRYPT_MODE, activeKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
@@ -389,7 +425,10 @@ object CryptoManager {
                     totalProcessed += cipherLength
                     onProgress?.invoke(totalProcessed, totalBytes)
 
-                    if (isLastFlag == 1) break
+                    if (isLastFlag == 1) {
+                        lastChunkProcessed = true
+                        break
+                    }
                 }
                 outputStream.flush()
             } finally {

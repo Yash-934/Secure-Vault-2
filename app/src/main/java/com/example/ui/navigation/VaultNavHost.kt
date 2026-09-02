@@ -12,7 +12,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -187,34 +189,37 @@ fun VaultNavHost(
         composable(NavRoutes.Lock.route) {
             val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
             val lockoutSecondsRemaining by vaultViewModel.lockoutSecondsRemaining.collectAsStateWithLifecycle()
+            val coroutineScope = rememberCoroutineScope()
             LockScreen(
                 onAuthenticateClick = onTriggerBiometrics,
                 onPinSubmit = { enteredPin ->
-                    val success = vaultViewModel.authenticateWithPin(
-                        context = context,
-                        lifecycleOwner = lifecycleOwner,
-                        enteredPin = enteredPin,
-                        settings = settings
-                    )
-                    if (success) {
-                        pinErrorMessage = null
-                        if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
-                            vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
-                            navController.navigate(NavRoutes.Dashboard.route) {
-                                popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                    coroutineScope.launch {
+                        val success = vaultViewModel.authenticateWithPin(
+                            context = context,
+                            lifecycleOwner = lifecycleOwner,
+                            enteredPin = enteredPin,
+                            settings = settings
+                        )
+                        if (success) {
+                            pinErrorMessage = null
+                            if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                                vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
+                                navController.navigate(NavRoutes.Dashboard.route) {
+                                    popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                                }
+                            } else {
+                                navController.navigate(NavRoutes.Dashboard.route) {
+                                    popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                                }
                             }
                         } else {
-                            navController.navigate(NavRoutes.Dashboard.route) {
-                                popUpTo(NavRoutes.Lock.route) { inclusive = true }
+                            if (vaultViewModel.lockoutSecondsRemaining.value > 0) {
+                                pinErrorMessage = "Too many failed attempts! Cooldown active."
+                            } else {
+                                pinErrorMessage = "Incorrect PIN. Please try again."
                             }
+                            pinErrorTrigger++
                         }
-                    } else {
-                        if (vaultViewModel.lockoutSecondsRemaining.value > 0) {
-                            pinErrorMessage = "Too many failed attempts! Cooldown active."
-                        } else {
-                            pinErrorMessage = "Incorrect PIN. Please try again."
-                        }
-                        pinErrorTrigger++
                     }
                 },
                 errorMessage = pinErrorMessage,
@@ -225,28 +230,31 @@ fun VaultNavHost(
 
         composable(NavRoutes.Calculator.route) {
             val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+            val coroutineScope = rememberCoroutineScope()
             CalculatorScreen(
                 onPinSubmit = { enteredPin ->
-                    val success = vaultViewModel.authenticateWithPin(
-                        context = context,
-                        lifecycleOwner = lifecycleOwner,
-                        enteredPin = enteredPin,
-                        settings = settings
-                    )
-                    if (success) {
-                        pinErrorMessage = null
-                        if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
-                            vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
-                            navController.navigate(NavRoutes.Dashboard.route) {
-                                popUpTo(NavRoutes.Calculator.route) { inclusive = true }
+                    coroutineScope.launch {
+                        val success = vaultViewModel.authenticateWithPin(
+                            context = context,
+                            lifecycleOwner = lifecycleOwner,
+                            enteredPin = enteredPin,
+                            settings = settings
+                        )
+                        if (success) {
+                            pinErrorMessage = null
+                            if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                                vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
+                                navController.navigate(NavRoutes.Dashboard.route) {
+                                    popUpTo(NavRoutes.Calculator.route) { inclusive = true }
+                                }
+                            } else {
+                                navController.navigate(NavRoutes.Dashboard.route) {
+                                    popUpTo(NavRoutes.Calculator.route) { inclusive = true }
+                                }
                             }
                         } else {
-                            navController.navigate(NavRoutes.Dashboard.route) {
-                                popUpTo(NavRoutes.Calculator.route) { inclusive = true }
-                            }
+                            // Silent failure for calculator to maintain stealth
                         }
-                    } else {
-                        // Silent failure for calculator to maintain stealth
                     }
                 }
             )
@@ -254,24 +262,27 @@ fun VaultNavHost(
 
         composable(NavRoutes.Notes.route) {
             val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+            val coroutineScope = rememberCoroutineScope()
             com.example.ui.screens.NotesScreen(
                 onPinSubmit = { enteredPin ->
-                    val success = vaultViewModel.authenticateWithPin(
-                        context = context,
-                        lifecycleOwner = lifecycleOwner,
-                        enteredPin = enteredPin,
-                        settings = settings
-                    )
-                    if (success) {
-                        pinErrorMessage = null
-                        if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
-                            vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
-                            navController.navigate(NavRoutes.Dashboard.route) {
-                                popUpTo(NavRoutes.Notes.route) { inclusive = true }
-                            }
-                        } else {
-                            navController.navigate(NavRoutes.Dashboard.route) {
-                                popUpTo(NavRoutes.Notes.route) { inclusive = true }
+                    coroutineScope.launch {
+                        val success = vaultViewModel.authenticateWithPin(
+                            context = context,
+                            lifecycleOwner = lifecycleOwner,
+                            enteredPin = enteredPin,
+                            settings = settings
+                        )
+                        if (success) {
+                            pinErrorMessage = null
+                            if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
+                                vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
+                                navController.navigate(NavRoutes.Dashboard.route) {
+                                    popUpTo(NavRoutes.Notes.route) { inclusive = true }
+                                }
+                            } else {
+                                navController.navigate(NavRoutes.Dashboard.route) {
+                                    popUpTo(NavRoutes.Notes.route) { inclusive = true }
+                                }
                             }
                         }
                     }
@@ -367,7 +378,7 @@ fun VaultNavHost(
                 onViewIntruderLogsClick = { navController.navigate(NavRoutes.IntruderLogs.route) },
                 onOpenStealthDialog = { showStealthDialog = true },
                 onToggleKillPin = { settingsViewModel.setKillPinEnabled(it) },
-                onChangeKillPinClick = { showKillPinDialog = true },
+                onChangeKillPinClick = { settingsViewModel.updateKillPin(it) },
                 onToggleIntruderSelfie = { settingsViewModel.setIntruderSelfieEnabled(it) },
                 onToggleDeadManSwitch = { settingsViewModel.setDeadManSwitchEnabled(context, it) },
                 onChangeDeadManDays = { settingsViewModel.setDeadManDays(it) },

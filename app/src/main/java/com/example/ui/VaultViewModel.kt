@@ -213,52 +213,58 @@ class VaultViewModel(
         }
     }
 
-    fun authenticateWithPin(
+    suspend fun authenticateWithPin(
         context: Context,
         lifecycleOwner: androidx.lifecycle.LifecycleOwner?,
         enteredPin: String,
         settings: com.example.data.local.VaultSettings
     ): Boolean {
-        if (_lockoutSecondsRemaining.value > 0) {
+        val settingsDataStore = com.example.data.local.SettingsDataStore(context)
+        val remainingLockout = settingsDataStore.getLockoutSecondsRemaining()
+        if (remainingLockout > 0) {
+            _lockoutSecondsRemaining.value = remainingLockout
             return false
         }
 
         // 1. Check Kill PIN
-        if (settings.isKillPinEnabled && enteredPin == settings.killPin) {
+        if (settings.isKillPinEnabled && settingsDataStore.verifyKillPin(enteredPin)) {
             logIntruderAttempt(context, "KILL_PIN_TRIGGERED", "Nuclear Kill PIN entered! Shredding all data...")
             executeSelfDestruct(context)
             return false
         }
 
         // 2. Check Master PIN
-        if (enteredPin == settings.masterPin) {
+        if (settingsDataStore.verifyMasterPin(enteredPin)) {
             unlockRealVault()
             consecutiveFailedAttempts = 0
             _lockoutSecondsRemaining.value = 0
             lockoutJob?.cancel()
+            settingsDataStore.resetFailedAttempts()
             return true
         }
 
         // 3. Check Decoy PIN
-        if (enteredPin == settings.decoyPin) {
+        if (settingsDataStore.verifyDecoyPin(enteredPin)) {
             unlockDecoyVault()
             consecutiveFailedAttempts = 0
             _lockoutSecondsRemaining.value = 0
             lockoutJob?.cancel()
+            settingsDataStore.resetFailedAttempts()
             return true
         }
 
         // 4. Incorrect PIN
-        consecutiveFailedAttempts++
-        logIntruderAttempt(context, "PIN_FAILED", "Incorrect PIN attempt #$consecutiveFailedAttempts")
+        val failedCount = settingsDataStore.recordFailedAttempt()
+        consecutiveFailedAttempts = failedCount
+        logIntruderAttempt(context, "PIN_FAILED", "Incorrect PIN attempt #$failedCount")
 
-        if (consecutiveFailedAttempts >= 10) {
+        if (failedCount >= 10) {
             logIntruderAttempt(context, "NUCLEAR_AUTO_WIPE", "10 consecutive failed PIN attempts exceeded. Self-destructing.")
             executeSelfDestruct(context)
             return false
         }
 
-        if (consecutiveFailedAttempts >= 3 && settings.isIntruderSelfieEnabled && lifecycleOwner != null) {
+        if (failedCount >= 3 && settings.isIntruderSelfieEnabled && lifecycleOwner != null) {
             com.example.security.IntruderCaptureManager.captureIntruderSelfie(
                 context = context,
                 lifecycleOwner = lifecycleOwner,
@@ -267,10 +273,14 @@ class VaultViewModel(
             )
         }
 
-        if (consecutiveFailedAttempts == 5) {
-            startLockoutCountdown(30)
-        } else if (consecutiveFailedAttempts in 6..9) {
-            startLockoutCountdown(30 + (consecutiveFailedAttempts - 5) * 15)
+        if (failedCount == 5) {
+            val lockoutSec = 30
+            settingsDataStore.setLockoutExpiration(System.currentTimeMillis() + (lockoutSec * 1000L))
+            startLockoutCountdown(lockoutSec)
+        } else if (failedCount in 6..9) {
+            val lockoutSec = 30 + (failedCount - 5) * 15
+            settingsDataStore.setLockoutExpiration(System.currentTimeMillis() + (lockoutSec * 1000L))
+            startLockoutCountdown(lockoutSec)
         }
 
         return false
