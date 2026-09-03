@@ -76,6 +76,22 @@ fun VaultNavHost(
     var showStealthDialog by remember { mutableStateOf(false) }
     var pinErrorMessage by remember { mutableStateOf<String?>(null) }
     var pinErrorTrigger by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val isCryptoStateInvalid by vaultViewModel.isCryptoStateInvalid.collectAsStateWithLifecycle()
+
+    if (isCryptoStateInvalid) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { vaultViewModel.clearCryptoStateInvalid() },
+            title = { androidx.compose.material3.Text("Vault Locked") },
+            text = { androidx.compose.material3.Text("Vault cryptographic state is inconsistent. Your encrypted data has not been deleted.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { 
+                    vaultViewModel.clearCryptoStateInvalid()
+                }) {
+                    androidx.compose.material3.Text("OK")
+                }
+            }
+        )
+    }
 
     var showExportPasswordDialog by remember { mutableStateOf(false) }
     var showImportPasswordDialog by remember { mutableStateOf(false) }
@@ -283,7 +299,7 @@ fun VaultNavHost(
                 onPinSubmit = { enteredPin ->
                     coroutineScope.launch {
                         if (!settings.isInitialized) {
-                            vaultViewModel.initializeCredentials(context, enteredPin)
+                            vaultViewModel.bootstrapFreshVault(context, enteredPin)
                             pinErrorMessage = null
                             navController.navigate(NavRoutes.Dashboard.route) {
                                 popUpTo(NavRoutes.Lock.route) { inclusive = true }

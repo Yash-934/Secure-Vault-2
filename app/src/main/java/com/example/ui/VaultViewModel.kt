@@ -208,17 +208,31 @@ class VaultViewModel(
     private val _decryptedBytes = MutableStateFlow<ByteArray?>(null)
     val decryptedBytes: StateFlow<ByteArray?> = _decryptedBytes.asStateFlow()
 
+    private val _isCryptoStateInvalid = MutableStateFlow(false)
+    val isCryptoStateInvalid: StateFlow<Boolean> = _isCryptoStateInvalid.asStateFlow()
+
+    fun clearCryptoStateInvalid() {
+        _isCryptoStateInvalid.value = false
+    }
+
     fun unlockRealVault() {
         if (!com.example.security.VaultKeyManager.isRealVaultAuthorized()) {
             _vaultMode.value = VaultMode.LOCKED
             _isUnlocked.value = false
             return
         }
+        if (!com.example.security.DatabaseKeyManager.verifyPassphraseAvailability(appCtx, isDecoy = false)) {
+            _vaultMode.value = VaultMode.LOCKED
+            _isUnlocked.value = false
+            _isCryptoStateInvalid.value = true
+            com.example.security.VaultKeyManager.lockVault()
+            return
+        }
+        _isCryptoStateInvalid.value = false
         _vaultMode.value = VaultMode.REAL
         _isUnlocked.value = true
         simulateLoading()
     }
-
 
     fun unlockDecoyVault() {
         if (!com.example.security.VaultKeyManager.isDecoyVaultAuthorized()) {
@@ -226,6 +240,14 @@ class VaultViewModel(
             _isUnlocked.value = false
             return
         }
+        if (!com.example.security.DatabaseKeyManager.verifyPassphraseAvailability(appCtx, isDecoy = true)) {
+            _vaultMode.value = VaultMode.LOCKED
+            _isUnlocked.value = false
+            _isCryptoStateInvalid.value = true
+            com.example.security.VaultKeyManager.lockVault()
+            return
+        }
+        _isCryptoStateInvalid.value = false
         _vaultMode.value = VaultMode.DECOY
         _isUnlocked.value = true
     }
@@ -262,10 +284,10 @@ class VaultViewModel(
         }
     }
 
-    suspend fun initializeCredentials(context: Context, masterPin: String) {
+    suspend fun bootstrapFreshVault(context: Context, masterPin: String) {
         val settingsDataStore = com.example.data.local.SettingsDataStore(context)
-        settingsDataStore.initializeCredentials(masterPin)
-        com.example.security.VaultKeyManager.initializeVrkWithPin(context, masterPin, isDecoy = false)
+        settingsDataStore.bootstrapFreshVault(masterPin)
+        com.example.security.VaultKeyManager.createVrkForFreshVault(context, masterPin, isDecoy = false)
         com.example.security.VaultKeyManager.authorizeWithPin(context, masterPin, isDecoy = false)
         unlockRealVault()
         consecutiveFailedAttempts = 0

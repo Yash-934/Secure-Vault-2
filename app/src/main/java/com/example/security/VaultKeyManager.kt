@@ -234,7 +234,12 @@ object VaultKeyManager {
      * This must ONLY be called during first-time vault creation or fresh decoy initialization.
      * NEVER call this during PIN rotation!
      */
-    fun initializeVrkWithPin(context: Context, pin: String, isDecoy: Boolean = false) {
+    fun createVrkForFreshVault(context: Context, pin: String, isDecoy: Boolean = false) {
+        val fileName = if (isDecoy) DECOY_VRK_PIN_WRAP_FILE else VRK_PIN_WRAP_FILE
+        val wrapFile = File(context.filesDir, fileName)
+        if (wrapFile.exists()) {
+            throw IllegalStateException("Vault is already initialized. Cannot recreate VRK.")
+        }
         val vrk = ByteArray(32).also { SecureRandom().nextBytes(it) }
         try {
             writeVrkPinWrap(context, vrk, pin, isDecoy)

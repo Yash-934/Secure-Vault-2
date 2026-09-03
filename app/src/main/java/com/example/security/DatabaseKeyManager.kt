@@ -8,24 +8,46 @@ import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 
+class DatabaseCryptoException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
 object DatabaseKeyManager {
     private const val TAG = "DatabaseKeyManager"
     private const val PREF_NAME = "DBKeyPrefs"
+
+    // We store the encrypted passphrase and IV
     private const val PREF_KEY_ENCRYPTED_REAL = "encrypted_db_passphrase_b64"
     private const val PREF_KEY_IV_REAL = "db_passphrase_iv_b64"
     private const val PREF_KEY_ENCRYPTED_DECOY = "encrypted_decoy_db_passphrase_b64"
     private const val PREF_KEY_IV_DECOY = "decoy_db_passphrase_iv_b64"
+    
+    // P0-7: version and generation tracking
+    private const val PREF_KEY_VERSION_REAL = "db_passphrase_version_real"
+    private const val PREF_KEY_VERSION_DECOY = "db_passphrase_version_decoy"
+
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val GCM_TAG_LENGTH_BITS = 128
 
     @Volatile
     private var cachedRealPassphrase: ByteArray? = null
-
     @Volatile
     private var cachedDecoyPassphrase: ByteArray? = null
 
     @Synchronized
+    fun verifyPassphraseAvailability(context: Context, isDecoy: Boolean = false): Boolean {
+        try {
+            getDatabasePassphrase(context, isDecoy)
+            return true
+        } catch (e: DatabaseCryptoException) {
+            return false
+        }
+    }
+
+    @Synchronized
     fun getDatabasePassphrase(context: Context, isDecoy: Boolean = false): ByteArray {
+        if (!VaultKeyManager.isSessionAuthorized()) {
+            throw DatabaseCryptoException("Cannot access Database Passphrase. Vault session is not authorized.")
+        }
+        
         val cached = if (isDecoy) cachedDecoyPassphrase else cachedRealPassphrase
         if (cached != null) {
             return cached.clone()
@@ -34,34 +56,46 @@ object DatabaseKeyManager {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val prefKeyEncrypted = if (isDecoy) PREF_KEY_ENCRYPTED_DECOY else PREF_KEY_ENCRYPTED_REAL
         val prefKeyIv = if (isDecoy) PREF_KEY_IV_DECOY else PREF_KEY_IV_REAL
+        val prefKeyVersion = if (isDecoy) PREF_KEY_VERSION_DECOY else PREF_KEY_VERSION_REAL
 
         val encryptedB64 = prefs.getString(prefKeyEncrypted, null)
         val ivB64 = prefs.getString(prefKeyIv, null)
+        val version = prefs.getInt(prefKeyVersion, 1) // default to 1 for older wrappers
+
+        // P0-8: Add DB Key Wrap AAD
+        val aad = if (isDecoy) "QUANTUM_VAULT_DB_DECOY_V2".toByteArray() else "QUANTUM_VAULT_DB_REAL_V2".toByteArray()
 
         if (!encryptedB64.isNullOrEmpty() && !ivB64.isNullOrEmpty()) {
+            // P0-9: Strict DB wrapper parsing. Fail closed.
             try {
                 val encryptedBytes = Base64.decode(encryptedB64, Base64.NO_WRAP)
                 val ivBytes = Base64.decode(ivB64, Base64.NO_WRAP)
                 val secretKey = VaultKeyManager.getDatabaseWrapKey(isDecoy)
-
                 val cipher = Cipher.getInstance(TRANSFORMATION)
                 val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, ivBytes)
                 cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+                
+                if (version >= 2) {
+                    cipher.updateAAD(aad)
+                }
+                
                 val decryptedPass = cipher.doFinal(encryptedBytes)
+                
                 if (decryptedPass != null && decryptedPass.isNotEmpty()) {
                     if (isDecoy) {
                         cachedDecoyPassphrase = decryptedPass.clone()
                     } else {
                         cachedRealPassphrase = decryptedPass.clone()
                     }
-                    VaultLogger.log(context, TAG, "Successfully unwrapped persistent database passphrase (decoy=$isDecoy) from Android Keystore")
+                    VaultLogger.log(context, TAG, "Successfully unwrapped persistent database passphrase (decoy=$isDecoy)")
                     return decryptedPass
                 } else {
-                    throw IllegalStateException("Decrypted database passphrase was empty")
+                    throw DatabaseCryptoException("Decrypted database passphrase was empty")
                 }
             } catch (e: Exception) {
-                VaultLogger.logError(context, TAG, "Failed to unwrap persistent database encryption key (decoy=$isDecoy) from Android Keystore.", e)
-                throw IllegalStateException("Database encryption key (decoy=$isDecoy) could not be unwrapped: ${e.localizedMessage}", e)
+                // P0-10: DO NOT OVERWRITE, DO NOT GENERATE REPLACEMENT.
+                VaultLogger.logError(context, TAG, "DATABASE_KEY_UNWRAP_FAILED. Reason: AEAD_AUTH_FAILURE (decoy=$isDecoy)", e)
+                throw DatabaseCryptoException("DATABASE_KEY_UNWRAP_FAILED", e)
             }
         }
 
@@ -73,12 +107,17 @@ object DatabaseKeyManager {
             val secretKey = VaultKeyManager.getDatabaseWrapKey(isDecoy)
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+            
+            // P0-8: Store with V2 AAD
+            cipher.updateAAD(aad)
+            
             val iv = cipher.iv
             val cipherBytes = cipher.doFinal(rawPassphrase)
 
             val editor = prefs.edit()
                 .putString(prefKeyEncrypted, Base64.encodeToString(cipherBytes, Base64.NO_WRAP))
                 .putString(prefKeyIv, Base64.encodeToString(iv, Base64.NO_WRAP))
+                .putInt(prefKeyVersion, 2)
                 .remove("persistent_db_passphrase_hex") // Clean up any legacy plaintext
             
             val committed = editor.commit()
@@ -86,10 +125,10 @@ object DatabaseKeyManager {
                 Log.w(TAG, "Shared preferences commit returned false, falling back to apply")
                 editor.apply()
             }
-            VaultLogger.log(context, TAG, "Generated and securely stored new 256-bit database encryption key (decoy=$isDecoy) in Android Keystore")
+            VaultLogger.log(context, TAG, "Generated and securely stored new V2 database encryption key (decoy=$isDecoy)")
         } catch (e: Exception) {
             VaultLogger.logError(context, TAG, "Exception wrapping DB passphrase (decoy=$isDecoy) with Keystore", e)
-            throw IllegalStateException("Failed to securely store database encryption key in Keystore: ${e.localizedMessage}", e)
+            throw DatabaseCryptoException("Failed to securely store database encryption key", e)
         }
 
         if (isDecoy) {
@@ -98,6 +137,17 @@ object DatabaseKeyManager {
             cachedRealPassphrase = rawPassphrase.clone()
         }
         return rawPassphrase
+    }
+
+    /**
+     * Wipes only the in-memory cached database passphrases (e.g. when locking vault).
+     */
+    @Synchronized
+    fun clearMemory() {
+        cachedRealPassphrase?.fill(0)
+        cachedRealPassphrase = null
+        cachedDecoyPassphrase?.fill(0)
+        cachedDecoyPassphrase = null
     }
 
     /**
@@ -110,7 +160,6 @@ object DatabaseKeyManager {
             cachedRealPassphrase = null
             cachedDecoyPassphrase?.fill(0)
             cachedDecoyPassphrase = null
-
             val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             prefs.edit().clear().commit()
             true

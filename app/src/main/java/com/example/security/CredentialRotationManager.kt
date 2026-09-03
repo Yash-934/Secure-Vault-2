@@ -163,7 +163,7 @@ object CredentialRotationManager {
             }
         } else {
             // First time enabling decoy PIN
-            VaultKeyManager.initializeVrkWithPin(context, newPin, isDecoy = true)
+            VaultKeyManager.createVrkForFreshVault(context, newPin, isDecoy = true)
             return try {
                 settingsDataStore.updateDecoyPin(newPin)
                 RotationResult.Success

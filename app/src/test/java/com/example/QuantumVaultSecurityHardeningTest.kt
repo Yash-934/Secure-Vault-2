@@ -23,6 +23,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.crypto.spec.SecretKeySpec
@@ -32,6 +33,19 @@ import javax.crypto.spec.SecretKeySpec
 class QuantumVaultSecurityHardeningTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @org.junit.Before
+    fun setUp() {
+        runBlocking {
+            val settingsDataStore = SettingsDataStore(context)
+            settingsDataStore.clearAllForTesting()
+            File(context.filesDir, "vrk_wrap.bin").delete()
+            File(context.filesDir, "decoy_vrk_pin_wrap.bin").delete()
+            File(context.filesDir, "vault_sentinel.bin").delete()
+            File(context.filesDir, "decoy_vault_sentinel.bin").delete()
+            File(context.filesDir, "vrk_biometric_envelope.bin").delete()
+        }
+    }
 
     @Test
     fun testP0_1_FirstRunInitializationAndSaltedKdfPinVerification() = runBlocking {
@@ -44,7 +58,7 @@ class QuantumVaultSecurityHardeningTest {
 
         // Initialize vault with a fresh PIN
         val initialPin = "7492"
-        settingsDataStore.initializeCredentials(initialPin)
+        settingsDataStore.bootstrapFreshVault(initialPin)
 
         val settings = settingsDataStore.settingsFlow.first()
         assertTrue(settings.isInitialized)
@@ -72,7 +86,7 @@ class QuantumVaultSecurityHardeningTest {
 
     @Test
     fun testP0_2_PasswordCryptoHelperAesGcmTamperProof() {
-        com.example.security.VaultKeyManager.initializeVrkWithPin(context, "1234")
+        com.example.security.VaultKeyManager.createVrkForFreshVault(context, "1234")
         com.example.security.VaultKeyManager.authorizeWithPin(context, "1234")
         val plainText = "SuperSecretBankPassword#2026!"
         val encrypted = PasswordCryptoHelper.encryptText(plainText)
@@ -124,7 +138,7 @@ class QuantumVaultSecurityHardeningTest {
 
     @Test
     fun testP0_4_FailClosedStreamCryptoIntegrity() {
-        com.example.security.VaultKeyManager.initializeVrkWithPin(context, "1234")
+        com.example.security.VaultKeyManager.createVrkForFreshVault(context, "1234")
         com.example.security.VaultKeyManager.authorizeWithPin(context, "1234")
         val payload = "TopSecretHardwareEncryptedDataStreamPayload".toByteArray(Charsets.UTF_8)
         val inStream = ByteArrayInputStream(payload)
@@ -226,7 +240,7 @@ class QuantumVaultSecurityHardeningTest {
 
     @Test
     fun testP0_8_DatabaseNoDestructiveMigrationOnDowngrade() {
-        com.example.security.VaultKeyManager.initializeVrkWithPin(context, "1234")
+        com.example.security.VaultKeyManager.createVrkForFreshVault(context, "1234")
         com.example.security.VaultKeyManager.authorizeWithPin(context, "1234")
         // Verify AppDatabase does not throw on valid instance creation
         val db = AppDatabase.getDatabase(context)

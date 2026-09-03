@@ -133,7 +133,12 @@ class SettingsDataStore(private val context: Context) {
         )
     }
 
-    suspend fun initializeCredentials(masterPin: String) = authMutex.withLock {
+    suspend fun bootstrapFreshVault(masterPin: String) = authMutex.withLock {
+        val prefsInitial = context.dataStore.data.first()
+        val isInit = prefsInitial[IS_INITIALIZED_KEY] ?: false
+        if (isInit) {
+            throw IllegalStateException("Vault is already initialized. Cannot bootstrap again.")
+        }
         val salt = generateRandomSalt()
         val masterHash = hashPin(masterPin, salt, DOMAIN_MASTER)
         context.dataStore.edit { prefs ->
@@ -338,5 +343,9 @@ class SettingsDataStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[LAST_LOGIN_TIMESTAMP_KEY] = System.currentTimeMillis()
         }
+    }
+
+    suspend fun clearAllForTesting() {
+        context.dataStore.edit { it.clear() }
     }
 }

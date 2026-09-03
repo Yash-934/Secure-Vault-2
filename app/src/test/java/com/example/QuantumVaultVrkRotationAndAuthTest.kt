@@ -35,6 +35,7 @@ class QuantumVaultVrkRotationAndAuthTest {
     fun setUp() {
         runBlocking {
             settingsDataStore = SettingsDataStore(context)
+            settingsDataStore.clearAllForTesting()
             VaultKeyManager.lockVault()
             File(context.filesDir, "vrk_wrap.bin").delete()
             File(context.filesDir, "decoy_vrk_pin_wrap.bin").delete()
@@ -51,8 +52,8 @@ class QuantumVaultVrkRotationAndAuthTest {
             val rotatedPin = "9876"
 
             // Step 1: Initialize credentials and VRK
-            settingsDataStore.initializeCredentials(initialPin)
-            VaultKeyManager.initializeVrkWithPin(context, initialPin)
+            settingsDataStore.bootstrapFreshVault(initialPin)
+            VaultKeyManager.createVrkForFreshVault(context, initialPin)
             val authSuccess = VaultKeyManager.authorizeWithPin(context, initialPin)
             assertTrue("Initial PIN authorization must succeed", authSuccess)
             assertTrue("Real vault must be cryptographically authorized", VaultKeyManager.isRealVaultAuthorized())
@@ -118,10 +119,10 @@ class QuantumVaultVrkRotationAndAuthTest {
             val initialDecoyPin = "0000"
             val newDecoyPin = "7777"
 
-            settingsDataStore.initializeCredentials(masterPin)
-            VaultKeyManager.initializeVrkWithPin(context, masterPin)
+            settingsDataStore.bootstrapFreshVault(masterPin)
+            VaultKeyManager.createVrkForFreshVault(context, masterPin)
             settingsDataStore.updateDecoyPin(initialDecoyPin)
-            VaultKeyManager.initializeVrkWithPin(context, initialDecoyPin, isDecoy = true)
+            VaultKeyManager.createVrkForFreshVault(context, initialDecoyPin, isDecoy = true)
 
             // Authorize with initial decoy PIN
             val initialAuth = VaultKeyManager.authorizeWithPin(context, initialDecoyPin, isDecoy = true)
@@ -155,7 +156,7 @@ class QuantumVaultVrkRotationAndAuthTest {
     @Test
     fun testVaultSentinelVerificationAndTamperRejection() {
         val pin = "2468"
-        VaultKeyManager.initializeVrkWithPin(context, pin)
+        VaultKeyManager.createVrkForFreshVault(context, pin)
 
         // Verify sentinel exists and is valid
         val sentinelFile = File(context.filesDir, "vault_sentinel.bin")
@@ -185,7 +186,7 @@ class QuantumVaultVrkRotationAndAuthTest {
         assertFalse("Legacy record must NOT have QVPM2 prefix", legacyEncrypted.startsWith("QVPM2:"))
 
         // Unlock real vault with a valid VRK
-        VaultKeyManager.initializeVrkWithPin(context, "1111")
+        VaultKeyManager.createVrkForFreshVault(context, "1111")
         VaultKeyManager.authorizeWithPin(context, "1111")
 
         // Decrypt using PasswordCryptoHelper
@@ -237,7 +238,7 @@ class QuantumVaultVrkRotationAndAuthTest {
     @Test
     fun testBiometricProvisioningEndToEnd() = runBlocking {
         // 1. Initial State: Locked, OFF, envelope absent
-        VaultKeyManager.initializeVrkWithPin(context, "1234")
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
         VaultKeyManager.lockVault()
         settingsDataStore.setBiometricsEnabled(false)
         val envelopeFile = File(context.filesDir, "vrk_biometric_envelope.bin")
