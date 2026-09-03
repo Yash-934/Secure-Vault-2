@@ -76,13 +76,23 @@ fun VaultNavHost(
     var showStealthDialog by remember { mutableStateOf(false) }
     var pinErrorMessage by remember { mutableStateOf<String?>(null) }
     var pinErrorTrigger by remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    val isCryptoStateInvalid by vaultViewModel.isCryptoStateInvalid.collectAsStateWithLifecycle()
+    val cryptoErrorState by vaultViewModel.cryptoErrorState.collectAsStateWithLifecycle()
 
-    if (isCryptoStateInvalid) {
+    if (cryptoErrorState != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { vaultViewModel.clearCryptoStateInvalid() },
             title = { androidx.compose.material3.Text("Vault Locked") },
-            text = { androidx.compose.material3.Text("Vault cryptographic state is inconsistent. Your encrypted data has not been deleted.") },
+            text = { 
+                androidx.compose.material3.Text(
+                    when (cryptoErrorState) {
+                        com.example.ui.CryptoErrorState.DATABASE_KEY_UNWRAP_FAILED -> "Failed to unwrap database key. Your encrypted data has not been deleted."
+                        com.example.ui.CryptoErrorState.VRK_INVALID -> "Vault Root Key is invalid."
+                        com.example.ui.CryptoErrorState.DATABASE_CORRUPTED -> "Database is corrupted."
+                        com.example.ui.CryptoErrorState.RECOVERY_REQUIRED -> "Recovery is required for the vault."
+                        else -> "Vault cryptographic state is inconsistent. Your encrypted data has not been deleted."
+                    }
+                ) 
+            },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { 
                     vaultViewModel.clearCryptoStateInvalid()

@@ -111,6 +111,17 @@ object VaultKeyManager {
         val context = if (isDecoy) "database_decoy_context" else "database_real_context"
         return deriveKey(context)
     }
+    
+    fun getLegacyDatabaseWrapKey(): SecretKey? {
+        return try {
+            if (keyStore?.containsAlias("SecureVaultAES256MasterKey") == true) {
+                keyStore.getKey("SecureVaultAES256MasterKey", null) as SecretKey
+            } else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get legacy database wrap key", e)
+            null
+        }
+    }
 
     private fun derivePinKek(pin: String, salt: ByteArray): ByteArray {
         val spec = PBEKeySpec(pin.toCharArray(), salt, 12000, 256)

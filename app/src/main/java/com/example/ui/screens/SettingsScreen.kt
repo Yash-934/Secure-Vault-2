@@ -164,8 +164,18 @@ fun SettingsScreen(
     var showAntiTamperDialog by remember { mutableStateOf(false) }
     var showSecurityEnclaveScannerDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val intruderLogsFlow = remember { AppDatabase.getDatabase(context).intruderLogDao().getAllLogs() }
-    val intruderLogs by intruderLogsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val intruderLogs by remember {
+        if (com.example.security.VaultKeyManager.isSessionAuthorized() && 
+            com.example.security.DatabaseKeyManager.verifyPassphraseAvailability(context)) {
+            try {
+                com.example.data.AppDatabase.getDatabase(context).intruderLogDao().getAllLogs()
+            } catch (e: Exception) {
+                kotlinx.coroutines.flow.flowOf(emptyList())
+            }
+        } else {
+            kotlinx.coroutines.flow.flowOf(emptyList())
+        }
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
 
     LaunchedEffect(statusMessage) {
         if (!statusMessage.isNullOrEmpty()) {
@@ -1344,7 +1354,10 @@ fun SettingsScreen(
                     onClearIntruderLogs = {
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                AppDatabase.getDatabase(context).intruderLogDao().clearLogs()
+                                if (com.example.security.VaultKeyManager.isSessionAuthorized() && 
+                                    com.example.security.DatabaseKeyManager.verifyPassphraseAvailability(context)) {
+                                    com.example.data.AppDatabase.getDatabase(context).intruderLogDao().clearLogs()
+                                }
                             } catch (_: Exception) {}
                         }
                     },

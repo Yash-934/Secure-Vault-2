@@ -54,6 +54,13 @@ data class ImportProgressState(
     val overallProgress: Float = 0f
 )
 
+enum class CryptoErrorState {
+    DATABASE_KEY_UNWRAP_FAILED,
+    VRK_INVALID,
+    DATABASE_CORRUPTED,
+    RECOVERY_REQUIRED
+}
+
 class VaultViewModel(
     private val appCtx: android.content.Context
 ) : ViewModel() {
@@ -208,11 +215,11 @@ class VaultViewModel(
     private val _decryptedBytes = MutableStateFlow<ByteArray?>(null)
     val decryptedBytes: StateFlow<ByteArray?> = _decryptedBytes.asStateFlow()
 
-    private val _isCryptoStateInvalid = MutableStateFlow(false)
-    val isCryptoStateInvalid: StateFlow<Boolean> = _isCryptoStateInvalid.asStateFlow()
+    private val _cryptoErrorState = MutableStateFlow<CryptoErrorState?>(null)
+    val cryptoErrorState: StateFlow<CryptoErrorState?> = _cryptoErrorState.asStateFlow()
 
     fun clearCryptoStateInvalid() {
-        _isCryptoStateInvalid.value = false
+        _cryptoErrorState.value = null
     }
 
     fun unlockRealVault() {
@@ -221,17 +228,18 @@ class VaultViewModel(
             _isUnlocked.value = false
             return
         }
-        if (!com.example.security.DatabaseKeyManager.verifyPassphraseAvailability(appCtx, isDecoy = false)) {
+        try {
+            com.example.security.DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = false)
+            _cryptoErrorState.value = null
+            _vaultMode.value = VaultMode.REAL
+            _isUnlocked.value = true
+            simulateLoading()
+        } catch (e: com.example.security.DatabaseCryptoException) {
             _vaultMode.value = VaultMode.LOCKED
             _isUnlocked.value = false
-            _isCryptoStateInvalid.value = true
+            _cryptoErrorState.value = CryptoErrorState.DATABASE_KEY_UNWRAP_FAILED
             com.example.security.VaultKeyManager.lockVault()
-            return
         }
-        _isCryptoStateInvalid.value = false
-        _vaultMode.value = VaultMode.REAL
-        _isUnlocked.value = true
-        simulateLoading()
     }
 
     fun unlockDecoyVault() {
@@ -240,16 +248,17 @@ class VaultViewModel(
             _isUnlocked.value = false
             return
         }
-        if (!com.example.security.DatabaseKeyManager.verifyPassphraseAvailability(appCtx, isDecoy = true)) {
+        try {
+            com.example.security.DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = true)
+            _cryptoErrorState.value = null
+            _vaultMode.value = VaultMode.DECOY
+            _isUnlocked.value = true
+        } catch (e: com.example.security.DatabaseCryptoException) {
             _vaultMode.value = VaultMode.LOCKED
             _isUnlocked.value = false
-            _isCryptoStateInvalid.value = true
+            _cryptoErrorState.value = CryptoErrorState.DATABASE_KEY_UNWRAP_FAILED
             com.example.security.VaultKeyManager.lockVault()
-            return
         }
-        _isCryptoStateInvalid.value = false
-        _vaultMode.value = VaultMode.DECOY
-        _isUnlocked.value = true
     }
 
     // Consecutive Failed Attempts Counter & Lockout Timer
@@ -284,7 +293,31 @@ class VaultViewModel(
         }
     }
 
+    private fun isVaultGenuinelyFresh(context: Context): Boolean {
+        // Check VRK wrappers
+        val vrkFile = java.io.File(context.filesDir, "vrk_wrap.bin")
+        if (vrkFile.exists()) return false
+        
+        // Check Sentinel
+        val sentinelFile = java.io.File(context.filesDir, "vault_sentinel.bin")
+        if (sentinelFile.exists()) return false
+
+        // Check DB metadata (SharedPreferences)
+        val dbPrefs = context.getSharedPreferences("DBKeyPrefs", Context.MODE_PRIVATE)
+        if (dbPrefs.contains("encrypted_db_passphrase_b64")) return false
+        
+        // Check database file
+        val dbFile = context.getDatabasePath("vault_database")
+        if (dbFile.exists()) return false
+
+        return true
+    }
+
     suspend fun bootstrapFreshVault(context: Context, masterPin: String) {
+        if (!isVaultGenuinelyFresh(context)) {
+            _cryptoErrorState.value = CryptoErrorState.RECOVERY_REQUIRED
+            return
+        }
         val settingsDataStore = com.example.data.local.SettingsDataStore(context)
         settingsDataStore.bootstrapFreshVault(masterPin)
         com.example.security.VaultKeyManager.createVrkForFreshVault(context, masterPin, isDecoy = false)

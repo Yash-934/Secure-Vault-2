@@ -93,15 +93,57 @@ object DatabaseKeyManager {
                     throw DatabaseCryptoException("Decrypted database passphrase was empty")
                 }
             } catch (e: Exception) {
-                // P0-10: DO NOT OVERWRITE, DO NOT GENERATE REPLACEMENT.
-                VaultLogger.logError(context, TAG, "DATABASE_KEY_UNWRAP_FAILED. Reason: AEAD_AUTH_FAILURE (decoy=$isDecoy)", e)
-                throw DatabaseCryptoException("DATABASE_KEY_UNWRAP_FAILED", e)
+                // Legacy unwrap attempt
+                VaultLogger.log(context, TAG, "V2 unwrap failed, attempting legacy Keystore migration (decoy=$isDecoy)")
+                try {
+                    val encryptedBytes = Base64.decode(encryptedB64, Base64.NO_WRAP)
+                    val ivBytes = Base64.decode(ivB64, Base64.NO_WRAP)
+                    val legacyKey = VaultKeyManager.getLegacyDatabaseWrapKey()
+                    if (legacyKey != null) {
+                        val legacyCipher = Cipher.getInstance(TRANSFORMATION)
+                        legacyCipher.init(Cipher.DECRYPT_MODE, legacyKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, ivBytes))
+                        
+                        val decryptedPass = legacyCipher.doFinal(encryptedBytes)
+                        
+                        // IF we successfully decrypt with legacy, we MUST re-wrap it with V2 and save!
+                        VaultLogger.log(context, TAG, "Legacy unwrap SUCCESS! Migrating to V2 wrapper (decoy=$isDecoy)")
+                        migrateToV2Wrapper(context, decryptedPass, isDecoy)
+                        
+                        if (isDecoy) {
+                            cachedDecoyPassphrase = decryptedPass.clone()
+                        } else {
+                            cachedRealPassphrase = decryptedPass.clone()
+                        }
+                        return decryptedPass
+                    } else {
+                        throw Exception("No legacy key found")
+                    }
+                } catch (legacyE: Exception) {
+                    VaultLogger.logError(context, TAG, "Legacy Keystore unwrap ALSO failed (decoy=$isDecoy)", legacyE)
+                    throw DatabaseCryptoException("DATABASE_KEY_UNWRAP_FAILED", e)
+                }
             }
         }
 
         // Generate a new 32-byte cryptographically secure database passphrase (only on fresh vault creation)
         val rawPassphrase = ByteArray(32)
         SecureRandom().nextBytes(rawPassphrase)
+        migrateToV2Wrapper(context, rawPassphrase, isDecoy)
+        
+        if (isDecoy) {
+            cachedDecoyPassphrase = rawPassphrase.clone()
+        } else {
+            cachedRealPassphrase = rawPassphrase.clone()
+        }
+        return rawPassphrase
+    }
+    
+    private fun migrateToV2Wrapper(context: Context, rawPassphrase: ByteArray, isDecoy: Boolean) {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val prefKeyEncrypted = if (isDecoy) PREF_KEY_ENCRYPTED_DECOY else PREF_KEY_ENCRYPTED_REAL
+        val prefKeyIv = if (isDecoy) PREF_KEY_IV_DECOY else PREF_KEY_IV_REAL
+        val prefKeyVersion = if (isDecoy) PREF_KEY_VERSION_DECOY else PREF_KEY_VERSION_REAL
+        val aad = if (isDecoy) "QUANTUM_VAULT_DB_DECOY_V2".toByteArray() else "QUANTUM_VAULT_DB_REAL_V2".toByteArray()
 
         try {
             val secretKey = VaultKeyManager.getDatabaseWrapKey(isDecoy)
@@ -113,7 +155,6 @@ object DatabaseKeyManager {
             
             val iv = cipher.iv
             val cipherBytes = cipher.doFinal(rawPassphrase)
-
             val editor = prefs.edit()
                 .putString(prefKeyEncrypted, Base64.encodeToString(cipherBytes, Base64.NO_WRAP))
                 .putString(prefKeyIv, Base64.encodeToString(iv, Base64.NO_WRAP))
@@ -125,18 +166,11 @@ object DatabaseKeyManager {
                 Log.w(TAG, "Shared preferences commit returned false, falling back to apply")
                 editor.apply()
             }
-            VaultLogger.log(context, TAG, "Generated and securely stored new V2 database encryption key (decoy=$isDecoy)")
+            VaultLogger.log(context, TAG, "Generated and securely stored V2 database encryption wrapper (decoy=$isDecoy)")
         } catch (e: Exception) {
             VaultLogger.logError(context, TAG, "Exception wrapping DB passphrase (decoy=$isDecoy) with Keystore", e)
             throw DatabaseCryptoException("Failed to securely store database encryption key", e)
         }
-
-        if (isDecoy) {
-            cachedDecoyPassphrase = rawPassphrase.clone()
-        } else {
-            cachedRealPassphrase = rawPassphrase.clone()
-        }
-        return rawPassphrase
     }
 
     /**
