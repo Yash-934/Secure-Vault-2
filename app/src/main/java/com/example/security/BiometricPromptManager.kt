@@ -26,6 +26,7 @@ class BiometricPromptManager(private val context: Context) {
         data class Error(val status: BiometricStatus? = null, val message: String) : AuthResult
         object EnvelopeMissing : AuthResult
         object KeyInvalidated : AuthResult
+        object AuthenticationRequired : AuthResult
         object Cancelled : AuthResult
     }
 
@@ -68,7 +69,12 @@ class BiometricPromptManager(private val context: Context) {
         }
 
         val cryptoObject = try {
-            VaultKeyManager.getBiometricEnrollCryptoObject(context)
+            val obj = VaultKeyManager.getBiometricEnrollCryptoObject(context)
+            if (obj == null && !VaultKeyManager.isRealVaultAuthorized()) {
+                onResult(AuthResult.AuthenticationRequired)
+                return
+            }
+            obj
         } catch (e: KeyPermanentlyInvalidatedException) {
             onResult(AuthResult.KeyInvalidated)
             return
@@ -77,7 +83,7 @@ class BiometricPromptManager(private val context: Context) {
         }
 
         if (cryptoObject == null) {
-            onResult(AuthResult.Error(null, "CRYPTO_AUTHENTICATION_FAILURE: Real vault session must be authorized via PIN before enrolling biometrics."))
+            onResult(AuthResult.Error(null, "Failed to initialize biometric prompt."))
             return
         }
 

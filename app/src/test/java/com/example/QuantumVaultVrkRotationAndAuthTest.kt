@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -221,8 +223,8 @@ class QuantumVaultVrkRotationAndAuthTest {
 
             val status = VaultKeyManager.validateBiometricEnrollmentState(context, settingsDataStore)
             assertEquals(
-                "Missing envelope must return MISSING_ENVELOPE and reset preference",
-                com.example.security.BiometricEnrollmentStatus.MISSING_ENVELOPE,
+                "Missing envelope must return ENVELOPE_MISSING and reset preference",
+                com.example.security.BiometricEnrollmentState.ENVELOPE_MISSING,
                 status
             )
             assertFalse(
@@ -230,5 +232,39 @@ class QuantumVaultVrkRotationAndAuthTest {
                 settingsDataStore.settingsFlow.first().isBiometricsEnabled
             )
         }
+    }
+
+    @Test
+    fun testBiometricProvisioningEndToEnd() = runBlocking {
+        // 1. Initial State: Locked, OFF, envelope absent
+        VaultKeyManager.initializeVrkWithPin(context, "1234")
+        VaultKeyManager.lockVault()
+        settingsDataStore.setBiometricsEnabled(false)
+        val envelopeFile = File(context.filesDir, "vrk_biometric_envelope.bin")
+        envelopeFile.delete()
+
+        // 2. User taps biometric on lock screen -> validate status
+        val status = VaultKeyManager.validateBiometricEnrollmentState(context, settingsDataStore)
+        assertEquals("Initial state should be NOT_CONFIGURED", com.example.security.BiometricEnrollmentState.NOT_CONFIGURED, status)
+
+        // Attempt to get biometric crypto object while locked
+        val cryptoObject = VaultKeyManager.getBiometricEnrollCryptoObject(context)
+        assertNull("Crypto object must be null because vault is locked", cryptoObject)
+
+        // 3. User enters correct PIN -> Existing VRK authorized
+        assertTrue("PIN authentication must succeed", VaultKeyManager.authorizeWithPin(context, "1234", false))
+        
+        // 4. Biometric enrollment prompt -> CryptoObject retrieved
+        val enrollmentObj = VaultKeyManager.getBiometricEnrollCryptoObject(context)
+        assertNotNull("Crypto object must be retrieved after PIN auth", enrollmentObj)
+        
+        // 5. Envelope created
+        val provisioned = VaultKeyManager.provisionBiometricEnvelope(context, enrollmentObj!!.cipher!!)
+        assertTrue("Envelope must be provisioned", provisioned)
+        
+        // 6. Envelope verified
+        settingsDataStore.setBiometricsEnabled(true)
+        val finalStatus = VaultKeyManager.validateBiometricEnrollmentState(context, settingsDataStore)
+        assertEquals("Final state should be ENROLLED", com.example.security.BiometricEnrollmentState.ENROLLED, finalStatus)
     }
 }

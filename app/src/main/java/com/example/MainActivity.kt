@@ -218,7 +218,7 @@ class MainActivity : FragmentActivity() {
                 }
                 is BiometricPromptManager.AuthResult.EnvelopeMissing -> {
                     settingsViewModel.setBiometricsEnabled(false)
-                    Toast.makeText(this, "Biometric unlock not configured. Please unlock with your PIN.", Toast.LENGTH_LONG).show()
+                    vaultViewModel.triggerBiometricSetupPrompt()
                 }
                 is BiometricPromptManager.AuthResult.KeyInvalidated -> {
                     Toast.makeText(this, "Biometric enrollment changed. Please unlock with PIN to re-enroll.", Toast.LENGTH_LONG).show()
@@ -240,6 +240,10 @@ class MainActivity : FragmentActivity() {
                 is BiometricPromptManager.AuthResult.Success -> {
                     settingsViewModel.setBiometricsEnabled(true)
                     Toast.makeText(this, "Biometric unlock enrolled successfully.", Toast.LENGTH_SHORT).show()
+                }
+                is BiometricPromptManager.AuthResult.AuthenticationRequired -> {
+                    settingsViewModel.setBiometricsEnabled(false)
+                    vaultViewModel.triggerBiometricSetupPrompt()
                 }
                 is BiometricPromptManager.AuthResult.Error -> {
                     settingsViewModel.setBiometricsEnabled(false)

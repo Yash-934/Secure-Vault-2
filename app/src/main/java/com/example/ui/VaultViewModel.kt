@@ -173,8 +173,33 @@ class VaultViewModel(
     val pendingImportUris: StateFlow<List<Uri>> = _pendingImportUris.asStateFlow()
 
     // IntentSender for Android 10+ MediaStore deletion prompt
-    private val _deleteIntentSender = MutableStateFlow<IntentSender?>(null)
-    val deleteIntentSender: StateFlow<IntentSender?> = _deleteIntentSender.asStateFlow()
+    private val _deleteIntentSender = MutableStateFlow<android.content.IntentSender?>(null)
+    val deleteIntentSender: StateFlow<android.content.IntentSender?> = _deleteIntentSender.asStateFlow()
+
+    private val _showBiometricSetupPrompt = MutableStateFlow(false)
+    val showBiometricSetupPrompt: StateFlow<Boolean> = _showBiometricSetupPrompt.asStateFlow()
+    
+    private val _pendingBiometricEnrollment = MutableStateFlow(false)
+    val pendingBiometricEnrollment: StateFlow<Boolean> = _pendingBiometricEnrollment.asStateFlow()
+
+    fun triggerBiometricSetupPrompt() {
+        _showBiometricSetupPrompt.value = true
+    }
+
+    fun dismissBiometricSetupPrompt(proceedToPin: Boolean) {
+        _showBiometricSetupPrompt.value = false
+        if (proceedToPin) {
+            _pendingBiometricEnrollment.value = true
+        } else {
+            _pendingBiometricEnrollment.value = false
+        }
+    }
+    
+    fun consumePendingBiometricEnrollment(): Boolean {
+        val pending = _pendingBiometricEnrollment.value
+        _pendingBiometricEnrollment.value = false
+        return pending
+    }
 
     // Active Item Viewer State ( decrypted in memory )
     private val _selectedVaultItem = MutableStateFlow<VaultItem?>(null)

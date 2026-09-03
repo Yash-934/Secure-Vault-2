@@ -21,13 +21,16 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
-enum class BiometricEnrollmentStatus {
-    VALID,
-    NOT_ENABLED,
-    MISSING_ENVELOPE,
-    CORRUPT_ENVELOPE,
-    KEY_MISSING,
-    KEY_INVALIDATED
+enum class BiometricEnrollmentState {
+    NOT_CONFIGURED,
+    REQUIRES_PIN,
+    READY_FOR_BIOMETRIC,
+    ENROLLING,
+    ENROLLED,
+    KEY_INVALIDATED,
+    ENVELOPE_MISSING,
+    ENVELOPE_CORRUPT,
+    UNAVAILABLE
 }
 
 object VaultKeyManager {
@@ -419,22 +422,22 @@ object VaultKeyManager {
     suspend fun validateBiometricEnrollmentState(
         context: Context,
         settingsDataStore: SettingsDataStore
-    ): BiometricEnrollmentStatus {
+    ): BiometricEnrollmentState {
         val isEnabled = settingsDataStore.settingsFlow.first().isBiometricsEnabled
         if (!isEnabled) {
-            return BiometricEnrollmentStatus.NOT_ENABLED
+            return BiometricEnrollmentState.NOT_CONFIGURED
         }
 
         val envelopeFile = File(context.filesDir, BIOMETRIC_WRAP_FILE)
         if (!envelopeFile.exists()) {
             settingsDataStore.setBiometricsEnabled(false)
-            return BiometricEnrollmentStatus.MISSING_ENVELOPE
+            return BiometricEnrollmentState.ENVELOPE_MISSING
         }
 
         if (envelopeFile.length() < 60) {
             envelopeFile.delete()
             settingsDataStore.setBiometricsEnabled(false)
-            return BiometricEnrollmentStatus.CORRUPT_ENVELOPE
+            return BiometricEnrollmentState.ENVELOPE_CORRUPT
         }
 
         // Keystore key validation
@@ -443,13 +446,13 @@ object VaultKeyManager {
                 if (!keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
                     envelopeFile.delete()
                     settingsDataStore.setBiometricsEnabled(false)
-                    return BiometricEnrollmentStatus.KEY_MISSING
+                    return BiometricEnrollmentState.UNAVAILABLE
                 }
                 val entry = keyStore.getEntry(ALIAS_BIOMETRIC_UNLOCK, null) as? KeyStore.SecretKeyEntry
                 if (entry == null) {
                     envelopeFile.delete()
                     settingsDataStore.setBiometricsEnabled(false)
-                    return BiometricEnrollmentStatus.KEY_MISSING
+                    return BiometricEnrollmentState.UNAVAILABLE
                 }
 
                 // Check key invalidation
@@ -460,7 +463,7 @@ object VaultKeyManager {
                 Log.w(TAG, "Biometric key invalidated by system biometric changes")
                 envelopeFile.delete()
                 settingsDataStore.setBiometricsEnabled(false)
-                return BiometricEnrollmentStatus.KEY_INVALIDATED
+                return BiometricEnrollmentState.KEY_INVALIDATED
             } catch (e: UserNotAuthenticatedException) {
                 // Expected for per-use biometric keys! Key is healthy.
             } catch (e: Exception) {
@@ -468,7 +471,7 @@ object VaultKeyManager {
             }
         }
 
-        return BiometricEnrollmentStatus.VALID
+        return BiometricEnrollmentState.ENROLLED
     }
 
     fun removeBiometricEnvelope(context: Context) {

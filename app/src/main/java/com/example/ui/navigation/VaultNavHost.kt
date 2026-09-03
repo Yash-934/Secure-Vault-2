@@ -14,6 +14,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -183,6 +185,89 @@ fun VaultNavHost(
     } else {
         NavRoutes.Lock.route
     }
+
+    val showBiometricSetupPrompt by vaultViewModel.showBiometricSetupPrompt.collectAsStateWithLifecycle()
+    if (showBiometricSetupPrompt) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { vaultViewModel.dismissBiometricSetupPrompt(false) },
+            title = { androidx.compose.material3.Text("Biometric Unlock") },
+            text = { androidx.compose.material3.Text("Not configured yet.\n\nUnlock the vault with your PIN first to securely configure biometric unlock.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { vaultViewModel.dismissBiometricSetupPrompt(true) }
+                ) {
+                    androidx.compose.material3.Text("Unlock with PIN")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { vaultViewModel.dismissBiometricSetupPrompt(false) }
+                ) {
+                    androidx.compose.material3.Text("Cancel")
+                }
+            }
+        )
+    }
+
+    val pendingEnrollment = vaultViewModel.pendingBiometricEnrollment.collectAsStateWithLifecycle().value
+    if (pendingEnrollment && vaultMode != VaultMode.LOCKED) {
+        // If we are already unlocked, but we need PIN auth for enrollment, show a prompt.
+        var localPin by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+        var localError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+        val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { vaultViewModel.consumePendingBiometricEnrollment() },
+            title = { androidx.compose.material3.Text("Authenticate") },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Enter Master PIN to authorize biometric enrollment:")
+                    androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = localPin,
+                        onValueChange = { localPin = it; localError = null },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
+                        isError = localError != null,
+                        singleLine = true
+                    )
+                    if (localError != null) {
+                        androidx.compose.material3.Text(
+                            text = localError!!,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            val success = vaultViewModel.authenticateWithPin(context, lifecycleOwner, localPin, settings)
+                            if (success) {
+                                vaultViewModel.consumePendingBiometricEnrollment()
+                                onEnrollBiometrics()
+                            } else {
+                                localError = "Incorrect PIN"
+                            }
+                        }
+                    }
+                ) {
+                    androidx.compose.material3.Text("Verify")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { vaultViewModel.consumePendingBiometricEnrollment() }
+                ) {
+                    androidx.compose.material3.Text("Cancel")
+                }
+            }
+        )
+    }
+
     NavHost(
         navController = navController,
         startDestination = if (vaultMode == VaultMode.LOCKED) initialTargetLockRoute else NavRoutes.Dashboard.route
@@ -212,12 +297,16 @@ fun VaultNavHost(
                             )
                             if (success) {
                                 pinErrorMessage = null
+                                val pendingEnrollment = vaultViewModel.consumePendingBiometricEnrollment()
                                 if (vaultViewModel.vaultMode.value == VaultMode.DECOY) {
                                     vaultViewModel.logIntruderAttempt(context, "DECOY_TRIGGERED", "Coercion Decoy PIN entered")
                                     navController.navigate(NavRoutes.Dashboard.route) {
                                         popUpTo(NavRoutes.Lock.route) { inclusive = true }
                                     }
                                 } else {
+                                    if (pendingEnrollment) {
+                                        onEnrollBiometrics()
+                                    }
                                     navController.navigate(NavRoutes.Dashboard.route) {
                                         popUpTo(NavRoutes.Lock.route) { inclusive = true }
                                     }
