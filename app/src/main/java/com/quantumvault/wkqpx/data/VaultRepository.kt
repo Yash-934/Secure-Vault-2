@@ -1,0 +1,453 @@
+package com.quantumvault.wkqpx.data
+
+import android.content.ContentValues
+import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import com.quantumvault.wkqpx.security.CryptoManager
+import com.quantumvault.wkqpx.util.VaultLogger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.UUID
+
+/**
+ * Result data holder for import operations, carrying optional delete IntentSender for Android 10+
+ */
+data class ImportResult(
+    val vaultItem: VaultItem,
+    val originalDeleted: Boolean,
+    val deleteIntentSender: android.content.IntentSender? = null,
+    val mediaStoreUriToDelete: android.net.Uri? = null
+)
+
+class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: String = "vault") {
+
+    fun getVaultDirectory(context: Context): File = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
+
+    val allVaultItems: Flow<List<VaultItem>> = vaultDao.getAllVaultItems()
+    val photos: Flow<List<VaultItem>> = vaultDao.getPhotos()
+    val videos: Flow<List<VaultItem>> = vaultDao.getVideos()
+    val documents: Flow<List<VaultItem>> = vaultDao.getDocuments()
+
+    val allFolders: Flow<List<VaultFolder>> = vaultDao.getAllFolders()
+
+    suspend fun createFolder(name: String, iconType: String = "FOLDER") = withContext(Dispatchers.IO) {
+        vaultDao.insertFolder(VaultFolder(name = name, iconType = iconType))
+    }
+
+    suspend fun renameFolder(oldName: String, newName: String) = withContext(Dispatchers.IO) {
+        val oldFolder = vaultDao.getAllFolders().firstOrNull()?.find { it.name == oldName }
+        val iconType = oldFolder?.iconType ?: "FOLDER"
+        vaultDao.insertFolder(VaultFolder(name = newName, iconType = iconType))
+        vaultDao.renameItemsFolder(oldName, newName)
+        vaultDao.deleteFolder(oldName)
+    }
+
+    suspend fun deleteFolder(name: String) = withContext(Dispatchers.IO) {
+        vaultDao.resetItemsInFolderToRoot(name)
+        vaultDao.deleteFolder(name)
+    }
+
+    suspend fun moveItemToFolder(itemId: Long, destinationFolder: String) = withContext(Dispatchers.IO) {
+        vaultDao.updateItemFolder(itemId, destinationFolder)
+    }
+
+    suspend fun copyItemToFolder(context: Context, item: VaultItem, destinationFolder: String): VaultItem? = withContext(Dispatchers.IO) {
+        try {
+            val vaultDir = File(context.filesDir, vaultDirName)
+            val sourceEncryptedFile = File(vaultDir, item.encryptedFileName)
+            if (!sourceEncryptedFile.exists()) return@withContext null
+
+            val newEncryptedFileName = "enc_${UUID.randomUUID()}.bin"
+            val targetEncryptedFile = File(vaultDir, newEncryptedFileName)
+
+            sourceEncryptedFile.copyTo(targetEncryptedFile, overwrite = true)
+
+            val newItem = VaultItem(
+                originalName = "Copy_${item.originalName}",
+                encryptedFileName = newEncryptedFileName,
+                mimeType = item.mimeType,
+                sizeBytes = item.sizeBytes,
+                isVideo = item.isVideo,
+                folderName = destinationFolder
+            )
+
+            val generatedId = vaultDao.insertVaultItem(newItem)
+            newItem.copy(id = generatedId)
+        } catch (e: Exception) {
+            android.util.Log.e("Security", "Exception caught")
+            null
+        }
+    }
+
+    fun getItemsForFolderAndTab(folderName: String, tab: com.quantumvault.wkqpx.ui.VaultFilterTab): Flow<List<VaultItem>> {
+        return if (folderName == "ALL" || folderName.isEmpty()) {
+            when (tab) {
+                com.quantumvault.wkqpx.ui.VaultFilterTab.ALL -> vaultDao.getAllVaultItems()
+                com.quantumvault.wkqpx.ui.VaultFilterTab.PHOTOS -> vaultDao.getPhotos()
+                com.quantumvault.wkqpx.ui.VaultFilterTab.VIDEOS -> vaultDao.getVideos()
+                com.quantumvault.wkqpx.ui.VaultFilterTab.DOCUMENTS -> vaultDao.getDocuments()
+            }
+        } else {
+            when (tab) {
+                com.quantumvault.wkqpx.ui.VaultFilterTab.ALL -> vaultDao.getItemsByFolder(folderName)
+                com.quantumvault.wkqpx.ui.VaultFilterTab.PHOTOS -> vaultDao.getPhotosByFolder(folderName)
+                com.quantumvault.wkqpx.ui.VaultFilterTab.VIDEOS -> vaultDao.getVideosByFolder(folderName)
+                com.quantumvault.wkqpx.ui.VaultFilterTab.DOCUMENTS -> vaultDao.getDocumentsByFolder(folderName)
+            }
+        }
+    }
+
+    /**
+     * Encrypts the user-selected file from public gallery and stores it in app-private storage (filesDir/vault/).
+     * Option to delete original source Uri using MediaStore APIs.
+     * Supports live progress callback.
+     */
+    suspend fun encryptAndImportFile(
+        context: Context,
+        sourceUri: Uri,
+        deleteOriginal: Boolean,
+        targetFolder: String = "Root",
+        onProgress: ((bytesProcessed: Long, totalBytes: Long, fileName: String) -> Unit)? = null
+    ): Result<ImportResult> = withContext(Dispatchers.IO) {
+        try {
+            val contentResolver = context.contentResolver
+
+            // 1. Resolve file metadata (name, mimeType, size)
+            var originalName = "media_${System.currentTimeMillis()}"
+            var mimeType = "image/jpeg"
+            var sizeBytes = 0L
+
+            contentResolver.query(sourceUri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mimeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
+                val sizeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+
+                if (cursor.moveToFirst()) {
+                    if (nameIndex != -1 && !cursor.isNull(nameIndex)) {
+                        originalName = cursor.getString(nameIndex)
+                    }
+                    if (mimeIndex != -1 && !cursor.isNull(mimeIndex)) {
+                        mimeType = cursor.getString(mimeIndex) ?: "image/jpeg"
+                    }
+                    if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
+                        sizeBytes = cursor.getLong(sizeIndex)
+                    }
+                }
+            }
+
+            // Fallback MIME check if unspecified or generic
+            val typeFromResolver = contentResolver.getType(sourceUri)
+            if (typeFromResolver != null) {
+                mimeType = typeFromResolver
+            }
+            if (mimeType == "image/jpeg" || mimeType.isEmpty() || mimeType == "application/octet-stream") {
+                val ext = originalName.substringAfterLast('.', "").lowercase()
+                mimeType = when (ext) {
+                    "pdf" -> "application/pdf"
+                    "doc", "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    "xls", "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    "ppt", "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    "txt", "csv", "log" -> "text/plain"
+                    "zip", "rar", "7z" -> "application/zip"
+                    "mp3", "wav", "m4a", "aac" -> "audio/mpeg"
+                    "mp4", "mkv", "avi", "mov" -> "video/mp4"
+                    "jpg", "jpeg", "png", "webp", "gif" -> "image/jpeg"
+                    else -> mimeType.ifEmpty { "application/octet-stream" }
+                }
+            }
+
+            val isVideo = mimeType.startsWith("video/")
+
+            // 1.5 Extract thumbnail before encryption (if possible)
+            val thumbnailBitmap = try {
+                com.quantumvault.wkqpx.security.ThumbnailExtractor.extractThumbnailFromUri(context, sourceUri, mimeType, isVideo)
+            } catch (e: Exception) {
+                null
+            }
+
+            // 2. Prepare internal vault destination file inside Context.filesDir
+            val vaultDir = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
+            val encryptedFileName = "enc_${UUID.randomUUID()}.bin"
+            val targetEncryptedFile = File(vaultDir, encryptedFileName)
+
+            // 3. Encrypt file using AES-256-GCM via CryptoManager with progress callback
+            contentResolver.openInputStream(sourceUri)?.buffered(65536).use { inputStream ->
+                requireNotNull(inputStream) { "Unable to open input stream from selected file." }
+                FileOutputStream(targetEncryptedFile).buffered(65536).use { outputStream ->
+                    CryptoManager.encryptStream(
+                        inputStream = inputStream,
+                        outputStream = outputStream,
+                        totalBytes = sizeBytes,
+                        onProgress = { processed, total ->
+                            onProgress?.invoke(processed, total, originalName)
+                        }
+                    )
+                }
+            }
+
+            if (sizeBytes == 0L) {
+                sizeBytes = targetEncryptedFile.length()
+            }
+
+            // 4. Save metadata to Room Database
+            val vaultItem = VaultItem(
+                originalName = originalName,
+                encryptedFileName = encryptedFileName,
+                mimeType = mimeType,
+                sizeBytes = sizeBytes,
+                isVideo = isVideo,
+                folderName = targetFolder
+            )
+            val generatedId = vaultDao.insertVaultItem(vaultItem)
+            val savedVaultItem = vaultItem.copy(id = generatedId)
+            VaultLogger.log(context, "VaultRepository", "Imported and securely encrypted item: ID=$generatedId, originalName='$originalName', size=$sizeBytes bytes, folder='$targetFolder'")
+
+            if (thumbnailBitmap != null) {
+                com.quantumvault.wkqpx.security.VaultThumbnailManager.saveThumbnail(context, savedVaultItem, thumbnailBitmap)
+            }
+
+            // 5. Handle deletion of original file if requested
+            var originalDeleted = false
+            var deleteIntentSender: android.content.IntentSender? = null
+            var resolvedMediaStoreUri: android.net.Uri? = null
+
+            if (deleteOriginal) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        try {
+                            val rowsDeleted = contentResolver.delete(sourceUri, null, null)
+                            if (rowsDeleted > 0) {
+                                originalDeleted = true
+                            }
+                        } catch (securityException: SecurityException) {
+                            val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(sourceUri))
+                            deleteIntentSender = deleteRequest.intentSender
+                        }
+                    } else {
+                        try {
+                            val rowsDeleted = contentResolver.delete(sourceUri, null, null)
+                            if (rowsDeleted > 0) {
+                                originalDeleted = true
+                            }
+                        } catch (securityException: SecurityException) {
+                            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                                val recoverableException = securityException as? android.app.RecoverableSecurityException
+                                deleteIntentSender = recoverableException?.userAction?.actionIntent?.intentSender
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("VaultRepository", "Failed to delete original file (Picker/Document URI restriction): ${e.message}")
+                    // We don't fail the import just because delete failed.
+                }
+
+                // Fallback for MediaStore URIs where direct delete requires MediaStore permissions
+                if (!originalDeleted && deleteIntentSender == null) {
+                    try {
+                        val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        
+                        // Only resolve if source URI has a direct numeric ID
+                        sourceUri.lastPathSegment?.toLongOrNull()?.let { id ->
+                            resolvedMediaStoreUri = android.content.ContentUris.withAppendedId(collection, id)
+                        }
+
+                        resolvedMediaStoreUri?.let { mediaStoreUri ->
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                try {
+                                    val rows = contentResolver.delete(mediaStoreUri, null, null)
+                                    if (rows > 0) originalDeleted = true
+                                } catch (se: SecurityException) {
+                                    val deleteRequest = MediaStore.createDeleteRequest(contentResolver, listOf(mediaStoreUri))
+                                    deleteIntentSender = deleteRequest.intentSender
+                                }
+                            } else {
+                                val rows = contentResolver.delete(mediaStoreUri, null, null)
+                                if (rows > 0) originalDeleted = true
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("VaultRepository", "MediaStore deletion failed: ${e.message}")
+                    }
+                }
+            }
+
+            // For Android 11+, we need to return the resolvedUri to batch delete requests
+            val returnUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !originalDeleted) {
+                resolvedMediaStoreUri
+            } else {
+                null
+            }
+
+            Result.success(ImportResult(savedVaultItem, originalDeleted, deleteIntentSender, returnUri))
+        } catch (e: Exception) {
+            android.util.Log.e("VaultRepository", "Import failed for URI: $sourceUri - ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Imports an unencrypted stream directly into encrypted vault storage and Room DB.
+     * Used for extracted ZIP entries, camera captures, and secure file operations.
+     */
+    suspend fun importStreamToVault(
+        context: Context,
+        inputStream: InputStream,
+        originalName: String,
+        mimeType: String,
+        sizeBytes: Long
+    ): VaultItem = withContext(Dispatchers.IO) {
+        val vaultDir = File(context.filesDir, vaultDirName).apply { if (!exists()) mkdirs() }
+        val encryptedFileName = "enc_${UUID.randomUUID()}.bin"
+        val targetEncryptedFile = File(vaultDir, encryptedFileName)
+
+        FileOutputStream(targetEncryptedFile).use { outputStream ->
+            CryptoManager.encryptStream(inputStream, outputStream)
+        }
+
+        val actualSize = if (sizeBytes > 0) sizeBytes else targetEncryptedFile.length()
+        val isVideo = mimeType.startsWith("video/")
+
+        val vaultItem = VaultItem(
+            originalName = originalName,
+            encryptedFileName = encryptedFileName,
+            mimeType = mimeType,
+            sizeBytes = actualSize,
+            isVideo = isVideo
+        )
+
+        val generatedId = vaultDao.insertVaultItem(vaultItem)
+        vaultItem.copy(id = generatedId)
+    }
+
+    /**
+     * Inserts a restored VaultItem into Room DB (for Disaster Recovery / Master Backup import).
+     */
+    suspend fun insertRestoredVaultItem(item: VaultItem): Long = withContext(Dispatchers.IO) {
+        vaultDao.insertVaultItem(item)
+    }
+
+    /**
+     * Decrypts encrypted vault file directly in-memory to a ByteArray for viewing.
+     * Keeps decrypted content transient in memory.
+     * Guarded with size & type limits to prevent OutOfMemory on videos and large files.
+     */
+    suspend fun decryptFileToByteArray(context: Context, item: VaultItem): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            if (item.isVideo || item.sizeBytes > 30 * 1024 * 1024L) {
+                return@withContext null
+            }
+            val vaultDir = File(context.filesDir, vaultDirName)
+            val encryptedFile = File(vaultDir, item.encryptedFileName)
+            if (!encryptedFile.exists()) return@withContext null
+            if (encryptedFile.length() > 30 * 1024 * 1024L) return@withContext null
+
+            FileInputStream(encryptedFile).buffered(65536).use { inputStream ->
+                CryptoManager.decryptStreamToByteArray(inputStream, maxSizeBytes = 30 * 1024 * 1024L)
+            }
+        } catch (e: Throwable) {
+            android.util.Log.e("Security", "Exception caught")
+            null
+        }
+    }
+
+    /**
+     * Removes file from internal vault storage and deletes its Room record.
+     */
+    suspend fun deleteVaultItem(context: Context, item: VaultItem) = withContext(Dispatchers.IO) {
+        val vaultDir = File(context.filesDir, vaultDirName)
+        val encryptedFile = File(vaultDir, item.encryptedFileName)
+        if (encryptedFile.exists()) {
+            com.quantumvault.wkqpx.security.SelfDestructManager.shredFile(encryptedFile)
+        }
+        // Also remove any encrypted thumbnail cache
+        try {
+            val thumbFile = File(File(context.cacheDir, "vault_thumbnails_encrypted"), "${item.encryptedFileName}.thumb_aes256")
+            if (thumbFile.exists()) com.quantumvault.wkqpx.security.SelfDestructManager.shredFile(thumbFile)
+        } catch (_: Throwable) {}
+        vaultDao.deleteVaultItem(item)
+        VaultLogger.log(context, "VaultRepository", "Deleted vault item from DB and shredded encrypted file: ID=${item.id}, name='${item.originalName}'")
+    }
+
+    suspend fun deleteAllVaultItems(context: Context) = withContext(Dispatchers.IO) {
+        val vaultDir = File(context.filesDir, vaultDirName)
+        if (vaultDir.exists()) {
+            vaultDir.listFiles()?.forEach { file ->
+                com.quantumvault.wkqpx.security.SelfDestructManager.shredFile(file)
+            }
+        }
+        val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
+        if (thumbDir.exists()) {
+            thumbDir.listFiles()?.forEach { file ->
+                com.quantumvault.wkqpx.security.SelfDestructManager.shredFile(file)
+            }
+        }
+        vaultDao.deleteAllItems()
+        VaultLogger.log(context, "VaultRepository", "Wiped all vault items for Replace Restore.")
+    }
+
+    /**
+     * Decrypts vault item and restores it back to public gallery (Downloads/Vault or Pictures/Vault).
+     */
+    suspend fun exportVaultItemToGallery(context: Context, item: VaultItem): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val vaultDir = File(context.filesDir, vaultDirName)
+            val encryptedFile = File(vaultDir, item.encryptedFileName)
+            if (!encryptedFile.exists()) return@withContext null
+
+            val contentResolver = context.contentResolver
+            val contentUri = when {
+                item.mimeType.startsWith("video/") -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                item.mimeType.startsWith("image/") -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                item.mimeType.startsWith("audio/") -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                else -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                } else {
+                    MediaStore.Files.getContentUri("external")
+                }
+            }
+
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "restored_${item.originalName}")
+                put(MediaStore.MediaColumns.MIME_TYPE, item.mimeType)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val relativePath = when {
+                        item.mimeType.startsWith("video/") -> Environment.DIRECTORY_MOVIES
+                        item.mimeType.startsWith("image/") -> Environment.DIRECTORY_PICTURES
+                        item.mimeType.startsWith("audio/") -> Environment.DIRECTORY_MUSIC
+                        else -> Environment.DIRECTORY_DOWNLOADS
+                    }
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "$relativePath/SecureVault")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+            }
+
+            val uri = contentResolver.insert(contentUri, values) ?: return@withContext null
+
+            contentResolver.openOutputStream(uri)?.use { outputStream ->
+                FileInputStream(encryptedFile).use { inputStream ->
+                    CryptoManager.decryptStreamToOutputStream(inputStream, outputStream)
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            }
+
+            uri
+        } catch (e: Exception) {
+            android.util.Log.e("Security", "Exception caught")
+            null
+        }
+    }
+}

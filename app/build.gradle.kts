@@ -10,11 +10,11 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.quantumvault.wkqpx"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.quantumvault.wkqpx"
+    applicationId = "com.quantumvault.wkqpx"
     minSdk = 26
     targetSdk = 36
     versionCode = 1

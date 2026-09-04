@@ -21,10 +21,10 @@
 # ----------------------------------------------------------------------------
 # 2. HEAVY OBFUSCATION FOR CRYPTO, KEYSTORE, AND SECURITY LOGIC
 # ----------------------------------------------------------------------------
--keep class com.example.security.** { *; }
+-keep class com.quantumvault.wkqpx.security.** { *; }
 
 # Preserve Native Cryptographic & Keystore Methods and JNI Bridge
--keep class com.example.security.NativeBridge { *; }
+-keep class com.quantumvault.wkqpx.security.NativeBridge { *; }
 -keepclasseswithmembernames class * {
     native <methods>;
 }
@@ -56,9 +56,9 @@
 -dontwarn androidx.room.paging.**
 
 # Keep Data Models / Entities explicitly
--keep class com.example.data.VaultItem { *; }
--keep class com.example.data.IntruderLog { *; }
--keep class com.example.data.local.VaultSettings { *; }
+-keep class com.quantumvault.wkqpx.data.VaultItem { *; }
+-keep class com.quantumvault.wkqpx.data.IntruderLog { *; }
+-keep class com.quantumvault.wkqpx.data.local.VaultSettings { *; }
 
 # ----------------------------------------------------------------------------
 # 4. WORKMANAGER & BACKGROUND WORKERS
@@ -66,13 +66,13 @@
 -keep class * extends androidx.work.ListenableWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
--keep class com.example.security.DeadManSwitchWorker { *; }
+-keep class com.quantumvault.wkqpx.security.DeadManSwitchWorker { *; }
 
 # ----------------------------------------------------------------------------
 # 5. JETPACK COMPOSE & VIEWMODELS
 # ----------------------------------------------------------------------------
--keep class com.example.ui.VaultViewModel { *; }
--keep class com.example.ui.viewmodel.SettingsViewModel { *; }
+-keep class com.quantumvault.wkqpx.ui.VaultViewModel { *; }
+-keep class com.quantumvault.wkqpx.ui.viewmodel.SettingsViewModel { *; }
 -keepclassmembers class * extends androidx.lifecycle.ViewModel {
     public <init>(...);
 }

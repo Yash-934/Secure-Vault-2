@@ -15,7 +15,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_example_security_NativeBridge_mlockBuffer(JNIEnv *env, jobject /* this */, jobject buffer, jint size) {
+Java_com_quantumvault_wkqpx_security_NativeBridge_mlockBuffer(JNIEnv *env, jobject /* this */, jobject buffer, jint size) {
     if (buffer == nullptr || size <= 0) return JNI_FALSE;
     void* ptr = env->GetDirectBufferAddress(buffer);
     if (ptr == nullptr) return JNI_FALSE;
@@ -29,7 +29,7 @@ Java_com_example_security_NativeBridge_mlockBuffer(JNIEnv *env, jobject /* this 
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_example_security_NativeBridge_munlockBuffer(JNIEnv *env, jobject /* this */, jobject buffer, jint size) {
+Java_com_quantumvault_wkqpx_security_NativeBridge_munlockBuffer(JNIEnv *env, jobject /* this */, jobject buffer, jint size) {
     if (buffer == nullptr || size <= 0) return JNI_FALSE;
     void* ptr = env->GetDirectBufferAddress(buffer);
     if (ptr == nullptr) return JNI_FALSE;
@@ -62,7 +62,7 @@ __attribute__((noinline)) void substituteInstructions(volatile int* acc) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_example_security_NativeBridge_getSecretString(JNIEnv *env, jobject /* this */, jint id) {
+Java_com_quantumvault_wkqpx_security_NativeBridge_getSecretString(JNIEnv *env, jobject /* this */, jint id) {
     // Basic XOR string encryption in native layer with split functions
     volatile int bogus = 0;
     if (!opaquePredicate1(id)) {
@@ -83,7 +83,7 @@ Java_com_example_security_NativeBridge_getSecretString(JNIEnv *env, jobject /* t
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_example_security_NativeBridge_runObfuscatedCheck(JNIEnv *env, jobject /* this */) {
+Java_com_quantumvault_wkqpx_security_NativeBridge_runObfuscatedCheck(JNIEnv *env, jobject /* this */) {
     // Native control flow flattening and opaque predicates (OLLVM simulation)
     volatile int state = 1;
     volatile int accumulator = 0xA5A5;
