@@ -249,4 +249,50 @@ class QuantumVaultSecurityHardeningTest {
         assertNotNull(db.intruderLogDao())
         assertNotNull(db.vaultPasswordDao())
     }
+
+    @Test
+    fun testP0_9_LegacyBackupRestorationCandidateRecovery() = runBlocking {
+        com.quantumvault.wkqpx.security.VaultKeyManager.createVrkForFreshVault(context, "1234")
+        com.quantumvault.wkqpx.security.VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = com.quantumvault.wkqpx.data.VaultRepository(db.vaultDao())
+
+        // Create a synthetic legacy backup (magic: VLT_BCK1, 16B salt, PBKDF2 10k iters)
+        val legacyPassword = "MyOldPassword123"
+        val salt = ByteArray(16) { (it + 5).toByte() }
+        val spec = javax.crypto.spec.PBEKeySpec(legacyPassword.toCharArray(), salt, 10_000, 256)
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val legacyKey = SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
+
+        val backupOut = ByteArrayOutputStream()
+        backupOut.write("VLT_BCK1".toByteArray(Charsets.UTF_8))
+        backupOut.write(salt)
+
+        // Write encrypted ZIP payload using ChunkedGcmOutputStream
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, legacyKey)
+        ZipOutputStream(chunkedOut).use { zos ->
+            // Add a test photo file
+            zos.putNextEntry(ZipEntry("old_vacation_photo.jpg"))
+            zos.write(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 0x01, 0x02, 0x03, 0x04))
+            zos.closeEntry()
+        }
+
+        // Test restoring using the Multi-Format Smart Candidate Engine
+        val restoreInput = ByteArrayInputStream(backupOut.toByteArray())
+        val result = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = legacyPassword,
+            inputStream = restoreInput,
+            vaultRepository = repo,
+            isReplaceMode = false
+        )
+
+        assertTrue("Legacy backup import should succeed via candidate recovery: ${result.exceptionOrNull()?.message}", result.isSuccess)
+        val restoredCount = result.getOrNull() ?: 0
+        assertEquals(1, restoredCount)
+
+        // Verify the restored item exists in DB
+        val items = db.vaultDao().getAllItemsSync()
+        assertTrue("Restored items list should contain the legacy photo", items.any { it.originalName.contains("old_vacation_photo") })
+    }
 }

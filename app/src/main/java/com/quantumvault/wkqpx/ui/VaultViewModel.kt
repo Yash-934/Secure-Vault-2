@@ -3,6 +3,7 @@ package com.quantumvault.wkqpx.ui
 import android.content.Context
 import android.content.IntentSender
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -928,12 +929,14 @@ class VaultViewModel(
                     )
                     showUserFeedback(context, "Disaster Recovery complete! Restored $restoredCount item(s).")
                 }.onFailure { err ->
+                    val errorMsg = err.message ?: "Invalid password or corrupt backup."
+                    Log.e("VaultViewModel", "Restore failed: $errorMsg", err)
                     _backupRestoreProgress.value = _backupRestoreProgress.value.copy(
                         isComplete = true,
                         isSuccess = false,
-                        resultSummary = "Restore failed: Invalid password or corrupt backup."
+                        resultSummary = "Restore failed: $errorMsg"
                     )
-                    showUserFeedback(context, "Restore failed: Invalid password or corrupt backup.")
+                    showUserFeedback(context, "Restore failed: $errorMsg")
                 }
             } catch (e: Exception) {
                 _isProcessing.value = false

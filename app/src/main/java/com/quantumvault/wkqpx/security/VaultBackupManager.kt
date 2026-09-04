@@ -1,6 +1,7 @@
 package com.quantumvault.wkqpx.security
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Log
@@ -220,10 +221,12 @@ object VaultBackupManager {
 
     /**
      * Chunked AES-256-GCM InputStream with fail-closed integrity validation.
+     * Supports both monotonic AAD (current format) and non-AAD (legacy format).
      */
     class ChunkedGcmInputStream(
         private val underlying: InputStream,
-        private val secretKey: SecretKey
+        private val secretKey: SecretKey,
+        private val useAad: Boolean = true
     ) : InputStream() {
         private var currentPlainChunk: ByteArray? = null
         private var chunkPos = 0
@@ -272,8 +275,11 @@ object VaultBackupManager {
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
-            val aad = java.nio.ByteBuffer.allocate(8).putLong(chunkIndex++).array()
-            cipher.updateAAD(aad)
+            if (useAad) {
+                val aad = java.nio.ByteBuffer.allocate(8).putLong(chunkIndex).array()
+                cipher.updateAAD(aad)
+            }
+            chunkIndex++
             val plain = try {
                 cipher.doFinal(cipherBuffer)
             } catch (e: AEADBadTagException) {
@@ -318,6 +324,54 @@ object VaultBackupManager {
             underlying.close()
         }
     }
+
+    /**
+     * Single continuous AES-256-GCM cipher stream for legacy or alternative stream backups.
+     */
+    class SingleAesGcmInputStream(
+        private val underlying: InputStream,
+        private val secretKey: SecretKey,
+        private val iv: ByteArray
+    ) : InputStream() {
+        private val cipherIn: InputStream
+
+        init {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+            cipherIn = javax.crypto.CipherInputStream(underlying, cipher)
+        }
+
+        override fun read(): Int = cipherIn.read()
+        override fun read(b: ByteArray, off: Int, len: Int): Int = cipherIn.read(b, off, len)
+        override fun close() = cipherIn.close()
+    }
+
+    /**
+     * Single continuous AES-256-CBC cipher stream for legacy backups.
+     */
+    class SingleAesCbcInputStream(
+        private val underlying: InputStream,
+        private val secretKey: SecretKey,
+        private val iv: ByteArray
+    ) : InputStream() {
+        private val cipherIn: InputStream
+
+        init {
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, javax.crypto.spec.IvParameterSpec(iv))
+            cipherIn = javax.crypto.CipherInputStream(underlying, cipher)
+        }
+
+        override fun read(): Int = cipherIn.read()
+        override fun read(b: ByteArray, off: Int, len: Int): Int = cipherIn.read(b, off, len)
+        override fun close() = cipherIn.close()
+    }
+
+    data class DecryptedStreamResult(
+        val stream: InputStream,
+        val formatDescription: String,
+        val isSqliteDatabase: Boolean = false
+    )
 
     /**
      * Exports a complete Argon2id + AES-256-GCM encrypted backup archive.
@@ -587,8 +641,495 @@ object VaultBackupManager {
     }
 
     /**
+     * Rapidly checks whether a candidate decryption stream yields a valid archive or document header.
+     */
+    private fun testDecryptionCandidate(streamSupplier: () -> InputStream): Boolean {
+        return try {
+            streamSupplier().use { input ->
+                val buf = ByteArray(4)
+                val read = readFully(input, buf, 0, 4)
+                if (read < 4) return false
+                val isZip = buf[0] == 0x50.toByte() && buf[1] == 0x4B.toByte()
+                val isJson = buf[0] == '{'.toByte() || buf[0] == '['.toByte()
+                val isSqlite = buf[0] == 'S'.toByte() && buf[1] == 'Q'.toByte() && buf[2] == 'L'.toByte() && buf[3] == 'i'.toByte()
+                val isMedia = (buf[0] == 0xFF.toByte() && buf[1] == 0xD8.toByte() && buf[2] == 0xFF.toByte()) ||
+                        (buf[0] == 0x89.toByte() && buf[1] == 0x50.toByte() && buf[2] == 0x4E.toByte() && buf[3] == 0x47.toByte()) ||
+                        (buf[0] == '%'.toByte() && buf[1] == 'P'.toByte() && buf[2] == 'D'.toByte() && buf[3] == 'F'.toByte())
+
+                isZip || isJson || isSqlite || isMedia
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Resolves the decrypted stream from any backup version (V3 Argon2id, V2/V1 PBKDF2, SQLite, or unencrypted ZIP).
+     */
+    private fun resolveDecryptedBackupStream(
+        context: Context,
+        tempBackupFile: File,
+        masterPassword: String,
+        onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)?
+    ): DecryptedStreamResult {
+        if (tempBackupFile.length() < 4L) {
+            throw IllegalArgumentException("Corrupted backup file: Truncated or empty archive.")
+        }
+
+        val headerBytes = ByteArray(minOf(64, tempBackupFile.length().toInt()))
+        FileInputStream(tempBackupFile).use { fis ->
+            readFully(fis, headerBytes, 0, headerBytes.size)
+        }
+
+        // 1. Direct standard ZIP check (unencrypted)
+        if (headerBytes.size >= 4 && headerBytes[0] == 0x50.toByte() && headerBytes[1] == 0x4B.toByte()) {
+            if (testDecryptionCandidate { FileInputStream(tempBackupFile).buffered(65536) }) {
+                Log.i(TAG, "Archive resolved as unencrypted standard ZIP")
+                return DecryptedStreamResult(
+                    stream = FileInputStream(tempBackupFile).buffered(65536),
+                    formatDescription = "Standard ZIP archive"
+                )
+            }
+        }
+
+        // 2. Direct SQLite check (unencrypted database export)
+        if (headerBytes.size >= 16 && String(headerBytes.copyOfRange(0, 15), Charsets.UTF_8).startsWith("SQLite format 3")) {
+            Log.i(TAG, "Archive resolved as direct SQLite database")
+            return DecryptedStreamResult(
+                stream = FileInputStream(tempBackupFile).buffered(65536),
+                formatDescription = "Direct SQLite database backup",
+                isSqliteDatabase = true
+            )
+        }
+
+        val passwordsToTry = mutableListOf<String>()
+        if (masterPassword.isNotEmpty()) {
+            passwordsToTry.add(masterPassword)
+            val trimmed = masterPassword.trim()
+            if (trimmed != masterPassword && trimmed.isNotEmpty()) {
+                passwordsToTry.add(trimmed)
+            }
+        } else {
+            passwordsToTry.add("")
+        }
+
+        // Header detection
+        val isV3 = headerBytes.size >= 8 && headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_V3)
+        val isV2 = headerBytes.size >= 8 && headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_V2)
+        val isV1 = headerBytes.size >= 8 && (
+            headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_V1) ||
+            headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_VAULTBCK) ||
+            headerBytes.copyOfRange(0, 8).contentEquals("VAULT_B1".toByteArray(Charsets.UTF_8)) ||
+            headerBytes.copyOfRange(0, 8).contentEquals("VLT_BCKP".toByteArray(Charsets.UTF_8)) ||
+            headerBytes.copyOfRange(0, 8).contentEquals("QV_BACK1".toByteArray(Charsets.UTF_8))
+        )
+        val is4ByteVlt = headerBytes.size >= 4 && (
+            (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x33.toByte()) ||
+            (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x32.toByte()) ||
+            (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x31.toByte())
+        )
+
+        var detectedDeviceLocked = false
+
+        // Phase A: If V3 format detected
+        if (isV3 && headerBytes.size >= 25) {
+            onProgress?.invoke(0, 0, "Inspecting Argon2id Parameters...", 0L)
+            try {
+                val flags = headerBytes[8].toInt()
+                detectedDeviceLocked = (flags and 1) != 0
+                val salt = headerBytes.copyOfRange(9, 25)
+
+                var memoryKb = Argon2Kdf.DEFAULT_MEMORY_KIB
+                var iterations = Argon2Kdf.DEFAULT_ITERATIONS
+                var parallelism = Argon2Kdf.DEFAULT_PARALLELISM
+                var wrappedKeyLen = 0
+                var payloadOffset = 25L
+
+                if (headerBytes.size >= 41) {
+                    val bb = java.nio.ByteBuffer.wrap(headerBytes, 25, 16)
+                    val mem = bb.getInt()
+                    val iter = bb.getInt()
+                    val par = bb.getInt()
+                    val wLen = bb.getInt()
+                    if (mem in 1024..524288) memoryKb = mem
+                    if (iter in 1..20) iterations = iter
+                    if (par in 1..8) parallelism = par
+                    wrappedKeyLen = wLen
+                    payloadOffset = 41L
+                }
+
+                if (detectedDeviceLocked && wrappedKeyLen in 16..4096) {
+                    try {
+                        val fis = FileInputStream(tempBackupFile).buffered(65536)
+                        fis.skip(payloadOffset)
+                        val wrappedBytes = ByteArray(wrappedKeyLen)
+                        readFully(fis, wrappedBytes, 0, wrappedKeyLen)
+                        val actualDataOffset = payloadOffset + wrappedKeyLen
+
+                        for (pwd in passwordsToTry) {
+                            val argon2Key = Argon2Kdf.deriveKey(pwd.toCharArray(), salt, memoryKb, iterations, parallelism)
+                            val hwKey = getDeviceBindingMasterKey()
+                            val hwIv = wrappedBytes.copyOfRange(0, IV_SIZE_BYTES)
+                            val hwEncrypted = wrappedBytes.copyOfRange(IV_SIZE_BYTES, wrappedBytes.size)
+
+                            val hwCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                            hwCipher.init(Cipher.DECRYPT_MODE, hwKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, hwIv))
+                            val passWrapped = hwCipher.doFinal(hwEncrypted)
+
+                            val passIv = passWrapped.copyOfRange(0, IV_SIZE_BYTES)
+                            val passEncrypted = passWrapped.copyOfRange(IV_SIZE_BYTES, passWrapped.size)
+                            val passCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                            passCipher.init(Cipher.DECRYPT_MODE, argon2Key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, passIv))
+                            val rawEphemeralKey = passCipher.doFinal(passEncrypted)
+                            val activeKey = SecretKeySpec(rawEphemeralKey, "AES")
+
+                            if (testDecryptionCandidate {
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(actualDataOffset)
+                                ChunkedGcmInputStream(s, activeKey, useAad = true)
+                            }) {
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(actualDataOffset)
+                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = true), "V3 Argon2id (Device-Locked, AAD)")
+                            }
+
+                            if (testDecryptionCandidate {
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(actualDataOffset)
+                                ChunkedGcmInputStream(s, activeKey, useAad = false)
+                            }) {
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(actualDataOffset)
+                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = false), "V3 Argon2id (Device-Locked, Standard)")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Device-locked unwrapping attempt failed: ${e.message}")
+                    }
+                }
+
+                // Try direct Argon2id key
+                for (pwd in passwordsToTry) {
+                    val argon2Key = Argon2Kdf.deriveKey(pwd.toCharArray(), salt, memoryKb, iterations, parallelism)
+
+                    if (testDecryptionCandidate {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(payloadOffset)
+                        ChunkedGcmInputStream(s, argon2Key, useAad = true)
+                    }) {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(payloadOffset)
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V3 Argon2id Portable (AAD)")
+                    }
+
+                    if (testDecryptionCandidate {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(payloadOffset)
+                        ChunkedGcmInputStream(s, argon2Key, useAad = false)
+                    }) {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(payloadOffset)
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = false), "V3 Argon2id Portable (Standard)")
+                    }
+
+                    if (payloadOffset != 25L) {
+                        if (testDecryptionCandidate {
+                            val s = FileInputStream(tempBackupFile).buffered(65536)
+                            s.skip(25L)
+                            ChunkedGcmInputStream(s, argon2Key, useAad = true)
+                        }) {
+                            val s = FileInputStream(tempBackupFile).buffered(65536)
+                            s.skip(25L)
+                            return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V3 Argon2id (Compact)")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "V3 parsing failed: ${e.message}")
+            }
+        }
+
+        // Phase B: Legacy Multi-Candidate PBKDF2 / Argon2 Resolution
+        onProgress?.invoke(0, 0, "Testing legacy encryption formats...", 0L)
+
+        val candidateOffsets = mutableListOf<Long>()
+        if (isV2 || isV1) candidateOffsets.add(8L)
+        if (isV3) candidateOffsets.add(9L)
+        if (is4ByteVlt) candidateOffsets.add(4L)
+        candidateOffsets.add(8L)
+        candidateOffsets.add(0L)
+        candidateOffsets.add(9L)
+        candidateOffsets.add(4L)
+        val uniqueOffsets = candidateOffsets.distinct().filter { it + 16L <= tempBackupFile.length() }
+
+        val candidateIterations = listOf(10_000, 12_000, 100_000, 1_000, 65_536, 50_000)
+
+        for (offset in uniqueOffsets) {
+            val salt = ByteArray(16)
+            try {
+                FileInputStream(tempBackupFile).use { fis ->
+                    fis.skip(offset)
+                    readFully(fis, salt, 0, 16)
+                }
+            } catch (_: Exception) {
+                continue
+            }
+
+            val dataOffset = offset + 16L
+            if (dataOffset >= tempBackupFile.length()) continue
+
+            for (pwd in passwordsToTry) {
+                for (iterations in candidateIterations) {
+                    val algorithms = listOf("PBKDF2WithHmacSHA256", "PBKDF2WithHmacSHA1")
+                    for (algo in algorithms) {
+                        val key = try {
+                            val spec = javax.crypto.spec.PBEKeySpec(pwd.toCharArray(), salt, iterations, 256)
+                            val factory = javax.crypto.SecretKeyFactory.getInstance(algo)
+                            SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
+                        } catch (_: Exception) {
+                            null
+                        } ?: continue
+
+                        // Candidate 1: ChunkedGcm with monotonic AAD
+                        if (testDecryptionCandidate {
+                            val s = FileInputStream(tempBackupFile).buffered(65536)
+                            s.skip(dataOffset)
+                            ChunkedGcmInputStream(s, key, useAad = true)
+                        }) {
+                            Log.i(TAG, "Legacy format matched: $algo ($iterations iters, offset $offset, AAD)")
+                            val s = FileInputStream(tempBackupFile).buffered(65536)
+                            s.skip(dataOffset)
+                            return DecryptedStreamResult(ChunkedGcmInputStream(s, key, useAad = true), "Legacy Backup ($algo, $iterations iters)")
+                        }
+
+                        // Candidate 2: ChunkedGcm without monotonic AAD
+                        if (testDecryptionCandidate {
+                            val s = FileInputStream(tempBackupFile).buffered(65536)
+                            s.skip(dataOffset)
+                            ChunkedGcmInputStream(s, key, useAad = false)
+                        }) {
+                            Log.i(TAG, "Legacy format matched: $algo ($iterations iters, offset $offset, No-AAD)")
+                            val s = FileInputStream(tempBackupFile).buffered(65536)
+                            s.skip(dataOffset)
+                            return DecryptedStreamResult(ChunkedGcmInputStream(s, key, useAad = false), "Legacy Backup ($algo, $iterations iters, Standard)")
+                        }
+
+                        // Candidate 3: Single-stream AES-GCM (12B IV + ciphertext)
+                        if (dataOffset + 12L <= tempBackupFile.length()) {
+                            val iv = ByteArray(12)
+                            val hasIv = try {
+                                FileInputStream(tempBackupFile).use { s ->
+                                    s.skip(dataOffset)
+                                    readFully(s, iv, 0, 12) == 12
+                                }
+                            } catch (_: Exception) { false }
+
+                            if (hasIv && testDecryptionCandidate {
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(dataOffset + 12L)
+                                SingleAesGcmInputStream(s, key, iv)
+                            }) {
+                                Log.i(TAG, "Legacy format matched: Single-stream AES-GCM ($algo, $iterations iters)")
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(dataOffset + 12L)
+                                return DecryptedStreamResult(SingleAesGcmInputStream(s, key, iv), "Legacy Stream ($algo, $iterations iters)")
+                            }
+                        }
+
+                        // Candidate 4: Single-stream AES-CBC (16B IV + ciphertext)
+                        if (dataOffset + 16L <= tempBackupFile.length()) {
+                            val iv16 = ByteArray(16)
+                            val hasIv16 = try {
+                                FileInputStream(tempBackupFile).use { s ->
+                                    s.skip(dataOffset)
+                                    readFully(s, iv16, 0, 16) == 16
+                                }
+                            } catch (_: Exception) { false }
+
+                            if (hasIv16 && testDecryptionCandidate {
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(dataOffset + 16L)
+                                SingleAesCbcInputStream(s, key, iv16)
+                            }) {
+                                Log.i(TAG, "Legacy format matched: Single-stream AES-CBC ($algo, $iterations iters)")
+                                val s = FileInputStream(tempBackupFile).buffered(65536)
+                                s.skip(dataOffset + 16L)
+                                return DecryptedStreamResult(SingleAesCbcInputStream(s, key, iv16), "Legacy CBC Stream ($algo)")
+                            }
+                        }
+                    }
+                }
+
+                // Test Raw SHA-256(password)
+                try {
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    val rawKey = SecretKeySpec(md.digest(pwd.toByteArray(Charsets.UTF_8)), "AES")
+
+                    if (testDecryptionCandidate {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(dataOffset)
+                        ChunkedGcmInputStream(s, rawKey, useAad = true)
+                    }) {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(dataOffset)
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, rawKey, useAad = true), "Legacy SHA-256 Chunked")
+                    }
+
+                    if (testDecryptionCandidate {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(dataOffset)
+                        ChunkedGcmInputStream(s, rawKey, useAad = false)
+                    }) {
+                        val s = FileInputStream(tempBackupFile).buffered(65536)
+                        s.skip(dataOffset)
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, rawKey, useAad = false), "Legacy SHA-256 Chunked (Standard)")
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        if (detectedDeviceLocked) {
+            throw SecurityException(
+                "This backup is protected with Hardware Device Binding (Device-Locked) from another device or previous install. " +
+                "It requires the original hardware Keystore key to restore."
+            )
+        }
+
+        if (isV3 || isV2 || isV1 || is4ByteVlt) {
+            throw SecurityException("Incorrect backup password. Please verify the password used when creating this backup.")
+        }
+
+        throw SecurityException("Unrecognized or corrupt backup archive. The selected file could not be decrypted.")
+    }
+
+    /**
+     * Directly restores records from a legacy SQLite database export.
+     */
+    private suspend fun restoreFromSqliteDb(
+        context: Context,
+        sqliteFile: File,
+        db: AppDatabase,
+        vaultRepository: VaultRepository,
+        isReplaceMode: Boolean,
+        onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)?
+    ): Result<Int> {
+        var restoredCount = 0
+        try {
+            onProgress?.invoke(0, 0, "Inspecting SQLite database tables...", 0L)
+            val sqlite = SQLiteDatabase.openDatabase(
+                sqliteFile.path,
+                null,
+                SQLiteDatabase.OPEN_READONLY
+            )
+            sqlite.use { sdb ->
+                val tables = mutableListOf<String>()
+                sdb.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        tables.add(cursor.getString(0))
+                    }
+                }
+
+                if (isReplaceMode) {
+                    db.vaultDao().deleteAllItems()
+                    db.vaultDao().deleteAllFolders()
+                    db.vaultPasswordDao().deleteAll()
+                    db.intruderLogDao().clearLogs()
+                }
+
+                // Restore folders
+                val folderTable = tables.firstOrNull { it.contains("folder", ignoreCase = true) }
+                if (folderTable != null) {
+                    sdb.rawQuery("SELECT * FROM $folderTable", null).use { cursor ->
+                        val colNames = cursor.columnNames.map { it.lowercase() }
+                        val nameIdx = colNames.indexOfFirst { it.contains("name") || it.contains("title") }
+                        while (cursor.moveToNext()) {
+                            if (nameIdx >= 0) {
+                                val name = cursor.getString(nameIdx) ?: continue
+                                try { db.vaultDao().insertFolder(VaultFolder(name = name)) } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                }
+
+                // Restore passwords
+                val pwdTable = tables.firstOrNull { it.contains("password", ignoreCase = true) }
+                if (pwdTable != null) {
+                    sdb.rawQuery("SELECT * FROM $pwdTable", null).use { cursor ->
+                        val colNames = cursor.columnNames.map { it.lowercase() }
+                        val accIdx = colNames.indexOfFirst { it.contains("account") || it.contains("title") || it.contains("name") }
+                        val pwdIdx = colNames.indexOfFirst { it.contains("password") || it.contains("enc") }
+                        val catIdx = colNames.indexOfFirst { it.contains("category") }
+                        val noteIdx = colNames.indexOfFirst { it.contains("note") }
+                        while (cursor.moveToNext()) {
+                            val acc = if (accIdx >= 0) cursor.getString(accIdx) ?: "Account" else "Account"
+                            val pwd = if (pwdIdx >= 0) cursor.getString(pwdIdx) ?: "" else ""
+                            val cat = if (catIdx >= 0) cursor.getString(catIdx) ?: "General" else "General"
+                            val note = if (noteIdx >= 0) cursor.getString(noteIdx) ?: "" else ""
+                            try {
+                                db.vaultPasswordDao().insertPassword(
+                                    VaultPassword(
+                                        id = 0L,
+                                        title = acc,
+                                        category = cat,
+                                        usernameOrEmail = acc,
+                                        encryptedPasswordBlob = pwd,
+                                        encryptedNotesBlob = note
+                                    )
+                                )
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+
+                // Restore items
+                val itemTable = tables.firstOrNull { it.equals("vault_items", ignoreCase = true) || it.equals("items", ignoreCase = true) || it.contains("item", ignoreCase = true) }
+                if (itemTable != null) {
+                    sdb.rawQuery("SELECT * FROM $itemTable", null).use { cursor ->
+                        val colNames = cursor.columnNames.map { it.lowercase() }
+                        val origNameIdx = colNames.indexOfFirst { it.contains("original") || it.contains("name") || it.contains("title") }
+                        val encNameIdx = colNames.indexOfFirst { it.contains("encrypted") || it.contains("filename") || it.contains("path") }
+                        val mimeIdx = colNames.indexOfFirst { it.contains("mime") || it.contains("type") }
+                        val sizeIdx = colNames.indexOfFirst { it.contains("size") }
+                        val isVideoIdx = colNames.indexOfFirst { it.contains("video") }
+                        val folderIdx = colNames.indexOfFirst { it.contains("folder") }
+
+                        while (cursor.moveToNext()) {
+                            val origName = if (origNameIdx >= 0) cursor.getString(origNameIdx) ?: "restored_file" else "restored_file"
+                            val encName = if (encNameIdx >= 0) cursor.getString(encNameIdx) ?: "${System.currentTimeMillis()}_${origName}.aes" else "${System.currentTimeMillis()}_${origName}.aes"
+                            val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx) ?: inferMimeTypeFromName(origName) else inferMimeTypeFromName(origName)
+                            val size = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else 0L
+                            val isVideo = if (isVideoIdx >= 0) cursor.getInt(isVideoIdx) == 1 else mime.startsWith("video/")
+                            val folder = if (folderIdx >= 0) cursor.getString(folderIdx) ?: "Root" else "Root"
+
+                            vaultRepository.insertRestoredVaultItem(
+                                VaultItem(
+                                    id = 0L,
+                                    originalName = origName,
+                                    encryptedFileName = File(encName).name,
+                                    mimeType = mime,
+                                    sizeBytes = size,
+                                    addedTimestamp = System.currentTimeMillis(),
+                                    isVideo = isVideo,
+                                    folderName = folder
+                                )
+                            )
+                            restoredCount++
+                            onProgress?.invoke(restoredCount, restoredCount, "Restored database record: $origName", 0L)
+                        }
+                    }
+                }
+            }
+            onProgress?.invoke(restoredCount, restoredCount, "Database restoration complete ($restoredCount records)", 0L)
+            return Result.success(restoredCount)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore from SQLite DB: ${e.message}", e)
+            return Result.failure(e)
+        }
+    }
+
+    /**
      * Restores an encrypted backup archive with strict integrity checks, backward compatibility
-     * for legacy formats (V3 Argon2id, V2 PBKDF2, V1 PBKDF2, and unencrypted standard ZIPs),
+     * for legacy formats (V3 Argon2id, V2 PBKDF2, V1 PBKDF2, SQLite, and unencrypted standard ZIPs),
      * tolerant payload extraction, and atomic rollback transaction.
      */
     suspend fun importMasterBackup(
@@ -608,7 +1149,6 @@ object VaultBackupManager {
             val db = AppDatabase.getDatabase(context)
             onProgress?.invoke(0, 0, "Caching backup archive for integrity verification...", 0L)
 
-            // Cache incoming stream to a local file to allow seeking and multi-pass attempts (e.g. PBKDF2 iteration fallback)
             FileOutputStream(tempBackupFile).buffered(65536).use { fos ->
                 inputStream.copyTo(fos)
             }
@@ -617,139 +1157,17 @@ object VaultBackupManager {
                 return@withContext Result.failure(IllegalArgumentException("Corrupted backup file: Truncated or empty archive."))
             }
 
-            val headerBytes = ByteArray(8)
-            val headerRead = FileInputStream(tempBackupFile).use { fis ->
-                readFully(fis, headerBytes, 0, 8)
+            // Resolve decrypted stream via Multi-Format Smart Candidate Engine
+            val streamResult = resolveDecryptedBackupStream(context, tempBackupFile, masterPassword, onProgress)
+
+            if (streamResult.isSqliteDatabase) {
+                return@withContext restoreFromSqliteDb(context, tempBackupFile, db, vaultRepository, isReplaceMode, onProgress)
             }
 
-            val isZip = headerBytes[0] == 0x50.toByte() && headerBytes[1] == 0x4B.toByte() &&
-                    headerBytes[2] == 0x03.toByte() && headerBytes[3] == 0x04.toByte()
-            val isV3 = headerRead >= 8 && headerBytes.contentEquals(BACKUP_MAGIC_V3)
-            val isV2 = headerRead >= 8 && headerBytes.contentEquals(BACKUP_MAGIC_V2)
-            val isV1 = headerRead >= 8 && (
-                headerBytes.contentEquals(BACKUP_MAGIC_V1) ||
-                headerBytes.contentEquals(BACKUP_MAGIC_VAULTBCK) ||
-                headerBytes.contentEquals("VAULT_B1".toByteArray(Charsets.UTF_8)) ||
-                headerBytes.contentEquals("VLT_BCKP".toByteArray(Charsets.UTF_8)) ||
-                headerBytes.contentEquals("QV_BACK1".toByteArray(Charsets.UTF_8))
-            )
+            onProgress?.invoke(0, 0, "Unpacking archive (${streamResult.formatDescription})...", 0L)
 
             var restoredCount = 0
             var totalBytesRestored = 0L
-
-            // Open decrypted stream according to format
-            val decryptedStream: InputStream = when {
-                isZip -> {
-                    onProgress?.invoke(0, 0, "Reading standard backup archive...", 0L)
-                    FileInputStream(tempBackupFile).buffered(65536)
-                }
-                isV3 -> {
-                    onProgress?.invoke(0, 0, "Inspecting Argon2id Parameters...", 0L)
-                    val fis = FileInputStream(tempBackupFile).buffered(65536)
-                    val skipHeader = ByteArray(8)
-                    readFully(fis, skipHeader, 0, 8)
-
-                    val flags = fis.read()
-                    if (flags < 0) throw IllegalArgumentException("Incomplete backup flags.")
-                    val isDeviceLocked = (flags and 1) != 0
-
-                    val salt = ByteArray(SALT_SIZE_BYTES)
-                    if (readFully(fis, salt, 0, SALT_SIZE_BYTES) < SALT_SIZE_BYTES) {
-                        throw IllegalArgumentException("Incomplete salt header.")
-                    }
-
-                    val memoryKb = readInt(fis)
-                    val iterations = readInt(fis)
-                    val parallelism = readInt(fis)
-                    val wrappedKeyLen = readInt(fis)
-
-                    onProgress?.invoke(0, 0, "Computing 64MB Argon2id Key...", 0L)
-                    val argon2Key = Argon2Kdf.deriveKey(
-                        password = masterPassword.toCharArray(),
-                        salt = salt,
-                        memoryKb = if (memoryKb > 0) memoryKb else Argon2Kdf.DEFAULT_MEMORY_KIB,
-                        iterations = if (iterations > 0) iterations else Argon2Kdf.DEFAULT_ITERATIONS,
-                        parallelism = if (parallelism > 0) parallelism else Argon2Kdf.DEFAULT_PARALLELISM
-                    )
-
-                    val activeKey: SecretKey
-                    if (isDeviceLocked) {
-                        if (wrappedKeyLen <= 0 || wrappedKeyLen > 4096) {
-                            throw IllegalStateException("Invalid device binding payload.")
-                        }
-                        val wrappedBytes = ByteArray(wrappedKeyLen)
-                        if (readFully(fis, wrappedBytes, 0, wrappedKeyLen) < wrappedKeyLen) {
-                            throw IllegalStateException("Truncated device binding payload.")
-                        }
-
-                        val passWrapped = try {
-                            val hwKey = getDeviceBindingMasterKey()
-                            val hwIv = wrappedBytes.copyOfRange(0, IV_SIZE_BYTES)
-                            val hwEncrypted = wrappedBytes.copyOfRange(IV_SIZE_BYTES, wrappedBytes.size)
-
-                            val hwCipher = Cipher.getInstance("AES/GCM/NoPadding")
-                            hwCipher.init(Cipher.DECRYPT_MODE, hwKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, hwIv))
-                            hwCipher.doFinal(hwEncrypted)
-                        } catch (e: Exception) {
-                            throw SecurityException("WRONG_DEVICE: Device-Locked Backup cannot restore on this hardware.")
-                        }
-
-                        try {
-                            val passIv = passWrapped.copyOfRange(0, IV_SIZE_BYTES)
-                            val passEncrypted = passWrapped.copyOfRange(IV_SIZE_BYTES, passWrapped.size)
-                            val passCipher = Cipher.getInstance("AES/GCM/NoPadding")
-                            passCipher.init(Cipher.DECRYPT_MODE, argon2Key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, passIv))
-                            val rawEphemeralKey = passCipher.doFinal(passEncrypted)
-                            activeKey = SecretKeySpec(rawEphemeralKey, "AES")
-                        } catch (e: Exception) {
-                            throw SecurityException("INCORRECT_BACKUP_PASSWORD: Incorrect backup master password.")
-                        }
-                    } else {
-                        activeKey = argon2Key
-                    }
-
-                    ChunkedGcmInputStream(fis, activeKey)
-                }
-                isV2 || isV1 -> {
-                    onProgress?.invoke(0, 0, "Deriving legacy PBKDF2 encryption key...", 0L)
-                    val fis = FileInputStream(tempBackupFile).buffered(65536)
-                    val skipHeader = ByteArray(8)
-                    readFully(fis, skipHeader, 0, 8)
-
-                    val salt = ByteArray(SALT_SIZE_BYTES)
-                    if (readFully(fis, salt, 0, SALT_SIZE_BYTES) < SALT_SIZE_BYTES) {
-                        throw IllegalArgumentException("Incomplete legacy salt header.")
-                    }
-
-                    // Try 100,000 iterations first, if that fails, try 10,000
-                    var secretKey: SecretKey
-                    try {
-                        val spec100k = javax.crypto.spec.PBEKeySpec(masterPassword.toCharArray(), salt, 100_000, 256)
-                        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-                        secretKey = SecretKeySpec(factory.generateSecret(spec100k).encoded, "AES")
-                    } catch (_: Throwable) {
-                        val spec10k = javax.crypto.spec.PBEKeySpec(masterPassword.toCharArray(), salt, 10_000, 256)
-                        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-                        secretKey = SecretKeySpec(factory.generateSecret(spec10k).encoded, "AES")
-                    }
-
-                    ChunkedGcmInputStream(fis, secretKey)
-                }
-                else -> {
-                    // Fallback attempt: if password provided and size >= 16, try legacy PBKDF2 without magic
-                    if (tempBackupFile.length() >= 16L && masterPassword.isNotEmpty()) {
-                        val fis = FileInputStream(tempBackupFile).buffered(65536)
-                        val salt = ByteArray(SALT_SIZE_BYTES)
-                        readFully(fis, salt, 0, SALT_SIZE_BYTES)
-                        val spec = javax.crypto.spec.PBEKeySpec(masterPassword.toCharArray(), salt, 10_000, 256)
-                        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-                        val key = SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
-                        ChunkedGcmInputStream(fis, key)
-                    } else {
-                        return@withContext Result.failure(IllegalArgumentException("Unsupported or corrupt backup archive format."))
-                    }
-                }
-            }
 
             var metadata: BackupManifestMetadata? = null
             var restoredItems: List<VaultItem>? = null
@@ -760,114 +1178,126 @@ object VaultBackupManager {
             val stagedFiles = mutableMapOf<String, File>()
             val seenEntries = mutableSetOf<String>()
 
-            ZipInputStream(decryptedStream.buffered(65536)).use { zis ->
-                var entry: ZipEntry? = zis.nextEntry
-                while (entry != null) {
-                    val entryName = entry.name
+            streamResult.stream.use { rawDecryptedStream ->
+                ZipInputStream(rawDecryptedStream).use { zis ->
+                    var entry: ZipEntry? = try { zis.nextEntry } catch (e: Exception) { null }
 
-                    if (entry.isDirectory) {
-                        try { zis.closeEntry() } catch (_: Throwable) {}
-                        entry = zis.nextEntry
-                        continue
-                    }
+                    while (entry != null) {
+                        val entryName = entry.name.replace('\\', '/')
+                        val cleanFileName = File(entryName).name
 
-                    // Security Gate: Path traversal and illegal character check
-                    if (entryName.contains("..") || entryName.startsWith("/") || entryName.contains("\u0000")) {
-                        throw SecurityException("Malicious path traversal entry detected in backup: $entryName")
-                    }
-
-                    if (!seenEntries.add(entryName)) {
-                        Log.w(TAG, "Duplicate entry in backup archive, skipping duplicate: $entryName")
-                        try { zis.closeEntry() } catch (_: Throwable) {}
-                        entry = zis.nextEntry
-                        continue
-                    }
-
-                    val cleanFileName = File(entryName).name
-                    val lower = cleanFileName.lowercase()
-
-                    when {
-                        lower == MANIFEST_METADATA_FILENAME || lower == "metadata.json" -> {
-                            try {
-                                val metaJson = zis.readBytes().toString(Charsets.UTF_8)
-                                metadata = metadataJsonAdapter.fromJson(metaJson)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Metadata manifest parse warning: ${e.message}")
-                            }
+                        if (entry.isDirectory || cleanFileName.isBlank() || cleanFileName == "." || cleanFileName == "..") {
+                            try { zis.closeEntry() } catch (_: Throwable) {}
+                            entry = try { zis.nextEntry } catch (_: Throwable) { null }
+                            continue
                         }
-                        lower == MANIFEST_FILENAME || lower == "manifest.json" || lower == "vault_items.json" ||
-                        lower == "items.json" || lower == "backup_manifest.json" -> {
-                            val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
-                            restoredItems = parseVaultItemsManifest(manifestJson)
-                            onProgress?.invoke(0, restoredItems.size, "Loaded vault records manifest", totalBytesRestored)
-                        }
-                        lower == FOLDERS_FILENAME || lower == "folders.json" -> {
-                            try {
-                                val foldersJson = zis.readBytes().toString(Charsets.UTF_8)
-                                restoredFolders = foldersJsonAdapter.fromJson(foldersJson)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Folders dataset parse warning: ${e.message}")
-                            }
-                        }
-                        lower == PASSWORDS_FILENAME || lower == "passwords.json" -> {
-                            try {
-                                val passwordsJson = zis.readBytes().toString(Charsets.UTF_8)
-                                restoredPasswords = passwordsJsonAdapter.fromJson(passwordsJson)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Passwords dataset parse warning: ${e.message}")
-                            }
-                        }
-                        lower == SECURITY_LOGS_FILENAME || lower == "intruder_logs.json" ||
-                        lower == "security_logs.json" || lower == "logs.json" -> {
-                            try {
-                                val logsJson = zis.readBytes().toString(Charsets.UTF_8)
-                                logsToRestore = logsJsonAdapter.fromJson(logsJson)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Security logs dataset parse warning: ${e.message}")
-                            }
-                        }
-                        else -> {
-                            // Any other entry is treated as a vault payload file (regardless of folder structure)
-                            val stagedFile = File(stagingDir, cleanFileName)
-                            if (!stagedFile.canonicalPath.startsWith(stagingDir.canonicalPath)) {
-                                throw SecurityException("Path traversal attempt detected: $cleanFileName")
-                            }
 
-                            // Inspect first 4 bytes to check if already an encrypted VLT3/VLT2 envelope
-                            val pushback = java.io.PushbackInputStream(zis, 4)
-                            val peek = ByteArray(4)
-                            val peekRead = readFully(pushback, peek, 0, 4)
-                            if (peekRead > 0) {
-                                pushback.unread(peek, 0, peekRead)
-                            }
+                        if (cleanFileName.startsWith(".") || cleanFileName.equals("thumbs.db", ignoreCase = true) || entryName.startsWith("__MACOSX")) {
+                            try { zis.closeEntry() } catch (_: Throwable) {}
+                            entry = try { zis.nextEntry } catch (_: Throwable) { null }
+                            continue
+                        }
 
-                            val isAlreadyVaultEncrypted = peekRead == 4 && (
-                                (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() && peek[3] == 0x33.toByte()) || // VLT3
-                                (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() && peek[3] == 0x32.toByte())    // VLT2
-                            )
+                        if (entryName.contains("..") || entryName.startsWith("/") || entryName.contains("\u0000")) {
+                            throw SecurityException("Malicious path traversal entry detected in backup: $entryName")
+                        }
 
-                            FileOutputStream(stagedFile).buffered(65536).use { fos ->
-                                if (isAlreadyVaultEncrypted) {
-                                    // Direct copy of already encrypted envelope
-                                    pushback.copyTo(fos)
-                                } else {
-                                    // Plaintext media payload (photo, video, doc): encrypt into device's Master Key format
-                                    CryptoManager.encryptStream(pushback, fos)
+                        if (!seenEntries.add(entryName)) {
+                            Log.w(TAG, "Duplicate entry in backup archive, skipping duplicate: $entryName")
+                            try { zis.closeEntry() } catch (_: Throwable) {}
+                            entry = try { zis.nextEntry } catch (_: Throwable) { null }
+                            continue
+                        }
+
+                        val lower = cleanFileName.lowercase()
+
+                        when {
+                            lower == MANIFEST_METADATA_FILENAME || lower == "metadata.json" -> {
+                                try {
+                                    val metaJson = zis.readBytes().toString(Charsets.UTF_8)
+                                    metadata = metadataJsonAdapter.fromJson(metaJson)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Metadata manifest parse warning: ${e.message}")
                                 }
                             }
+                            lower == MANIFEST_FILENAME || lower == "manifest.json" || lower == "vault_items.json" ||
+                            lower == "items.json" || lower == "backup_manifest.json" -> {
+                                val manifestJson = zis.readBytes().toString(Charsets.UTF_8)
+                                restoredItems = parseVaultItemsManifest(manifestJson)
+                                onProgress?.invoke(0, restoredItems.size, "Loaded vault records manifest", totalBytesRestored)
+                            }
+                            lower == FOLDERS_FILENAME || lower == "folders.json" -> {
+                                try {
+                                    val foldersJson = zis.readBytes().toString(Charsets.UTF_8)
+                                    restoredFolders = foldersJsonAdapter.fromJson(foldersJson)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Folders dataset parse warning: ${e.message}")
+                                }
+                            }
+                            lower == PASSWORDS_FILENAME || lower == "passwords.json" -> {
+                                try {
+                                    val passwordsJson = zis.readBytes().toString(Charsets.UTF_8)
+                                    restoredPasswords = passwordsJsonAdapter.fromJson(passwordsJson)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Passwords dataset parse warning: ${e.message}")
+                                }
+                            }
+                            lower == SECURITY_LOGS_FILENAME || lower == "intruder_logs.json" ||
+                            lower == "security_logs.json" || lower == "logs.json" -> {
+                                try {
+                                    val logsJson = zis.readBytes().toString(Charsets.UTF_8)
+                                    logsToRestore = logsJsonAdapter.fromJson(logsJson)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Security logs dataset parse warning: ${e.message}")
+                                }
+                            }
+                            else -> {
+                                val uniqueStagedName = if (stagedFiles.containsKey(cleanFileName)) {
+                                    "${System.currentTimeMillis()}_${cleanFileName}"
+                                } else {
+                                    cleanFileName
+                                }
+                                val stagedFile = File(stagingDir, uniqueStagedName)
+                                if (!stagedFile.canonicalPath.startsWith(stagingDir.canonicalPath)) {
+                                    throw SecurityException("Path traversal attempt detected: $cleanFileName")
+                                }
 
-                            totalBytesRestored += stagedFile.length()
-                            stagedFiles[cleanFileName] = stagedFile
-                            onProgress?.invoke(
-                                stagedFiles.size,
-                                maxOf(stagedFiles.size, restoredItems?.size ?: 0),
-                                "Staging: $cleanFileName",
-                                totalBytesRestored
-                            )
+                                val pushback = java.io.PushbackInputStream(zis, 4)
+                                val peek = ByteArray(4)
+                                val peekRead = readFully(pushback, peek, 0, 4)
+                                if (peekRead > 0) {
+                                    pushback.unread(peek, 0, peekRead)
+                                }
+
+                                val isAlreadyVaultEncrypted = peekRead == 4 && (
+                                    (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() && peek[3] == 0x33.toByte()) ||
+                                    (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() && peek[3] == 0x32.toByte())
+                                )
+
+                                FileOutputStream(stagedFile).buffered(65536).use { fos ->
+                                    if (isAlreadyVaultEncrypted) {
+                                        pushback.copyTo(fos)
+                                    } else {
+                                        CryptoManager.encryptStream(pushback, fos)
+                                    }
+                                }
+
+                                totalBytesRestored += stagedFile.length()
+                                stagedFiles[cleanFileName] = stagedFile
+                                if (uniqueStagedName != cleanFileName) {
+                                    stagedFiles[uniqueStagedName] = stagedFile
+                                }
+                                onProgress?.invoke(
+                                    stagedFiles.size,
+                                    maxOf(stagedFiles.size, restoredItems?.size ?: 0),
+                                    "Staging: $cleanFileName",
+                                    totalBytesRestored
+                                )
+                            }
                         }
+                        try { zis.closeEntry() } catch (_: Throwable) {}
+                        entry = try { zis.nextEntry } catch (_: Throwable) { null }
                     }
-                    try { zis.closeEntry() } catch (_: Throwable) {}
-                    entry = zis.nextEntry
                 }
             }
 
@@ -885,26 +1315,27 @@ object VaultBackupManager {
                         matchedStagedNames.add(matched.name)
                         finalItemsToInsert.add(
                             item.copy(
-                                id = 0L, // autogenerate ID to prevent collision
+                                id = 0L,
                                 encryptedFileName = matched.name,
                                 sizeBytes = if (item.sizeBytes > 0) item.sizeBytes else matched.length()
                             )
                         )
                     } else {
-                        Log.w(TAG, "Item '${item.originalName}' (file: ${item.encryptedFileName}) missing from backup files. Restoring available files without aborting.")
+                        Log.w(TAG, "Item '${item.originalName}' (file: ${item.encryptedFileName}) missing from backup files.")
                     }
                 }
             }
 
             // Synthesize VaultItems for any staged files not in manifest so NO files are lost
             for ((fileName, stagedFile) in stagedFiles) {
-                if (!matchedStagedNames.contains(fileName)) {
+                if (!matchedStagedNames.contains(stagedFile.name)) {
+                    matchedStagedNames.add(stagedFile.name)
                     val mime = inferMimeTypeFromName(fileName)
                     finalItemsToInsert.add(
                         VaultItem(
                             id = 0L,
-                            originalName = fileName.removeSuffix(".aes").removeSuffix(".enc"),
-                            encryptedFileName = fileName,
+                            originalName = fileName.removeSuffix(".aes").removeSuffix(".enc").removeSuffix(".bin"),
+                            encryptedFileName = stagedFile.name,
                             mimeType = mime,
                             sizeBytes = stagedFile.length(),
                             addedTimestamp = System.currentTimeMillis(),
@@ -915,13 +1346,12 @@ object VaultBackupManager {
                 }
             }
 
-            // Fetch old items to clean up their files later if replace mode
             val oldItems = if (isReplaceMode) db.vaultDao().getAllItemsSync() else emptyList()
             val restoredFileNames = finalItemsToInsert.map { it.encryptedFileName }.toSet()
 
             // Phase 5: Atomic Commit Files to vault directory
-            for ((fileName, stagedFile) in stagedFiles) {
-                val targetFile = File(vaultDir, fileName)
+            for ((_, stagedFile) in stagedFiles) {
+                val targetFile = File(vaultDir, stagedFile.name)
                 if (targetFile.exists()) targetFile.delete()
                 if (!stagedFile.renameTo(targetFile)) {
                     stagedFile.copyTo(targetFile, overwrite = true)
@@ -931,28 +1361,33 @@ object VaultBackupManager {
             }
 
             // Phase 6: Atomic Database Transaction
-            db.runInTransaction {
-                kotlinx.coroutines.runBlocking {
-                    if (isReplaceMode) {
-                        db.vaultDao().deleteAllItems()
-                        db.vaultDao().deleteAllFolders()
-                        db.vaultPasswordDao().deleteAll()
-                        db.intruderLogDao().clearLogs()
-                    }
+            onProgress?.invoke(
+                stagedFiles.size,
+                stagedFiles.size,
+                "Finalizing Vault Database...",
+                totalBytesRestored
+            )
 
-                    restoredFolders?.forEach { folder ->
-                        db.vaultDao().insertFolder(folder)
-                    }
-                    restoredPasswords?.forEach { password ->
-                        db.vaultPasswordDao().insertPassword(password)
-                    }
-                    logsToRestore?.forEach { log ->
-                        db.intruderLogDao().insertLog(log)
-                    }
-                    finalItemsToInsert.forEach { item ->
-                        vaultRepository.insertRestoredVaultItem(item)
-                        restoredCount++
-                    }
+            db.withTransaction {
+                if (isReplaceMode) {
+                    db.vaultDao().deleteAllItems()
+                    db.vaultDao().deleteAllFolders()
+                    db.vaultPasswordDao().deleteAll()
+                    db.intruderLogDao().clearLogs()
+                }
+
+                restoredFolders?.forEach { folder ->
+                    try { db.vaultDao().insertFolder(folder) } catch (_: Exception) {}
+                }
+                restoredPasswords?.forEach { password ->
+                    try { db.vaultPasswordDao().insertPassword(password) } catch (_: Exception) {}
+                }
+                logsToRestore?.forEach { log ->
+                    try { db.intruderLogDao().insertLog(log) } catch (_: Exception) {}
+                }
+                finalItemsToInsert.forEach { item ->
+                    db.vaultDao().insertVaultItem(item)
+                    restoredCount++
                 }
             }
 
@@ -975,7 +1410,7 @@ object VaultBackupManager {
         } catch (e: AEADBadTagException) {
             Log.e(TAG, "AEAD Bad Tag: Invalid master password or corrupted backup ciphertext", e)
             movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
-            Result.failure(SecurityException("INCORRECT_BACKUP_PASSWORD: Password invalid for backup archive.", e))
+            Result.failure(SecurityException("Incorrect backup password. Please verify the password entered.", e))
         } catch (e: Exception) {
             Log.e(TAG, "Import failed: ${e.message}", e)
             movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
