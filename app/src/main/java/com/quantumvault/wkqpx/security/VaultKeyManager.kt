@@ -51,31 +51,19 @@ object VaultKeyManager {
     private const val TAG = "VaultKeyManager"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
-    const val ALIAS_BIOMETRIC_UNLOCK = "QuantumVaultBiometricUnlockMasterKey"
-    const val ALIAS_BIOMETRIC_SLOT_A = "QuantumVaultBiometricKey_SlotA"
-    const val ALIAS_BIOMETRIC_SLOT_B = "QuantumVaultBiometricKey_SlotB"
-    const val ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL = "QuantumVaultBiometricUnlockMasterKey_Provisional"
-    const val ALIAS_DEVICE_BINDING = "VaultBackupDeviceBindingHardwareKey"
-    const val ALIAS_DEX_PROTECTION = "SecureVaultDexKey"
-    const val ALIAS_ATTESTATION = "SecureVaultHardwareAttestationKey_v2"
-    const val ALIAS_LEGACY_MASTER = "SecureVaultAES256MasterKey"
-    const val ALIAS_AUDIT_PROBE = "AuditDeviceBindingProbe"
-    const val ALIAS_DB_WRAPPER = "SecureVaultDatabaseWrapperMasterKey"
-    const val ALIAS_DB_WRAPPER_DECOY = "SecureVaultDatabaseWrapperDecoyMasterKey"
+    const val ALIAS_BIOMETRIC_UNLOCK = VaultKeyAliases.ALIAS_BIOMETRIC_UNLOCK
+    const val ALIAS_BIOMETRIC_SLOT_A = VaultKeyAliases.ALIAS_BIOMETRIC_SLOT_A
+    const val ALIAS_BIOMETRIC_SLOT_B = VaultKeyAliases.ALIAS_BIOMETRIC_SLOT_B
+    const val ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL = VaultKeyAliases.ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL
+    const val ALIAS_DEVICE_BINDING = VaultKeyAliases.ALIAS_DEVICE_BINDING
+    const val ALIAS_DEX_PROTECTION = VaultKeyAliases.ALIAS_DEX_PROTECTION
+    const val ALIAS_ATTESTATION = VaultKeyAliases.ALIAS_ATTESTATION
+    const val ALIAS_LEGACY_MASTER = VaultKeyAliases.ALIAS_LEGACY_MASTER
+    const val ALIAS_AUDIT_PROBE = VaultKeyAliases.ALIAS_AUDIT_PROBE
+    const val ALIAS_DB_WRAPPER = VaultKeyAliases.ALIAS_DB_WRAPPER
+    const val ALIAS_DB_WRAPPER_DECOY = VaultKeyAliases.ALIAS_DB_WRAPPER_DECOY
 
-    val ALL_KEY_ALIASES = listOf(
-        ALIAS_BIOMETRIC_UNLOCK,
-        ALIAS_BIOMETRIC_SLOT_A,
-        ALIAS_BIOMETRIC_SLOT_B,
-        ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL,
-        ALIAS_DEVICE_BINDING,
-        ALIAS_DEX_PROTECTION,
-        ALIAS_ATTESTATION,
-        ALIAS_LEGACY_MASTER,
-        ALIAS_AUDIT_PROBE,
-        ALIAS_DB_WRAPPER,
-        ALIAS_DB_WRAPPER_DECOY
-    )
+    val ALL_KEY_ALIASES = VaultKeyAliases.ALL_KNOWN_ALIASES
 
     private var keyProvider: VaultKeyProvider = AndroidKeystoreKeyProvider()
 
@@ -95,10 +83,9 @@ object VaultKeyManager {
     @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
     fun setAuthorizedSessionForTesting(vrk: ByteArray, isDecoy: Boolean = false) {
         if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) {
-            throw SecurityException("Direct session authorization is strictly prohibited in release builds.")
+            throw SecurityException("Test session authorization injection is forbidden in release builds.")
         }
-        if (vrk.size != 32) throw IllegalArgumentException("VRK must be exactly 32 bytes")
-        activeVrk = vrk.copyOf()
+        activeVrk = vrk.clone()
         isDecoyMode = isDecoy
         currentState = if (isDecoy) VaultState.AUTHORIZED_DECOY else VaultState.AUTHORIZED_REAL
     }
@@ -194,23 +181,17 @@ object VaultKeyManager {
         }
     }
 
-    private fun derivePinKek(pin: String, salt: ByteArray): ByteArray {
-        return try {
-            // Memory-hard Argon2id KEK derivation (16 MiB RAM, 3 iterations) to resist GPU/FPGA PIN brute-forcing
-            Argon2Kdf.deriveKey(
-                password = pin.toCharArray(),
-                salt = salt,
-                memoryKb = 16 * 1024,
-                iterations = 3,
-                parallelism = 1,
-                keyLengthBytes = 32
-            ).encoded
-        } catch (_: Throwable) {
-            // Fallback to PBKDF2 with 100,000 iterations if Argon2 unavailable
-            val spec = PBEKeySpec(pin.toCharArray(), salt, 100000, 256)
-            val skf = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-            skf.generateSecret(spec).encoded
-        }
+    private fun derivePinKekStrictArgon2(pin: String, salt: ByteArray): ByteArray {
+        // Memory-hard Argon2id KEK derivation (16 MiB RAM, 3 iterations) to resist GPU/FPGA PIN brute-forcing
+        // Strict: Throws exception if Argon2 derivation fails, refusing silent downgrade to legacy KDF.
+        return Argon2Kdf.deriveKey(
+            password = pin.toCharArray(),
+            salt = salt,
+            memoryKb = 16 * 1024,
+            iterations = 3,
+            parallelism = 1,
+            keyLengthBytes = 32
+        ).encoded
     }
 
     private fun deriveLegacyPinKek(pin: String, salt: ByteArray): ByteArray {
@@ -221,13 +202,13 @@ object VaultKeyManager {
 
     /**
      * Atomically writes a VRK wrap file using a new random KEK salt, AES-256-GCM encryption,
-     * and fsync before rename.
+     * and fsync before rename. Strictly enforces Argon2id.
      */
     fun writeVrkPinWrap(context: Context, vrk: ByteArray, pin: String, isDecoy: Boolean): Boolean {
         if (vrk.size != 32) return false
         return try {
             val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-            val kek = derivePinKek(pin, salt)
+            val kek = derivePinKekStrictArgon2(pin, salt)
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(kek, "AES"))
@@ -256,7 +237,7 @@ object VaultKeyManager {
             }
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to write VRK wrap (isDecoy=$isDecoy)", e)
+            Log.e(TAG, "Failed to write VRK wrap with Argon2id (isDecoy=$isDecoy)", e)
             false
         }
     }
@@ -289,7 +270,7 @@ object VaultKeyManager {
                 
                 // Try primary Argon2id KEK first
                 var decrypted: ByteArray? = try {
-                    val kek = derivePinKek(pin, salt)
+                    val kek = derivePinKekStrictArgon2(pin, salt)
                     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                     cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
                     cipher.doFinal(ciphertext)
@@ -307,6 +288,7 @@ object VaultKeyManager {
                         // Seamlessly upgrade existing envelope to Argon2id upon successful PIN verification
                         if (decrypted != null && decrypted.size == 32 && VaultSentinelManager.verifyVrk(context, decrypted, isDecoy)) {
                             writeVrkPinWrap(context, decrypted, pin, isDecoy)
+                            File(context.filesDir, KEK_SALT_FILE).delete()
                         }
                     } catch (_: Exception) {
                         null
@@ -325,7 +307,7 @@ object VaultKeyManager {
                 val ciphertext = bytes.copyOfRange(1 + ivLen, bytes.size)
 
                 var decrypted: ByteArray? = try {
-                    val kek = derivePinKek(pin, salt)
+                    val kek = derivePinKekStrictArgon2(pin, salt)
                     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                     cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
                     cipher.doFinal(ciphertext)
@@ -339,6 +321,10 @@ object VaultKeyManager {
                         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(legacyKek, "AES"), GCMParameterSpec(128, iv))
                         decrypted = cipher.doFinal(ciphertext)
+                        if (decrypted != null && decrypted.size == 32 && VaultSentinelManager.verifyVrk(context, decrypted, isDecoy)) {
+                            writeVrkPinWrap(context, decrypted, pin, isDecoy)
+                            saltFile.delete()
+                        }
                     } catch (_: Exception) {
                         null
                     }

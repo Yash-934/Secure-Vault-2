@@ -26,7 +26,7 @@ import java.security.cert.X509Certificate
 object HardwareAttestationManager {
 
     private const val TAG = "HardwareAttestation"
-    private const val ATTESTATION_KEY_ALIAS = "SecureVaultHardwareAttestationKey_v2"
+    private const val ATTESTATION_KEY_ALIAS = VaultKeyAliases.ALIAS_ATTESTATION
     private const val KEYSTORE_TYPE = "AndroidKeyStore"
     private const val KEY_ATTESTATION_OID = "1.3.6.1.4.1.11129.2.1.17"
 

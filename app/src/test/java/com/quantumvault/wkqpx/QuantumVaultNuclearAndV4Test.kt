@@ -3,11 +3,13 @@ package com.quantumvault.wkqpx
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.quantumvault.wkqpx.data.AppDatabase
+import com.quantumvault.wkqpx.data.VaultItem
 import com.quantumvault.wkqpx.data.VaultRepository
 import com.quantumvault.wkqpx.data.local.SettingsDataStore
 import com.quantumvault.wkqpx.security.SelfDestructManager
 import com.quantumvault.wkqpx.security.SelfDestructStatus
 import com.quantumvault.wkqpx.security.VaultBackupManager
+import com.quantumvault.wkqpx.security.VaultGenerationManager
 import com.quantumvault.wkqpx.security.VaultKeyManager
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -127,6 +129,24 @@ class QuantumVaultNuclearAndV4Test {
                 "createdAt": 1700000000000
             }
             """.trimIndent()
+
+            val itemsJson = """
+            [
+                {
+                    "id": 0,
+                    "originalName": "doc.pdf",
+                    "encryptedFileName": "file_1.enc",
+                    "sizeBytes": 100,
+                    "mimeType": "application/pdf",
+                    "addedTimestamp": 1700000000000,
+                    "isVideo": false,
+                    "folderName": "Root"
+                }
+            ]
+            """.trimIndent()
+            zos.putNextEntry(ZipEntry("items.json"))
+            zos.write(itemsJson.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
 
             zos.putNextEntry(ZipEntry("backup_manifest_v4.json"))
             zos.write(manifestJson.toByteArray(Charsets.UTF_8))
@@ -338,4 +358,85 @@ class QuantumVaultNuclearAndV4Test {
             exceptionMessage.contains("Strict V4") || exceptionMessage.contains("validation failed") || exceptionMessage.contains("manifest")
         )
     }
+
+    @Test
+    fun `test complete V4 export and atomic generational import roundtrip`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+        val backupPassword = "StrongBackupPassword99#"
+        val initialGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+
+        // Seed a sample vault item and physical file properly encrypted with CryptoManager
+        val vaultDir = repo.getVaultDirectory(context)
+        val encFileName = "test_enc_file_${System.currentTimeMillis()}.bin"
+        val physicalFile = File(vaultDir, encFileName)
+        val plainBytes = "Confidential Encrypted Content".toByteArray(Charsets.UTF_8)
+        java.io.FileOutputStream(physicalFile).use { fos ->
+            com.quantumvault.wkqpx.security.CryptoManager.encryptStream(ByteArrayInputStream(plainBytes), fos)
+        }
+
+        val item = VaultItem(
+            id = 1,
+            originalName = "test_document.txt",
+            encryptedFileName = encFileName,
+            sizeBytes = plainBytes.size.toLong(),
+            mimeType = "text/plain",
+            addedTimestamp = System.currentTimeMillis(),
+            isVideo = false,
+            folderName = "Documents"
+        )
+        db.vaultDao().insertVaultItem(item)
+
+        val exportedBackupStream = ByteArrayOutputStream()
+        val exportResult = VaultBackupManager.exportMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            outputStream = exportedBackupStream,
+            vaultRepository = repo,
+            isDeviceLocked = false
+        )
+        assertTrue("Export must succeed: ${exportResult.exceptionOrNull()?.message}", exportResult.isSuccess)
+        val backupBytes = exportedBackupStream.toByteArray()
+        assertTrue("Backup bytes must be non-empty", backupBytes.isNotEmpty())
+
+        // Clear local state
+        db.vaultDao().deleteAllItems()
+        physicalFile.delete()
+        assertEquals(0, db.vaultDao().getAllItemsSync().size)
+        assertFalse(File(vaultDir, encFileName).exists())
+
+        // Execute import in REPLACE mode (atomic generation swap)
+        val importResult = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            inputStream = ByteArrayInputStream(backupBytes),
+            vaultRepository = repo,
+            isReplaceMode = true
+        )
+
+        assertTrue("Import must succeed: ${importResult.exceptionOrNull()?.message}", importResult.isSuccess)
+        assertEquals(1, importResult.getOrNull())
+
+        // Verify item restored in DB
+        val restoredItems = db.vaultDao().getAllItemsSync()
+        assertEquals(1, restoredItems.size)
+        assertEquals("test_document.txt", restoredItems[0].originalName)
+
+        // Verify physical file restored in vaultDir and decrypts correctly
+        val restoredPhysicalFile = File(vaultDir, restoredItems[0].encryptedFileName)
+        assertTrue("Restored file must exist in vault directory", restoredPhysicalFile.exists())
+        val decryptedOut = ByteArrayOutputStream()
+        java.io.FileInputStream(restoredPhysicalFile).use { fis ->
+            com.quantumvault.wkqpx.security.CryptoManager.decryptStreamToOutputStream(fis, decryptedOut)
+        }
+        assertEquals("Confidential Encrypted Content", decryptedOut.toString(Charsets.UTF_8.name()))
+
+        // Verify generation incremented
+        val nextGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+        assertTrue("Generation epoch must increment after restore (initial=$initialGen, next=$nextGen)", nextGen > initialGen)
+    }
 }
+

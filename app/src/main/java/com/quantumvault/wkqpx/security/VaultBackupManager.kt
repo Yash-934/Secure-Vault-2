@@ -23,6 +23,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.zip.ZipEntry
@@ -217,8 +219,17 @@ object VaultBackupManager {
             val chunkIV = ByteArray(IV_SIZE_BYTES).also { secureRandom.nextBytes(it) }
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
-            
-            val aad = java.nio.ByteBuffer.allocate(8).putLong(chunkIndex++).array()
+
+            val expectedCipherLength = bufferPos + (GCM_TAG_LENGTH_BITS / 8)
+            val isLastByte = if (isLast) 1.toByte() else 0.toByte()
+
+            // V4 Authenticated Additional Data binding:
+            // chunkIndex (8 bytes) + cipherLength (4 bytes) + isLast (1 byte)
+            val aad = java.nio.ByteBuffer.allocate(8 + 4 + 1)
+                .putLong(chunkIndex++)
+                .putInt(expectedCipherLength)
+                .put(isLastByte)
+                .array()
             cipher.updateAAD(aad)
             val cipherText = cipher.doFinal(buffer, 0, bufferPos)
 
@@ -246,13 +257,24 @@ object VaultBackupManager {
     }
 
     /**
+     * Supported AAD Modes for Chunked AES-256-GCM streaming.
+     */
+    enum class AadMode {
+        NONE,
+        INDEX_ONLY,
+        HARDENED_V4
+    }
+
+    /**
      * Chunked AES-256-GCM InputStream with fail-closed integrity validation.
-     * Supports both monotonic AAD (current format) and non-AAD (legacy format).
+     * Supports hardened V4 AAD (index + length + isLast), legacy monotonic AAD (index only),
+     * and unauthenticated AAD (legacy pre-V3 format).
      */
     class ChunkedGcmInputStream(
         private val underlying: InputStream,
         private val secretKey: SecretKey,
-        private val useAad: Boolean = true
+        private val useAad: Boolean = true,
+        val aadMode: AadMode = if (useAad) AadMode.HARDENED_V4 else AadMode.NONE
     ) : InputStream() {
         private var currentPlainChunk: ByteArray? = null
         private var chunkPos = 0
@@ -301,9 +323,22 @@ object VaultBackupManager {
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, chunkIV))
-            if (useAad) {
-                val aad = java.nio.ByteBuffer.allocate(8).putLong(chunkIndex).array()
-                cipher.updateAAD(aad)
+            when (aadMode) {
+                AadMode.HARDENED_V4 -> {
+                    val aad = java.nio.ByteBuffer.allocate(8 + 4 + 1)
+                        .putLong(chunkIndex)
+                        .putInt(cipherLength)
+                        .put(isLastFlag.toByte())
+                        .array()
+                    cipher.updateAAD(aad)
+                }
+                AadMode.INDEX_ONLY -> {
+                    val aad = java.nio.ByteBuffer.allocate(8).putLong(chunkIndex).array()
+                    cipher.updateAAD(aad)
+                }
+                AadMode.NONE -> {
+                    // No AAD
+                }
             }
             chunkIndex++
             val plain = try {
@@ -508,19 +543,20 @@ object VaultBackupManager {
                 val fileEntries = mutableListOf<BackupFileEntry>()
                 for (item in items) {
                     val file = File(vaultDir, item.encryptedFileName)
-                    if (file.exists() && file.length() > 0) {
-                        val sha = computePlaintextSha256(file)
-                        fileEntries.add(
-                            BackupFileEntry(
-                                fileName = item.encryptedFileName,
-                                originalName = item.originalName,
-                                sizeBytes = item.sizeBytes,
-                                sha256Hex = sha,
-                                mimeType = item.mimeType,
-                                folderName = item.folderName
-                            )
-                        )
+                    if (!file.exists() || file.length() == 0L) {
+                        throw IllegalStateException("Vault item '${item.originalName}' (${item.encryptedFileName}) missing or empty on disk! Cannot create consistent V4 backup.")
                     }
+                    val sha = computePlaintextSha256(file)
+                    fileEntries.add(
+                        BackupFileEntry(
+                            fileName = item.encryptedFileName,
+                            originalName = item.originalName,
+                            sizeBytes = item.sizeBytes,
+                            sha256Hex = sha,
+                            mimeType = item.mimeType,
+                            folderName = item.folderName
+                        )
+                    )
                 }
                 val currentRealm = if (VaultKeyManager.isDecoyVaultAuthorized()) 2 else 1
                 val manifestV4 = VaultBackupManifestV4(
@@ -1314,7 +1350,8 @@ object VaultBackupManager {
     ): Result<Int> = withContext(Dispatchers.IO) {
         val stagingDir = File(context.cacheDir, "staging_restore_${System.currentTimeMillis()}").apply { mkdirs() }
         val tempBackupFile = File(context.cacheDir, "temp_import_${System.currentTimeMillis()}.bin")
-        val movedTargetFiles = mutableListOf<File>()
+        var nextGenDir: File? = null
+        var backupPrevGenDir: File? = null
 
         try {
             val vaultDir = vaultRepository.getVaultDirectory(context)
@@ -1416,7 +1453,11 @@ object VaultBackupManager {
                                     val foldersJson = zis.readBytes().toString(Charsets.UTF_8)
                                     restoredFolders = foldersJsonAdapter.fromJson(foldersJson)
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "Folders dataset parse warning: ${e.message}")
+                                    if (isV4) {
+                                        throw SecurityException("Corrupted folders dataset in V4 backup archive: ${e.message}", e)
+                                    } else {
+                                        Log.w(TAG, "Folders dataset parse warning: ${e.message}")
+                                    }
                                 }
                             }
                             lower == PASSWORDS_FILENAME || lower == "passwords.json" -> {
@@ -1424,7 +1465,11 @@ object VaultBackupManager {
                                     val passwordsJson = zis.readBytes().toString(Charsets.UTF_8)
                                     restoredPasswords = passwordsJsonAdapter.fromJson(passwordsJson)
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "Passwords dataset parse warning: ${e.message}")
+                                    if (isV4) {
+                                        throw SecurityException("Corrupted passwords dataset in V4 backup archive: ${e.message}", e)
+                                    } else {
+                                        Log.w(TAG, "Passwords dataset parse warning: ${e.message}")
+                                    }
                                 }
                             }
                             lower == SECURITY_LOGS_FILENAME || lower == "intruder_logs.json" ||
@@ -1433,7 +1478,11 @@ object VaultBackupManager {
                                     val logsJson = zis.readBytes().toString(Charsets.UTF_8)
                                     logsToRestore = logsJsonAdapter.fromJson(logsJson)
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "Security logs dataset parse warning: ${e.message}")
+                                    if (isV4) {
+                                        throw SecurityException("Corrupted security logs dataset in V4 backup archive: ${e.message}", e)
+                                    } else {
+                                        Log.w(TAG, "Security logs dataset parse warning: ${e.message}")
+                                    }
                                 }
                             }
                             else -> {
@@ -1526,6 +1575,28 @@ object VaultBackupManager {
                     throw SecurityException("Backup realm mismatch: Backup was created for realm ${manifestV4.sourceRealm}, but active vault is in realm $currentRealm. Decoy/Real isolation violation.")
                 }
 
+                val actualItemsCount = restoredItems?.size ?: 0
+                val actualFoldersCount = restoredFolders?.size ?: 0
+                val actualPasswordsCount = restoredPasswords?.size ?: 0
+                val actualLogsCount = logsToRestore?.size ?: 0
+                val actualInventoryCount = manifestV4.fileInventory.size
+
+                if (manifestV4.itemsCount != actualItemsCount) {
+                    throw SecurityException("Manifest count mismatch: manifest declares ${manifestV4.itemsCount} items, but archive contains $actualItemsCount items.")
+                }
+                if (manifestV4.foldersCount != actualFoldersCount) {
+                    throw SecurityException("Manifest count mismatch: manifest declares ${manifestV4.foldersCount} folders, but archive contains $actualFoldersCount folders.")
+                }
+                if (manifestV4.passwordsCount != actualPasswordsCount) {
+                    throw SecurityException("Manifest count mismatch: manifest declares ${manifestV4.passwordsCount} passwords, but archive contains $actualPasswordsCount passwords.")
+                }
+                if (manifestV4.logsCount != actualLogsCount) {
+                    throw SecurityException("Manifest count mismatch: manifest declares ${manifestV4.logsCount} logs, but archive contains $actualLogsCount logs.")
+                }
+                if (actualInventoryCount != actualItemsCount) {
+                    throw SecurityException("Manifest inventory mismatch: fileInventory has $actualInventoryCount entries, but items manifest has $actualItemsCount items.")
+                }
+
                 val declaredFileNames = manifestV4.fileInventory.map { File(it.fileName).name }.toSet()
                 val declaredOrigNames = manifestV4.fileInventory.map { File(it.originalName).name }.toSet()
 
@@ -1611,65 +1682,107 @@ object VaultBackupManager {
                 }
             }
 
-            val oldItems = if (isReplaceMode) db.vaultDao().getAllItemsSync() else emptyList()
-            val restoredFileNames = finalItemsToInsert.map { it.encryptedFileName }.toSet()
+            // Phase 4: Stage Verified Generation Files in nextGenDir
+            nextGenDir = File(context.filesDir, "${vaultDir.name}_next_gen_${System.currentTimeMillis()}").apply { mkdirs() }
+            val genDir = nextGenDir!!
 
-            // Phase 4: Atomic Database Transaction (Executed FIRST before moving files to ensure fail-closed atomicity)
+            for (item in finalItemsToInsert) {
+                val stagedFile = stagedFiles[item.encryptedFileName] ?: stagedFiles[File(item.originalName).name]
+                if (stagedFile != null && stagedFile.exists()) {
+                    val targetInNextGen = File(genDir, item.encryptedFileName)
+                    if (!stagedFile.renameTo(targetInNextGen)) {
+                        Files.move(stagedFile.toPath(), targetInNextGen.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    if (!targetInNextGen.exists() || targetInNextGen.length() == 0L) {
+                        throw SecurityException("Generation staging failed: ${item.encryptedFileName} could not be staged.")
+                    }
+                }
+            }
+
+            // Phase 5: Atomic Switch & Database Commit
             onProgress?.invoke(
                 stagedFiles.size + 2,
                 targetTotal,
-                "Finalizing Vault Database...",
+                "Committing generation switch...",
                 totalBytesRestored
             )
 
-            db.withTransaction {
-                if (isReplaceMode) {
-                    db.vaultDao().deleteAllItems()
-                    db.vaultDao().deleteAllFolders()
-                    db.vaultPasswordDao().deleteAll()
-                    db.intruderLogDao().clearLogs()
-                }
-
-                restoredFolders?.forEach { folder ->
-                    try { db.vaultDao().insertFolder(folder) } catch (_: Exception) {}
-                }
-                restoredPasswords?.forEach { password ->
-                    try { db.vaultPasswordDao().insertPassword(password) } catch (_: Exception) {}
-                }
-                logsToRestore?.forEach { log ->
-                    try { db.intruderLogDao().insertLog(log) } catch (_: Exception) {}
-                }
-                finalItemsToInsert.forEach { item ->
-                    db.vaultDao().insertVaultItem(item)
-                    restoredCount++
-                }
-            }
-
-            // Phase 5: Atomic Commit Files to vault directory (Only executed if DB transaction succeeds)
-            onProgress?.invoke(
-                stagedFiles.size + 3,
-                targetTotal,
-                "Finalizing storage files...",
-                totalBytesRestored
-            )
-
-            for ((_, stagedFile) in stagedFiles) {
-                val targetFile = File(vaultDir, stagedFile.name)
-                if (targetFile.exists()) targetFile.delete()
-                if (!stagedFile.renameTo(targetFile)) {
-                    stagedFile.copyTo(targetFile, overwrite = true)
-                    stagedFile.delete()
-                }
-                movedTargetFiles.add(targetFile)
-            }
+            val isDecoy = VaultKeyManager.isDecoyVaultAuthorized()
 
             if (isReplaceMode) {
-                val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
-                for (oldItem in oldItems) {
-                    if (!restoredFileNames.contains(oldItem.encryptedFileName)) {
-                        File(vaultDir, oldItem.encryptedFileName).delete()
-                        File(thumbDir, "${oldItem.encryptedFileName}.thumb_aes256").delete()
+                backupPrevGenDir = File(context.filesDir, "${vaultDir.name}_prev_gen_${System.currentTimeMillis()}")
+                val prevDir = backupPrevGenDir!!
+                var switched = false
+                try {
+                    // Step 1: Atomic filesystem swap (preserving previous generation)
+                    if (vaultDir.exists()) {
+                        Files.move(vaultDir.toPath(), prevDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
                     }
+                    Files.move(genDir.toPath(), vaultDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                    switched = true
+
+                    // Step 2: Atomic DB transaction
+                    db.withTransaction {
+                        db.vaultDao().deleteAllItems()
+                        db.vaultDao().deleteAllFolders()
+                        db.vaultPasswordDao().deleteAll()
+                        db.intruderLogDao().clearLogs()
+
+                        restoredFolders?.forEach { db.vaultDao().insertFolder(it) }
+                        restoredPasswords?.forEach { db.vaultPasswordDao().insertPassword(it) }
+                        logsToRestore?.forEach { db.intruderLogDao().insertLog(it) }
+                        finalItemsToInsert.forEach { item ->
+                            db.vaultDao().insertVaultItem(item)
+                            restoredCount++
+                        }
+                    }
+
+                    // Step 3: Advance generation epoch and clean up previous generation
+                    VaultGenerationManager.incrementAndGetNextGeneration(context, isDecoy)
+                    prevDir.deleteRecursively()
+
+                    val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
+                    try { thumbDir.deleteRecursively(); thumbDir.mkdirs() } catch (_: Exception) {}
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Restore transaction failed, rolling back atomic generation...", t)
+                    if (switched) {
+                        if (vaultDir.exists()) {
+                            vaultDir.deleteRecursively()
+                        }
+                        if (prevDir.exists()) {
+                            Files.move(prevDir.toPath(), vaultDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                        }
+                    }
+                    throw t
+                }
+            } else {
+                // Merge Mode: Move verified files into vaultDir and commit DB
+                val newlyAddedFiles = mutableListOf<File>()
+                try {
+                    genDir.listFiles()?.forEach { file ->
+                        val target = File(vaultDir, file.name)
+                        if (target.exists()) target.delete()
+                        if (!file.renameTo(target)) {
+                            Files.move(file.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        newlyAddedFiles.add(target)
+                    }
+
+                    db.withTransaction {
+                        restoredFolders?.forEach { try { db.vaultDao().insertFolder(it) } catch (_: Exception) {} }
+                        restoredPasswords?.forEach { try { db.vaultPasswordDao().insertPassword(it) } catch (_: Exception) {} }
+                        logsToRestore?.forEach { try { db.intruderLogDao().insertLog(it) } catch (_: Exception) {} }
+                        finalItemsToInsert.forEach { item ->
+                            db.vaultDao().insertVaultItem(item)
+                            restoredCount++
+                        }
+                    }
+
+                    VaultGenerationManager.incrementAndGetNextGeneration(context, isDecoy)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Merge restore transaction failed, rolling back newly added files...", t)
+                    newlyAddedFiles.forEach { try { it.delete() } catch (_: Exception) {} }
+                    throw t
                 }
             }
 
@@ -1677,18 +1790,17 @@ object VaultBackupManager {
             Result.success(restoredCount)
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException during import: ${e.message}", e)
-            movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
             Result.failure(e)
         } catch (e: AEADBadTagException) {
             Log.e(TAG, "AEAD Bad Tag: Invalid master password or corrupted backup ciphertext", e)
-            movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
             Result.failure(SecurityException("Incorrect backup password. Please verify the password entered.", e))
         } catch (e: Exception) {
             Log.e(TAG, "Import failed: ${e.message}", e)
-            movedTargetFiles.forEach { try { it.delete() } catch (_: Exception) {} }
             Result.failure(e)
         } finally {
             stagingDir.deleteRecursively()
+            try { nextGenDir?.deleteRecursively() } catch (_: Exception) {}
+            try { backupPrevGenDir?.deleteRecursively() } catch (_: Exception) {}
             try { tempBackupFile.delete() } catch (_: Exception) {}
         }
     }

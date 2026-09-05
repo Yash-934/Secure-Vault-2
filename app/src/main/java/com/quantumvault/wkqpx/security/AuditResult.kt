@@ -22,6 +22,7 @@ data class SecurityCheckItem(
 data class AuditResult(
     val status: String,
     val score: Int,
+    val scoreOutOfTen: Double = score / 10.0,
     val securityGrade: String,
     val checkResults: Map<String, Boolean>,
     val checkItems: List<SecurityCheckItem> = emptyList(),

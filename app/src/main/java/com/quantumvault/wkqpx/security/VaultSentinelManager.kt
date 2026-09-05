@@ -71,7 +71,7 @@ object VaultSentinelManager {
         context: Context,
         vrk: ByteArray,
         isDecoy: Boolean = false,
-        generationId: Long = 1L
+        generationId: Long = VaultGenerationManager.getActiveGeneration(context, isDecoy)
     ): Boolean {
         return try {
             val key = deriveSentinelKey(vrk, isDecoy, generationId)
@@ -150,6 +150,11 @@ object VaultSentinelManager {
                     return false
                 }
                 val generationId = bb.long
+                val activeGen = VaultGenerationManager.getActiveGeneration(context, isDecoy)
+                if (generationId != activeGen) {
+                    Log.e(TAG, "Sentinel generation mismatch: expected $activeGen, got $generationId. Rollback attempt detected.")
+                    return false
+                }
                 val ivLen = bb.get().toInt() and 0xFF
                 if (ivLen != IV_SIZE_BYTES) return false
                 val iv = ByteArray(IV_SIZE_BYTES)

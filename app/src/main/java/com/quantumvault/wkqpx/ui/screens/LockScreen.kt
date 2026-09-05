@@ -3,6 +3,7 @@ package com.quantumvault.wkqpx.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import com.quantumvault.wkqpx.security.KeypadPermutationHelper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -110,7 +111,7 @@ fun LockScreen(
 
     // Generate scrambled digits once per LockScreen composition
     val scrambledDigits = remember {
-        (0..9).map { it.toString() }.shuffled()
+        KeypadPermutationHelper.generateScrambledDigits()
     }
 
     // Auto-clear PIN input when error occurs

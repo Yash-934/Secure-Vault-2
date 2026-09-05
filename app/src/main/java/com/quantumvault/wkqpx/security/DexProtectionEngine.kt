@@ -39,7 +39,7 @@ object DexProtectionEngine {
         val details: String
     )
 
-    private const val KS_ALIAS_DEX = "SecureVaultDexKey"
+    private const val KS_ALIAS_DEX = VaultKeyAliases.ALIAS_DEX_PROTECTION
     private const val PREF_NAME = "VaultDexPrefs"
     private const val PREF_WRAPPED_KEY = "wrapped_dex_key"
     private const val PREF_WRAPPED_IV = "wrapped_dex_iv"
