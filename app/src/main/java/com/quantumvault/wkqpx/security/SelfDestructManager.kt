@@ -14,6 +14,12 @@ enum class SelfDestructStatus {
     FAILED
 }
 
+enum class ShredResult {
+    OVERWRITE_VERIFIED,
+    DELETED_UNVERIFIED,
+    FAILED
+}
+
 data class NuclearArtifactInventory(
     val databaseFiles: List<File>,
     val wrapperFiles: List<File>,
@@ -22,7 +28,8 @@ data class NuclearArtifactInventory(
     val vaultPayloadFiles: List<File>,
     val cacheAndTempFiles: List<File>,
     val preferencesAndDatastoreFiles: List<File>,
-    val keystoreAliases: List<String>
+    val keystoreAliases: List<String>,
+    val keystoreInventoryComplete: Boolean = true
 ) {
     val allFiles: List<File> get() = databaseFiles + wrapperFiles + generationFiles +
             sentinelFiles + vaultPayloadFiles + cacheAndTempFiles + preferencesAndDatastoreFiles
@@ -40,11 +47,24 @@ data class SelfDestructResult(
 
 /**
  * Self-Destruct Nuclear Engine.
- * Implements authoritative: Discover Inventory -> Forensically Destroy -> Authoritatively Verify Absent.
+ * Implements authoritative: Quiesce Application -> Discover Inventory -> Forensically Destroy -> Re-inventory & Authoritatively Verify Absent.
  * Guarantees zero residual artifacts before declaring SelfDestructStatus.COMPLETE.
  */
 object SelfDestructManager {
     private const val TAG = "SelfDestructManager"
+
+    @Volatile
+    var isApplicationQuiesced: Boolean = false
+        private set
+
+    fun quiesceApplication() {
+        isApplicationQuiesced = true
+        try {
+            AppDatabase.closeDatabases()
+        } catch (e: Exception) {
+            Log.w(TAG, "Database close during quiesce: ${e.message}")
+        }
+    }
 
     suspend fun executeNuclearSelfDestruct(context: Context): SelfDestructResult = withContext(Dispatchers.IO) {
         var dbDestroyed = false
@@ -52,16 +72,12 @@ object SelfDestructManager {
         var keyResults = emptyMap<String, Boolean>()
 
         try {
-            // Phase 1: Close active database connections
-            try {
-                AppDatabase.closeDatabases()
-            } catch (e: Exception) {
-                Log.w(TAG, "Database close error: ${e.message}")
-            }
+            // Phase 1: Quiesce application writers and active database connections
+            quiesceApplication()
 
             // Phase 2: Comprehensive Artifact Inventory Discovery
             val inventory = discoverNuclearInventory(context)
-            Log.d(TAG, "Nuclear inventory discovered: ${inventory.allFiles.size} files, ${inventory.keystoreAliases.size} key aliases.")
+            Log.d(TAG, "Nuclear inventory discovered: ${inventory.allFiles.size} files, ${inventory.keystoreAliases.size} key aliases. KeystoreComplete=${inventory.keystoreInventoryComplete}")
 
             // Phase 3: Forensic Destruction
             // 3a. Shred specific inventoried files individually
@@ -96,7 +112,7 @@ object SelfDestructManager {
             // 3d. Authoritatively destroy ALL Keystore keys dynamically
             keyResults = VaultKeyManager.destroyAllKeys()
 
-            // Phase 4: Authoritative Post-Destruction Verification (Verify Absent)
+            // Phase 4: Re-Inventory Verification (Verify Zero Residual Artifacts)
             val unverifiedFiles = mutableListOf<String>()
             for (file in inventory.allFiles) {
                 if (file.exists()) {
@@ -104,17 +120,27 @@ object SelfDestructManager {
                 }
             }
 
+            // Perform closed-world re-inventory check to catch any post-discovery writes
+            val reInventory = discoverNuclearInventory(context)
+            for (file in reInventory.allFiles) {
+                if (file.exists() && !unverifiedFiles.contains(file.absolutePath)) {
+                    unverifiedFiles.add(file.absolutePath)
+                }
+            }
+
             val unverifiedAliases = mutableListOf<String>()
+            var postKeystoreInventoryComplete = true
             try {
                 val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
                 val currentAliases = ks.aliases().toList()
-                for (alias in inventory.keystoreAliases) {
+                for (alias in (inventory.keystoreAliases + reInventory.keystoreAliases).distinct()) {
                     if (currentAliases.contains(alias) || ks.containsAlias(alias)) {
                         unverifiedAliases.add(alias)
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Keystore post-verification error: ${e.message}")
+                postKeystoreInventoryComplete = false
             }
 
             val realDbFile = context.getDatabasePath("secure_vault_db")
@@ -126,9 +152,10 @@ object SelfDestructManager {
 
             val allKeysDestroyed = (keyResults.isEmpty() || keyResults.values.all { it }) && unverifiedAliases.isEmpty()
             val zeroFilesRemaining = unverifiedFiles.isEmpty()
+            val keystoreDiscoverySound = inventory.keystoreInventoryComplete && postKeystoreInventoryComplete
 
-            // Phase 5: Status Determination (Strict: Anything unverified prevents COMPLETE)
-            val status = if (allKeysDestroyed && dbDestroyed && storageWiped && zeroFilesRemaining) {
+            // Phase 5: Status Determination (Strict: Anything unverified or incomplete prevents COMPLETE)
+            val status = if (allKeysDestroyed && dbDestroyed && storageWiped && zeroFilesRemaining && keystoreDiscoverySound) {
                 SelfDestructStatus.COMPLETE
             } else if (keyResults.values.any { it } || dbDestroyed || storageWiped || zeroFilesRemaining) {
                 SelfDestructStatus.PARTIAL
@@ -149,8 +176,8 @@ object SelfDestructManager {
                 keyDestructionResults = keyResults,
                 databaseDestroyed = dbDestroyed,
                 storageWiped = storageWiped,
-                unverifiedRemainingFiles = unverifiedFiles,
-                unverifiedRemainingAliases = unverifiedAliases
+                unverifiedRemainingFiles = unverifiedFiles.distinct(),
+                unverifiedRemainingAliases = unverifiedAliases.distinct()
             )
         } catch (e: Exception) {
             Log.e(TAG, "Fatal error during nuclear self-destruct", e)
@@ -200,7 +227,8 @@ object SelfDestructManager {
         val genNames = listOf(
             "vault_gen_real.bin", "vault_gen_decoy.bin",
             "vault_gen_real.intent", "vault_gen_decoy.intent",
-            "vault_gen_real.bin.tmp", "vault_gen_decoy.bin.tmp"
+            "vault_gen_real.bin.tmp", "vault_gen_decoy.bin.tmp",
+            "vault_restore_journal.json", "vault_restore_journal.json.tmp"
         )
         val generationFiles = genNames.map { File(context.filesDir, it) }
 
@@ -219,7 +247,7 @@ object SelfDestructManager {
             }
         }
         context.filesDir.listFiles()?.forEach { file ->
-            if (file.isDirectory && (file.name.contains("staging") || file.name.contains("prev_gen") || file.name.contains("next_gen"))) {
+            if (file.isDirectory && (file.name.contains("staging") || file.name.contains("prev_gen") || file.name.contains("next_gen") || file.name.contains("merge_backup"))) {
                 file.listFiles()?.let { vaultPayloadFiles.addAll(it) }
                 vaultPayloadFiles.add(file)
             }
@@ -252,13 +280,15 @@ object SelfDestructManager {
             prefsAndDatastoreFiles.add(sharedPrefsDir)
         }
 
-        // 8. Keystore Aliases
+        // 8. Keystore Aliases (Fail-closed: tracks if discovery succeeded)
         val aliases = mutableListOf<String>()
+        var keystoreComplete = true
         try {
             val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             aliases.addAll(ks.aliases().toList())
         } catch (e: Exception) {
-            Log.w(TAG, "Keystore alias discovery warning: ${e.message}")
+            Log.e(TAG, "Keystore alias discovery failed: ${e.message}")
+            keystoreComplete = false
         }
 
         return NuclearArtifactInventory(
@@ -269,7 +299,8 @@ object SelfDestructManager {
             vaultPayloadFiles = vaultPayloadFiles.distinct(),
             cacheAndTempFiles = cacheAndTempFiles.distinct(),
             preferencesAndDatastoreFiles = prefsAndDatastoreFiles.distinct(),
-            keystoreAliases = aliases.distinct()
+            keystoreAliases = aliases.distinct(),
+            keystoreInventoryComplete = keystoreComplete
         )
     }
 
@@ -280,16 +311,18 @@ object SelfDestructManager {
             if (file.isDirectory) {
                 if (!shredDirectory(file)) allSuccess = false
             } else {
-                if (!shredFile(file)) allSuccess = false
+                if (shredFile(file) == ShredResult.FAILED) allSuccess = false
             }
         }
         val dirDeleted = dir.delete() || !dir.exists()
         return allSuccess && dirDeleted
     }
 
-    fun shredFile(file: File): Boolean {
-        return try {
-            if (file.exists() && file.isFile && file.canWrite()) {
+    fun shredFile(file: File): ShredResult {
+        if (!file.exists()) return ShredResult.DELETED_UNVERIFIED
+        var overwriteSuccess = false
+        try {
+            if (file.isFile && file.canWrite()) {
                 val length = file.length()
                 if (length > 0) {
                     file.outputStream().use { fos ->
@@ -303,11 +336,20 @@ object SelfDestructManager {
                         fos.flush()
                         fos.fd.sync()
                     }
+                    overwriteSuccess = true
+                } else {
+                    overwriteSuccess = true
                 }
             }
-            file.delete() || !file.exists()
         } catch (e: Exception) {
-            file.delete() || !file.exists()
+            Log.w(TAG, "File zero-overwrite failed for ${file.name}: ${e.message}")
+        }
+
+        val deleted = try { file.delete() || !file.exists() } catch (_: Exception) { !file.exists() }
+        return when {
+            deleted && overwriteSuccess -> ShredResult.OVERWRITE_VERIFIED
+            deleted -> ShredResult.DELETED_UNVERIFIED
+            else -> ShredResult.FAILED
         }
     }
 }

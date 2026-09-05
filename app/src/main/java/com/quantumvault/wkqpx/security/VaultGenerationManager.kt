@@ -9,6 +9,8 @@ import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.zip.CRC32
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
 
 class GenerationCorruptionException(message: String, cause: Throwable? = null) : SecurityException(message, cause)
 class GenerationPersistenceException(message: String, cause: Throwable? = null) : SecurityException(message, cause)
@@ -18,11 +20,13 @@ class GenerationPersistenceException(message: String, cause: Throwable? = null) 
  * Prevents vault rollback attacks and binds cryptographic sentinels to explicit,
  * monotonically tracked generation epochs.
  *
- * Persisted binary record schema (24 bytes):
+ * Persisted binary record schema (52 bytes authenticated):
  * - [0..3]: MAGIC_GEN (0x5647454E = "VGEN")
  * - [4..11]: Generation ID (Long)
  * - [12..19]: Timestamp (Long)
  * - [20..23]: CRC-32 Checksum of [0..19] (Int)
+ * - [24..35]: AES-GCM IV (12 bytes)
+ * - [36..51]: AES-GCM Authentication Tag over [0..23] AAD (16 bytes)
  */
 object VaultGenerationManager {
     private const val TAG = "VaultGenerationManager"
@@ -31,7 +35,10 @@ object VaultGenerationManager {
     private const val REAL_INTENT_FILE = "vault_gen_real.intent"
     private const val DECOY_INTENT_FILE = "vault_gen_decoy.intent"
     private const val MAGIC_GEN = 0x5647454EL // "VGEN"
-    const val RECORD_SIZE_BYTES = 24
+    const val RECORD_SIZE_BYTES = 52
+    const val LEGACY_RECORD_SIZE_BYTES = 24
+    private const val GCM_IV_SIZE_BYTES = 12
+    private const val GCM_TAG_SIZE_BYTES = 16
 
     @Synchronized
     fun getActiveGeneration(context: Context, isDecoy: Boolean): Long {
@@ -44,9 +51,10 @@ object VaultGenerationManager {
             return initialGen
         }
 
-        if (file.length() != RECORD_SIZE_BYTES.toLong()) {
+        val len = file.length()
+        if (len != RECORD_SIZE_BYTES.toLong() && len != LEGACY_RECORD_SIZE_BYTES.toLong()) {
             throw GenerationCorruptionException(
-                "Corrupt generation file '$fileName': length is ${file.length()} bytes, expected $RECORD_SIZE_BYTES bytes. RECOVERY_REQUIRED."
+                "Corrupt generation file '$fileName': length is $len bytes, expected $RECORD_SIZE_BYTES bytes. RECOVERY_REQUIRED."
             )
         }
 
@@ -78,6 +86,16 @@ object VaultGenerationManager {
                     "Invalid generation epoch in '$fileName': $gen < 1. RECOVERY_REQUIRED."
                 )
             }
+
+            if (bytes.size == RECORD_SIZE_BYTES) {
+                val iv = bytes.copyOfRange(24, 36)
+                val tag = bytes.copyOfRange(36, 52)
+                verifyAuthenticationTag(context, bytes, iv, tag)
+            } else if (bytes.size == LEGACY_RECORD_SIZE_BYTES) {
+                // Transparently upgrade unauthenticated legacy record to authenticated record
+                persistGeneration(context, isDecoy, gen)
+            }
+
             gen
         } catch (e: GenerationCorruptionException) {
             throw e
@@ -95,19 +113,42 @@ object VaultGenerationManager {
     }
 
     /**
-     * Prepares a durable generation intent for two-phase commit during atomic restores.
+     * Prepares a durable, authenticated generation intent for two-phase commit during atomic restores.
      */
     @Synchronized
     fun prepareGenerationIntent(context: Context, isDecoy: Boolean, nextGen: Long): File {
         val intentFileName = if (isDecoy) DECOY_INTENT_FILE else REAL_INTENT_FILE
         val intentFile = File(context.filesDir, intentFileName)
-        val bytes = buildGenerationRecord(nextGen)
+        val bytes = buildGenerationRecord(context, nextGen)
         FileOutputStream(intentFile).use { fos ->
             fos.write(bytes)
             fos.flush()
             fos.fd.sync()
         }
         return intentFile
+    }
+
+    /**
+     * Checks and recovers an orphaned generation intent file if no active restore journal governs it.
+     */
+    @Synchronized
+    fun recoverPendingIntentIfAny(context: Context, isDecoy: Boolean): Boolean {
+        val intentFileName = if (isDecoy) DECOY_INTENT_FILE else REAL_INTENT_FILE
+        val intentFile = File(context.filesDir, intentFileName)
+        if (!intentFile.exists()) return false
+
+        val journal = VaultRestoreJournal.readJournal(context)
+        if (journal != null) {
+            // Restore journal manages recovery
+            return false
+        }
+
+        Log.w(TAG, "Cleaning orphaned generation intent file: $intentFileName")
+        return try {
+            intentFile.delete()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
@@ -119,10 +160,17 @@ object VaultGenerationManager {
         val targetFile = File(context.filesDir, fileName)
 
         val sourceFile = if (intentFile != null && intentFile.exists()) {
+            // Verify intent integrity & authenticity prior to commit
+            val intentBytes = intentFile.readBytes()
+            if (intentBytes.size == RECORD_SIZE_BYTES) {
+                val iv = intentBytes.copyOfRange(24, 36)
+                val tag = intentBytes.copyOfRange(36, 52)
+                verifyAuthenticationTag(context, intentBytes, iv, tag)
+            }
             intentFile
         } else {
             val tempFile = File(context.filesDir, "$fileName.tmp")
-            val bytes = buildGenerationRecord(nextGen)
+            val bytes = buildGenerationRecord(context, nextGen)
             FileOutputStream(tempFile).use { fos ->
                 fos.write(bytes)
                 fos.flush()
@@ -158,7 +206,7 @@ object VaultGenerationManager {
         val targetFile = File(context.filesDir, fileName)
         val tempFile = File(context.filesDir, "$fileName.tmp")
         try {
-            val bytes = buildGenerationRecord(gen)
+            val bytes = buildGenerationRecord(context, gen)
             FileOutputStream(tempFile).use { fos ->
                 fos.write(bytes)
                 fos.flush()
@@ -176,15 +224,45 @@ object VaultGenerationManager {
         }
     }
 
-    private fun buildGenerationRecord(gen: Long): ByteArray {
-        val bb = ByteBuffer.allocate(RECORD_SIZE_BYTES)
-        bb.putInt(MAGIC_GEN.toInt())
-        bb.putLong(gen)
-        bb.putLong(System.currentTimeMillis())
+    private fun buildGenerationRecord(context: Context, gen: Long): ByteArray {
+        val header = ByteBuffer.allocate(24)
+        header.putInt(MAGIC_GEN.toInt())
+        header.putLong(gen)
+        header.putLong(System.currentTimeMillis())
 
         val crcCalculator = CRC32()
-        crcCalculator.update(bb.array(), 0, 20)
-        bb.putInt(crcCalculator.value.toInt())
-        return bb.array()
+        crcCalculator.update(header.array(), 0, 20)
+        header.putInt(crcCalculator.value.toInt())
+
+        val (iv, authTag) = computeAuthenticationTag(context, header.array())
+        val fullRecord = ByteBuffer.allocate(RECORD_SIZE_BYTES)
+        fullRecord.put(header.array())
+        fullRecord.put(iv)
+        fullRecord.put(authTag)
+        return fullRecord.array()
+    }
+
+    private fun computeAuthenticationTag(context: Context, recordHeaderBytes: ByteArray): Pair<ByteArray, ByteArray> {
+        val key = VaultKeyManager.getOrCreateKey(VaultKeyAliases.ALIAS_GENERATION_AUTH)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.updateAAD(recordHeaderBytes, 0, 24)
+        val authTag = cipher.doFinal() // 16-byte authentication tag
+        return Pair(cipher.iv, authTag)
+    }
+
+    private fun verifyAuthenticationTag(context: Context, recordBytes: ByteArray, iv: ByteArray, tag: ByteArray) {
+        try {
+            val key = VaultKeyManager.getOrCreateKey(VaultKeyAliases.ALIAS_GENERATION_AUTH)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            cipher.updateAAD(recordBytes, 0, 24)
+            cipher.doFinal(tag)
+        } catch (e: Exception) {
+            throw GenerationCorruptionException(
+                "Generation record cryptographic authentication failed: Tamper detected. RECOVERY_REQUIRED.",
+                e
+            )
+        }
     }
 }

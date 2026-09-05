@@ -3,6 +3,8 @@ package com.quantumvault.wkqpx
 import android.app.Application
 import android.content.Intent
 import android.util.Log
+import com.quantumvault.wkqpx.security.VaultBackupManager
+import com.quantumvault.wkqpx.security.VaultGenerationManager
 import com.quantumvault.wkqpx.ui.screens.ErrorFallbackActivity
 import com.quantumvault.wkqpx.util.VaultLogger
 import net.sqlcipher.database.SQLiteDatabase
@@ -17,6 +19,14 @@ class VaultApplication : Application() {
         
         setupGlobalExceptionHandler()
         VaultLogger.log(this, "VaultApplication", "Quantum Vault Application starting up")
+
+        try {
+            VaultBackupManager.recoverPendingRestoreIfAny(this)
+            VaultGenerationManager.recoverPendingIntentIfAny(this, isDecoy = false)
+            VaultGenerationManager.recoverPendingIntentIfAny(this, isDecoy = true)
+        } catch (e: Exception) {
+            Log.e("VaultApplication", "Failed during crash recovery checks on startup", e)
+        }
 
         try {
             SQLiteDatabase.loadLibs(this)

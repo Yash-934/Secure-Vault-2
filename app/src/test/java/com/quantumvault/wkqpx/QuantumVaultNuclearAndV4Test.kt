@@ -16,7 +16,12 @@ import com.quantumvault.wkqpx.security.InvalidBackupPasswordException
 import com.quantumvault.wkqpx.security.CorruptedBackupException
 import com.quantumvault.wkqpx.security.BackupManifestIntegrityException
 import com.quantumvault.wkqpx.security.GenerationCorruptionException
+import com.quantumvault.wkqpx.security.VaultRestoreJournal
+import com.quantumvault.wkqpx.security.RestoreJournalRecord
+import com.quantumvault.wkqpx.security.RestoreJournalState
 import com.quantumvault.wkqpx.security.Argon2Kdf
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -649,6 +654,306 @@ class QuantumVaultNuclearAndV4Test {
             parallelism = 1
         )
         org.junit.Assert.assertArrayEquals(key.encoded, key2.encoded)
+    }
+
+    @Test
+    fun `test crash-consistent restore rolls back FS_SWAPPED state during startup recovery`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+
+        val vaultDir = File(context.filesDir, "vault_data")
+        vaultDir.mkdirs()
+        // Simulate an uncommitted new generation that was moved to vaultDir during restore
+        val newGenFile = File(vaultDir, "new_uncommitted_file.enc")
+        newGenFile.writeBytes("NEW_GEN_DATA".toByteArray())
+
+        // Simulate prevDir holding the original valid generation files
+        val prevDir = File(context.filesDir, "vault_data_prev_gen_test")
+        prevDir.mkdirs()
+        val originalFile = File(prevDir, "original_safe_file.enc")
+        originalFile.writeBytes("ORIGINAL_SAFE_DATA".toByteArray())
+
+        val currentGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+        val nextGen = currentGen + 1L
+        val intentFile = VaultGenerationManager.prepareGenerationIntent(context, isDecoy = false, nextGen)
+
+        // Write FS_SWAPPED journal record
+        VaultRestoreJournal.recordState(
+            context,
+            RestoreJournalRecord(
+                state = RestoreJournalState.FS_SWAPPED.name,
+                isDecoy = false,
+                nextGen = nextGen,
+                intentFileName = intentFile.name,
+                vaultDirPath = vaultDir.absolutePath,
+                backupPrevGenDirPath = prevDir.absolutePath,
+                nextGenDirPath = "",
+                isMergeMode = false
+            )
+        )
+
+        assertTrue(VaultRestoreJournal.hasPendingRestore(context))
+
+        // Execute recovery as would happen on App Startup
+        val recovered = VaultBackupManager.recoverPendingRestoreIfAny(context)
+        assertTrue("Pending restore in FS_SWAPPED must be recovered", recovered)
+
+        // Verify Journal cleared
+        assertFalse("Restore journal must be cleared after recovery", VaultRestoreJournal.hasPendingRestore(context))
+
+        // Verify vaultDir was rolled back to the original safe content
+        val restoredOriginal = File(vaultDir, "original_safe_file.enc")
+        assertTrue("Original file must be restored to vaultDir", restoredOriginal.exists())
+        assertEquals("ORIGINAL_SAFE_DATA", restoredOriginal.readText())
+
+        // Verify uncommitted file is removed and prevDir is cleaned up
+        val lingeringNewFile = File(vaultDir, "new_uncommitted_file.enc")
+        assertFalse("Uncommitted file must be removed", lingeringNewFile.exists())
+        assertFalse("prevDir must be cleaned up", prevDir.exists())
+        assertFalse("Intent file must be cleaned up", intentFile.exists())
+    }
+
+    @Test
+    fun `test crash-consistent restore rolls forward DB_COMMITTED state during startup recovery`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+
+        val vaultDir = File(context.filesDir, "vault_data")
+        vaultDir.mkdirs()
+        val committedFile = File(vaultDir, "committed_file.enc")
+        committedFile.writeBytes("COMMITTED_DATA".toByteArray())
+
+        val prevDir = File(context.filesDir, "vault_data_prev_gen_test2")
+        prevDir.mkdirs()
+        val oldFile = File(prevDir, "old_file.enc")
+        oldFile.writeBytes("OLD_DATA".toByteArray())
+
+        val currentGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+        val nextGen = currentGen + 1L
+        val intentFile = VaultGenerationManager.prepareGenerationIntent(context, isDecoy = false, nextGen)
+
+        // Write DB_COMMITTED journal record
+        VaultRestoreJournal.recordState(
+            context,
+            RestoreJournalRecord(
+                state = RestoreJournalState.DB_COMMITTED.name,
+                isDecoy = false,
+                nextGen = nextGen,
+                intentFileName = intentFile.name,
+                vaultDirPath = vaultDir.absolutePath,
+                backupPrevGenDirPath = prevDir.absolutePath,
+                nextGenDirPath = "",
+                isMergeMode = false
+            )
+        )
+
+        assertTrue(VaultRestoreJournal.hasPendingRestore(context))
+
+        // Execute recovery
+        val recovered = VaultBackupManager.recoverPendingRestoreIfAny(context)
+        assertTrue("Pending restore in DB_COMMITTED must be recovered", recovered)
+
+        // Verify generation was advanced to nextGen
+        val activeGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+        assertEquals("Active generation must be committed to nextGen", nextGen, activeGen)
+
+        // Verify prevDir and intent cleaned up
+        assertFalse("Restore journal must be cleared", VaultRestoreJournal.hasPendingRestore(context))
+        assertFalse("prevDir must be deleted", prevDir.exists())
+        assertFalse("intentFile must be deleted", intentFile.exists())
+        assertTrue("Committed file remains in vaultDir", committedFile.exists())
+    }
+
+    @Test
+    fun `test merge mode restore atomically rolls back modified and added files on failure`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+
+        val vaultDir = repo.getVaultDirectory(context)
+
+        // Create an existing file and item in vault
+        val existingFile = File(vaultDir, "existing_doc.bin")
+        java.io.FileOutputStream(existingFile).use { fos ->
+            com.quantumvault.wkqpx.security.CryptoManager.encryptStream(ByteArrayInputStream("ORIGINAL_EXISTING_DOCUMENT".toByteArray(Charsets.UTF_8)), fos)
+        }
+        val existingItem = VaultItem(
+            id = 0L,
+            originalName = "my_doc.txt",
+            encryptedFileName = "existing_doc.bin",
+            mimeType = "text/plain",
+            sizeBytes = existingFile.length(),
+            addedTimestamp = System.currentTimeMillis(),
+            isVideo = false,
+            folderName = "Root"
+        )
+        db.vaultDao().insertVaultItem(existingItem)
+
+        // Export a backup with a different item
+        val newVaultFile = File(vaultDir, "new_file.bin")
+        java.io.FileOutputStream(newVaultFile).use { fos ->
+            com.quantumvault.wkqpx.security.CryptoManager.encryptStream(ByteArrayInputStream("NEW_FILE_PAYLOAD".toByteArray(Charsets.UTF_8)), fos)
+        }
+        val newItem = VaultItem(
+            id = 0L,
+            originalName = "new_doc.txt",
+            encryptedFileName = "new_file.bin",
+            mimeType = "text/plain",
+            sizeBytes = newVaultFile.length(),
+            addedTimestamp = System.currentTimeMillis(),
+            isVideo = false,
+            folderName = "Root"
+        )
+        db.vaultDao().insertVaultItem(newItem)
+
+        val backupPassword = "MergeBackupPassword123!"
+        val backupOut = ByteArrayOutputStream()
+        val exportResult = VaultBackupManager.exportMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            outputStream = backupOut,
+            vaultRepository = repo,
+            isDeviceLocked = false
+        )
+        assertTrue(exportResult.isSuccess)
+
+        // Delete newItem from db and disk to simulate receiving it from external backup
+        db.vaultDao().deleteVaultItem(newItem)
+        newVaultFile.delete()
+
+        // Attempt merge-mode restore with fault injection before generation commit
+        val restoreResult = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            inputStream = ByteArrayInputStream(backupOut.toByteArray()),
+            vaultRepository = repo,
+            isReplaceMode = false,
+            testFaultInjectionHook = { phase ->
+                if (phase == RestoreFaultPhase.BEFORE_GENERATION_COMMIT) {
+                    throw RuntimeException("SIMULATED_CRASH_BEFORE_GEN_COMMIT")
+                }
+            }
+        )
+
+        assertFalse("Merge restore should fail on fault injection", restoreResult.isSuccess)
+
+        // Verify existing file is preserved and rollback restored state
+        assertTrue("Existing original file must be preserved", existingFile.exists())
+        val decryptedExisting = ByteArrayOutputStream()
+        java.io.FileInputStream(existingFile).use { fis ->
+            com.quantumvault.wkqpx.security.CryptoManager.decryptStreamToOutputStream(fis, decryptedExisting)
+        }
+        assertEquals("ORIGINAL_EXISTING_DOCUMENT", decryptedExisting.toString(Charsets.UTF_8.name()))
+        assertFalse("Restore journal must be cleared", VaultRestoreJournal.hasPendingRestore(context))
+    }
+
+    @Test
+    fun `test V4 backup validates exact manifest-payload bijection and rejects unmanifested orphan payload`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+
+        val vaultDir = repo.getVaultDirectory(context)
+        val file1 = File(vaultDir, "file1.bin")
+        java.io.FileOutputStream(file1).use { fos ->
+            com.quantumvault.wkqpx.security.CryptoManager.encryptStream(ByteArrayInputStream("PAYLOAD_ONE".toByteArray(Charsets.UTF_8)), fos)
+        }
+        val item1 = VaultItem(
+            id = 0L,
+            originalName = "test1.txt",
+            encryptedFileName = "file1.bin",
+            mimeType = "text/plain",
+            sizeBytes = file1.length(),
+            addedTimestamp = System.currentTimeMillis(),
+            isVideo = false,
+            folderName = "Root"
+        )
+        db.vaultDao().insertVaultItem(item1)
+
+        val backupPassword = "BijectionPassword123!"
+        val backupOut = ByteArrayOutputStream()
+        val exportResult = VaultBackupManager.exportMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            outputStream = backupOut,
+            vaultRepository = repo,
+            isDeviceLocked = false
+        )
+        assertTrue(exportResult.isSuccess)
+
+        // Step 1: Normal restore must succeed
+        val restoreResult = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            inputStream = ByteArrayInputStream(backupOut.toByteArray()),
+            vaultRepository = repo,
+            isReplaceMode = true
+        )
+        assertTrue("Normal V4 restore must succeed: ${restoreResult.exceptionOrNull()?.message}", restoreResult.isSuccess)
+
+        // Step 2: Inject an undeclared/orphaned file into the inner zip
+        val backupBytes = backupOut.toByteArray()
+        val header = backupBytes.copyOfRange(0, 41)
+        val salt = backupBytes.copyOfRange(9, 25)
+        val bb = java.nio.ByteBuffer.wrap(backupBytes, 25, 16)
+        val memoryKb = bb.getInt()
+        val iterations = bb.getInt()
+        val parallelism = bb.getInt()
+
+        val derivedKey = Argon2Kdf.deriveKey(
+            backupPassword.toCharArray(),
+            salt,
+            memoryKb = memoryKb,
+            iterations = iterations,
+            parallelism = parallelism
+        )
+
+        val payloadStream = ByteArrayInputStream(backupBytes, 41, backupBytes.size - 41)
+        val chunkedIn = VaultBackupManager.ChunkedGcmInputStream(payloadStream, derivedKey, useAad = true)
+        val decryptedZipBytes = chunkedIn.readBytes()
+
+        // Re-pack inner zip adding an unmanifested payload: "vault_data_v4/unmanifested_trojan.enc"
+        val modifiedZipOut = ByteArrayOutputStream()
+        val zis = java.util.zip.ZipInputStream(ByteArrayInputStream(decryptedZipBytes))
+        val zos = ZipOutputStream(modifiedZipOut)
+
+        var entry = zis.nextEntry
+        while (entry != null) {
+            zos.putNextEntry(ZipEntry(entry.name))
+            zis.copyTo(zos)
+            zos.closeEntry()
+            entry = zis.nextEntry
+        }
+        // Add undeclared payload
+        zos.putNextEntry(ZipEntry("vault_data_v4/unmanifested_trojan.enc"))
+        zos.write("EVIL_PAYLOAD".toByteArray())
+        zos.closeEntry()
+        zos.finish()
+
+        // Re-encrypt modified zip using ChunkedGcmOutputStream with V4 header
+        val tamperedBackupOut = ByteArrayOutputStream()
+        tamperedBackupOut.write(header)
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(tamperedBackupOut, derivedKey)
+        chunkedOut.write(modifiedZipOut.toByteArray())
+        chunkedOut.close()
+
+        // Step 3: Attempt restore with tampered zip containing undeclared payload
+        val tamperedRestoreResult = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            inputStream = ByteArrayInputStream(tamperedBackupOut.toByteArray()),
+            vaultRepository = repo,
+            isReplaceMode = true
+        )
+
+        assertFalse("Restore must fail when archive contains unmanifested payload", tamperedRestoreResult.isSuccess)
+        val ex = tamperedRestoreResult.exceptionOrNull()
+        assertTrue(
+            "Exception must be BackupManifestIntegrityException: ${ex?.message}",
+            ex is BackupManifestIntegrityException && ex.message?.contains("undeclared") == true
+        )
     }
 }
 

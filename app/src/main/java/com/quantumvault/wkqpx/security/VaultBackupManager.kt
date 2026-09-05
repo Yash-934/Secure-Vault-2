@@ -558,7 +558,7 @@ object VaultBackupManager {
 
                 onProgress?.invoke(0, items.size, "Writing Metadata Manifests...", totalBytesWritten)
 
-                // 0. Add backup_manifest_v4.json (V4 authenticated inventory with SHA-256 and realm binding)
+                // 0. Add backup_manifest_v4.json (V4 authenticated inventory with UUID payloadId, SHA-256 and realm binding)
                 val fileEntries = mutableListOf<BackupFileEntry>()
                 for (item in items) {
                     val file = File(vaultDir, item.encryptedFileName)
@@ -566,11 +566,12 @@ object VaultBackupManager {
                         throw IllegalStateException("Vault item '${item.originalName}' (${item.encryptedFileName}) missing or empty on disk! Cannot create consistent V4 backup.")
                     }
                     val sha = computePlaintextSha256(file)
-                    val archivePath = "vault_data_v2/${item.encryptedFileName}"
+                    val uniquePayloadId = "v4_${java.util.UUID.randomUUID().toString().replace("-", "")}"
+                    val archivePath = "vault_data_v4/$uniquePayloadId.enc"
                     fileEntries.add(
                         BackupFileEntry(
                             itemId = item.id,
-                            payloadId = item.encryptedFileName,
+                            payloadId = uniquePayloadId,
                             archivePath = archivePath,
                             fileName = item.encryptedFileName,
                             originalName = item.originalName,
@@ -651,13 +652,16 @@ object VaultBackupManager {
                     zos.closeEntry()
                 }
 
-                // 5. Add encrypted vault file payloads
+                // 5. Add encrypted vault file payloads mapped to unique payloadId in V4
                 items.forEachIndexed { index, item ->
                     onProgress?.invoke(index + 1, items.size, item.originalName, totalBytesWritten)
                     val file = File(vaultDir, item.encryptedFileName)
                     if (file.exists() && file.length() > 0) {
                         try {
-                            zos.putNextEntry(ZipEntry("vault_data_v2/${item.encryptedFileName}"))
+                            val entry = fileEntries.find { it.itemId == item.id && it.fileName == item.encryptedFileName }
+                                ?: fileEntries.find { it.fileName == item.encryptedFileName }
+                            val entryPath = entry?.archivePath ?: "vault_data_v4/v4_${item.encryptedFileName}"
+                            zos.putNextEntry(ZipEntry(entryPath))
                             FileInputStream(file).buffered(65536).use { fis ->
                                 CryptoManager.decryptStreamToOutputStream(fis, zos)
                             }
@@ -986,6 +990,12 @@ object VaultBackupManager {
                 }
             } catch (e: BackupException) {
                 throw e
+            } catch (e: AEADBadTagException) {
+                throw InvalidBackupPasswordException("INCORRECT_BACKUP_PASSWORD: Password invalid for V4 archive.", e)
+            } catch (e: IllegalStateException) {
+                throw CorruptedBackupException("Corrupted V4 backup stream: ${e.message}", e)
+            } catch (e: java.io.IOException) {
+                throw CorruptedBackupException("Corrupted V4 backup stream I/O failure: ${e.message}", e)
             } catch (e: Exception) {
                 throw InvalidBackupPasswordException("INCORRECT_BACKUP_PASSWORD: Password invalid for V4 archive.", e)
             } finally {
@@ -1443,6 +1453,100 @@ object VaultBackupManager {
     }
 
     /**
+     * Crash-Consistent Disaster Recovery Engine: Recovers unfinalized restore transactions
+     * across filesystem generation directories, database, and generation metadata.
+     */
+    @Synchronized
+    fun recoverPendingRestoreIfAny(context: Context): Boolean {
+        val journal = VaultRestoreJournal.readJournal(context) ?: return false
+        Log.w(TAG, "Pending restore journal detected in state: ${journal.state}, gen: ${journal.nextGen}, mergeMode=${journal.isMergeMode}")
+
+        val isDecoy = journal.isDecoy
+        val vaultDir = File(journal.vaultDirPath)
+        val prevDir = if (journal.backupPrevGenDirPath.isNotBlank()) File(journal.backupPrevGenDirPath) else null
+        val nextGenDir = File(journal.nextGenDirPath)
+        val intentFile = File(context.filesDir, journal.intentFileName)
+
+        try {
+            if (journal.isMergeMode) {
+                val replacedDir = journal.replacedFilesBackupDirPath?.let { File(it) }
+                when (journal.state) {
+                    RestoreJournalState.PREPARED.name,
+                    RestoreJournalState.FS_SWAPPED.name -> {
+                        Log.i(TAG, "Recovery: Reverting uncommitted merge restore.")
+                        journal.newlyAddedFilesPaths.forEach { path ->
+                            try { File(path).delete() } catch (_: Exception) {}
+                        }
+                        if (replacedDir != null && replacedDir.exists()) {
+                            replacedDir.listFiles()?.forEach { orig ->
+                                val dest = File(vaultDir, orig.name)
+                                try {
+                                    Files.move(orig.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                                } catch (_: Exception) {}
+                            }
+                            try { replacedDir.deleteRecursively() } catch (_: Exception) {}
+                        }
+                        try { intentFile.delete() } catch (_: Exception) {}
+                        try { nextGenDir.deleteRecursively() } catch (_: Exception) {}
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                    RestoreJournalState.DB_COMMITTED.name -> {
+                        Log.i(TAG, "Recovery: Merge restore DB committed. Rolling forward generation commit.")
+                        VaultGenerationManager.commitGeneration(context, isDecoy, journal.nextGen, intentFile)
+                        if (replacedDir != null && replacedDir.exists()) {
+                            try { replacedDir.deleteRecursively() } catch (_: Exception) {}
+                        }
+                        try { nextGenDir.deleteRecursively() } catch (_: Exception) {}
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                    RestoreJournalState.COMPLETED.name -> {
+                        if (replacedDir != null && replacedDir.exists()) {
+                            try { replacedDir.deleteRecursively() } catch (_: Exception) {}
+                        }
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                }
+            } else {
+                when (journal.state) {
+                    RestoreJournalState.PREPARED.name -> {
+                        Log.i(TAG, "Recovery: Aborting PREPARED restore transaction. Cleaning staging artifacts.")
+                        try { nextGenDir.deleteRecursively() } catch (_: Exception) {}
+                        try { intentFile.delete() } catch (_: Exception) {}
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                    RestoreJournalState.FS_SWAPPED.name -> {
+                        Log.w(TAG, "Recovery: Crash occurred during FS_SWAPPED (DB uncommitted). Rolling back FS to match old DB.")
+                        if (vaultDir.exists()) {
+                            vaultDir.deleteRecursively()
+                        }
+                        if (prevDir != null && prevDir.exists()) {
+                            Files.move(prevDir.toPath(), vaultDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                        }
+                        try { intentFile.delete() } catch (_: Exception) {}
+                        try { nextGenDir.deleteRecursively() } catch (_: Exception) {}
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                    RestoreJournalState.DB_COMMITTED.name -> {
+                        Log.i(TAG, "Recovery: DB was committed! Rolling forward generation commit to match new DB and FS.")
+                        VaultGenerationManager.commitGeneration(context, isDecoy, journal.nextGen, intentFile)
+                        try { prevDir?.deleteRecursively() } catch (_: Exception) {}
+                        try { nextGenDir.deleteRecursively() } catch (_: Exception) {}
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                    RestoreJournalState.COMPLETED.name -> {
+                        try { prevDir?.deleteRecursively() } catch (_: Exception) {}
+                        VaultRestoreJournal.clearJournal(context)
+                    }
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Fatal error during pending restore recovery", e)
+            throw e
+        }
+    }
+
+    /**
      * Restores an encrypted backup archive with strict integrity checks, backward compatibility
      * for legacy formats (V3 Argon2id, V2 PBKDF2, V1 PBKDF2, SQLite, and unencrypted standard ZIPs),
      * tolerant payload extraction, and atomic rollback transaction.
@@ -1453,8 +1557,12 @@ object VaultBackupManager {
         inputStream: InputStream,
         vaultRepository: VaultRepository,
         isReplaceMode: Boolean = false,
-        onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)? = null
+        onProgress: ((current: Int, total: Int, currentName: String, bytesProcessed: Long) -> Unit)? = null,
+        testFaultInjectionHook: ((RestoreFaultPhase) -> Unit)? = null
     ): Result<Int> = withContext(Dispatchers.IO) {
+        val activeFaultHook = testFaultInjectionHook ?: VaultBackupManager.testFaultInjectionHook
+        recoverPendingRestoreIfAny(context)
+
         val stagingDir = File(context.cacheDir, "staging_restore_${System.currentTimeMillis()}").apply { mkdirs() }
         val tempBackupFile = File(context.cacheDir, "temp_import_${System.currentTimeMillis()}.bin")
         var nextGenDir: File? = null
@@ -1648,6 +1756,9 @@ object VaultBackupManager {
                                     }
                                     val sha = sb.toString()
                                     stagedPlaintextShaMap[cleanFileName] = sha
+                                    stagedPlaintextShaMap[entryName] = sha
+                                    val payloadIdKey = cleanFileName.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin")
+                                    stagedPlaintextShaMap[payloadIdKey] = sha
                                     if (uniqueStagedName != cleanFileName) {
                                         stagedPlaintextShaMap[uniqueStagedName] = sha
                                     }
@@ -1655,6 +1766,9 @@ object VaultBackupManager {
 
                                 totalBytesRestored += stagedFile.length()
                                 stagedFiles[cleanFileName] = stagedFile
+                                stagedFiles[entryName] = stagedFile
+                                val payloadIdKey = cleanFileName.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin")
+                                stagedFiles[payloadIdKey] = stagedFile
                                 if (uniqueStagedName != cleanFileName) {
                                     stagedFiles[uniqueStagedName] = stagedFile
                                 }
@@ -1704,36 +1818,53 @@ object VaultBackupManager {
                     throw BackupManifestIntegrityException("Manifest inventory mismatch: fileInventory has $actualInventoryCount entries, but items manifest has $actualItemsCount items.")
                 }
 
-                val declaredPayloads = manifestV4.fileInventory.map { File(it.payloadId.ifBlank { it.fileName }).name }.toSet()
+                val declaredPayloads = manifestV4.fileInventory.mapNotNull { it.payloadId.takeIf { p -> p.isNotBlank() } }.toSet()
+                val declaredArchivePaths = manifestV4.fileInventory.mapNotNull { it.archivePath.takeIf { a -> a.isNotBlank() } }.toSet()
+                val declaredArchiveBaseNames = manifestV4.fileInventory.mapNotNull { File(it.archivePath).name.takeIf { a -> a.isNotBlank() } }.toSet()
                 val declaredFileNames = manifestV4.fileInventory.map { File(it.fileName).name }.toSet()
                 val declaredOrigNames = manifestV4.fileInventory.map { File(it.originalName).name }.toSet()
+                val allDeclaredIdentifiers = declaredPayloads + declaredArchivePaths + declaredArchiveBaseNames + declaredFileNames + declaredOrigNames
 
                 // Check 1: Every declared file in manifest must exist in staged files and match SHA-256
                 for (entry in manifestV4.fileInventory) {
-                    val candidateKey = entry.payloadId.ifBlank { entry.fileName }
-                    val cleanCandidate = File(candidateKey).name
+                    val candidatePayload = entry.payloadId.ifBlank { "" }
+                    val cleanArchiveName = File(entry.archivePath).name
+                    val cleanFileName = File(entry.fileName).name
                     val cleanOrigName = File(entry.originalName).name
-                    val staged = stagedFiles[cleanCandidate] ?: stagedFiles[cleanOrigName]
+
+                    val staged = stagedFiles[candidatePayload]
+                        ?: stagedFiles[cleanArchiveName]
+                        ?: stagedFiles[entry.archivePath]
+                        ?: stagedFiles[cleanFileName]
+                        ?: stagedFiles[cleanOrigName]
                         ?: throw BackupManifestIntegrityException("Backup integrity violation: Declared payload '${entry.payloadId}' (${entry.originalName}) is missing from archive.")
 
-                    val actualSha = stagedPlaintextShaMap[cleanCandidate] ?: stagedPlaintextShaMap[cleanOrigName]
-                    if (actualSha != null) {
-                        if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
-                            throw BackupManifestIntegrityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive payload corrupted or tampered.")
-                        }
-                    } else {
-                        val fileSha = computeSha256Hex(staged)
-                        if (!fileSha.equals(entry.sha256Hex, ignoreCase = true)) {
-                            throw BackupManifestIntegrityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive has been corrupted or tampered.")
-                        }
+                    val actualSha = stagedPlaintextShaMap[candidatePayload]
+                        ?: stagedPlaintextShaMap[cleanArchiveName]
+                        ?: stagedPlaintextShaMap[entry.archivePath]
+                        ?: stagedPlaintextShaMap[cleanFileName]
+                        ?: stagedPlaintextShaMap[cleanOrigName]
+                        ?: computeSha256Hex(staged)
+
+                    if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
+                        throw BackupManifestIntegrityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive payload corrupted or tampered.")
                     }
                 }
 
                 // Check 2: Strict Bijection: Every staged file must be explicitly declared in manifestV4
-                for (stagedKey in stagedFiles.keys) {
-                    val cleanKey = File(stagedKey).name
-                    if (!declaredPayloads.contains(cleanKey) && !declaredFileNames.contains(cleanKey) && !declaredOrigNames.contains(cleanKey)) {
-                        throw BackupManifestIntegrityException("Backup integrity violation: Archive contains undeclared file payload '$cleanKey'. Undeclared entries are forbidden in strict V4.")
+                val physicalStagedFiles = stagedFiles.values.toSet()
+                for (file in physicalStagedFiles) {
+                    val name = file.name
+                    val stripped = name.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin")
+                    val isDeclared = allDeclaredIdentifiers.contains(name) ||
+                                     allDeclaredIdentifiers.contains(stripped) ||
+                                     manifestV4.fileInventory.any {
+                                         it.payloadId == name || it.payloadId == stripped ||
+                                         it.fileName == name || it.originalName == name ||
+                                         File(it.archivePath).name == name || File(it.archivePath).name == stripped
+                                     }
+                    if (!isDeclared) {
+                        throw BackupManifestIntegrityException("Backup integrity violation: Archive contains undeclared file payload '$name'. Undeclared entries are forbidden in strict V4.")
                     }
                 }
             } else if (isV4) {
@@ -1744,7 +1875,36 @@ object VaultBackupManager {
             val finalItemsToInsert = mutableListOf<VaultItem>()
             val matchedStagedNames = mutableSetOf<String>()
 
-            if (!restoredItems.isNullOrEmpty()) {
+            if (manifestV4 != null) {
+                for (entry in manifestV4.fileInventory) {
+                    val candidatePayload = entry.payloadId.ifBlank { "" }
+                    val cleanArchiveName = File(entry.archivePath).name
+                    val cleanFileName = File(entry.fileName).name
+                    val cleanOrigName = File(entry.originalName).name
+
+                    val matched = stagedFiles[candidatePayload]
+                        ?: stagedFiles[cleanArchiveName]
+                        ?: stagedFiles[entry.archivePath]
+                        ?: stagedFiles[cleanFileName]
+                        ?: stagedFiles[cleanOrigName]
+                        ?: throw BackupManifestIntegrityException("Strict V4 Backup validation failed: Item '${entry.originalName}' missing payload in archive.")
+
+                    matchedStagedNames.add(matched.name)
+                    val corresp = restoredItems?.find { it.id == entry.itemId || it.originalName == entry.originalName || it.encryptedFileName == entry.fileName }
+                    finalItemsToInsert.add(
+                        VaultItem(
+                            id = 0L,
+                            originalName = entry.originalName,
+                            encryptedFileName = matched.name,
+                            mimeType = entry.mimeType.ifBlank { corresp?.mimeType ?: inferMimeTypeFromName(entry.originalName) },
+                            sizeBytes = if (entry.sizeBytes > 0) entry.sizeBytes else matched.length(),
+                            addedTimestamp = corresp?.addedTimestamp ?: System.currentTimeMillis(),
+                            isVideo = (entry.mimeType.startsWith("video/") || corresp?.isVideo == true),
+                            folderName = entry.folderName.ifBlank { corresp?.folderName ?: "Root" }
+                        )
+                    )
+                }
+            } else if (!restoredItems.isNullOrEmpty()) {
                 for (item in restoredItems) {
                     val cleanEnc = File(item.encryptedFileName).name
                     val cleanOrig = File(item.originalName).name
@@ -1760,11 +1920,7 @@ object VaultBackupManager {
                             )
                         )
                     } else {
-                        if (isV4) {
-                            throw BackupManifestIntegrityException("Strict V4 Backup validation failed: Item '${item.originalName}' missing payload in archive.")
-                        } else {
-                            Log.w(TAG, "Item '${item.originalName}' (file: ${item.encryptedFileName}) missing from backup files.")
-                        }
+                        Log.w(TAG, "Item '${item.originalName}' (file: ${item.encryptedFileName}) missing from backup files.")
                     }
                 }
             }
@@ -1808,7 +1964,7 @@ object VaultBackupManager {
                 }
             }
 
-            // Phase 5: Atomic Switch & Database Commit
+            // Phase 5: Atomic Switch & Database Commit with Write-Ahead Restore Journal
             onProgress?.invoke(
                 stagedFiles.size + 2,
                 targetTotal,
@@ -1826,13 +1982,44 @@ object VaultBackupManager {
                 val prevDir = backupPrevGenDir!!
                 var switched = false
                 try {
+                    // Record PREPARED state in Journal
+                    VaultRestoreJournal.recordState(
+                        context,
+                        RestoreJournalRecord(
+                            state = RestoreJournalState.PREPARED.name,
+                            isDecoy = isDecoy,
+                            nextGen = nextGen,
+                            intentFileName = genIntentFile.name,
+                            vaultDirPath = vaultDir.absolutePath,
+                            backupPrevGenDirPath = prevDir.absolutePath,
+                            nextGenDirPath = genDir.absolutePath,
+                            isMergeMode = false
+                        )
+                    )
+
                     // Step 1: Atomic filesystem swap (preserving previous generation)
                     if (vaultDir.exists()) {
                         Files.move(vaultDir.toPath(), prevDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
                     }
                     Files.move(genDir.toPath(), vaultDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
                     switched = true
-                    testFaultInjectionHook?.invoke(RestoreFaultPhase.AFTER_FS_SWAP)
+
+                    // Record FS_SWAPPED state in Journal
+                    VaultRestoreJournal.recordState(
+                        context,
+                        RestoreJournalRecord(
+                            state = RestoreJournalState.FS_SWAPPED.name,
+                            isDecoy = isDecoy,
+                            nextGen = nextGen,
+                            intentFileName = genIntentFile.name,
+                            vaultDirPath = vaultDir.absolutePath,
+                            backupPrevGenDirPath = prevDir.absolutePath,
+                            nextGenDirPath = genDir.absolutePath,
+                            isMergeMode = false
+                        )
+                    )
+
+                    activeFaultHook?.invoke(RestoreFaultPhase.AFTER_FS_SWAP)
 
                     // Step 2: Atomic DB transaction
                     db.withTransaction {
@@ -1848,13 +2035,29 @@ object VaultBackupManager {
                             db.vaultDao().insertVaultItem(item)
                             restoredCount++
                         }
-                        testFaultInjectionHook?.invoke(RestoreFaultPhase.DURING_DB_TRANSACTION)
+                        activeFaultHook?.invoke(RestoreFaultPhase.DURING_DB_TRANSACTION)
                     }
 
+                    // Record DB_COMMITTED state in Journal
+                    VaultRestoreJournal.recordState(
+                        context,
+                        RestoreJournalRecord(
+                            state = RestoreJournalState.DB_COMMITTED.name,
+                            isDecoy = isDecoy,
+                            nextGen = nextGen,
+                            intentFileName = genIntentFile.name,
+                            vaultDirPath = vaultDir.absolutePath,
+                            backupPrevGenDirPath = prevDir.absolutePath,
+                            nextGenDirPath = genDir.absolutePath,
+                            isMergeMode = false
+                        )
+                    )
+
                     // Step 3: Advance generation epoch atomically via prepared intent
-                    testFaultInjectionHook?.invoke(RestoreFaultPhase.BEFORE_GENERATION_COMMIT)
+                    activeFaultHook?.invoke(RestoreFaultPhase.BEFORE_GENERATION_COMMIT)
                     VaultGenerationManager.commitGeneration(context, isDecoy, nextGen, genIntentFile)
                     prevDir.deleteRecursively()
+                    VaultRestoreJournal.clearJournal(context)
 
                     val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
                     try { thumbDir.deleteRecursively(); thumbDir.mkdirs() } catch (_: Exception) {}
@@ -1869,21 +2072,64 @@ object VaultBackupManager {
                             Files.move(prevDir.toPath(), vaultDir.toPath(), StandardCopyOption.ATOMIC_MOVE)
                         }
                     }
+                    VaultRestoreJournal.clearJournal(context)
                     throw t
                 }
             } else {
-                // Merge Mode: Move verified files into vaultDir and commit DB
+                // Merge Mode: Transactional Restore with Atomic Rollback of Replaced & Added Files
+                val replacedFilesBackupDir = File(context.filesDir, "merge_replaced_${System.currentTimeMillis()}").apply { mkdirs() }
                 val newlyAddedFiles = mutableListOf<File>()
+                val replacedOriginals = mutableListOf<File>()
+
                 try {
+                    // Record PREPARED state in Journal
+                    VaultRestoreJournal.recordState(
+                        context,
+                        RestoreJournalRecord(
+                            state = RestoreJournalState.PREPARED.name,
+                            isDecoy = isDecoy,
+                            nextGen = nextGen,
+                            intentFileName = genIntentFile.name,
+                            vaultDirPath = vaultDir.absolutePath,
+                            backupPrevGenDirPath = "",
+                            nextGenDirPath = genDir.absolutePath,
+                            isMergeMode = true,
+                            replacedFilesBackupDirPath = replacedFilesBackupDir.absolutePath
+                        )
+                    )
+
+                    // Preserve any existing file in vaultDir that would be overwritten
                     genDir.listFiles()?.forEach { file ->
                         val target = File(vaultDir, file.name)
-                        if (target.exists()) target.delete()
+                        if (target.exists()) {
+                            val backupCopy = File(replacedFilesBackupDir, target.name)
+                            Files.move(target.toPath(), backupCopy.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                            replacedOriginals.add(backupCopy)
+                        }
                         if (!file.renameTo(target)) {
                             Files.move(file.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
                         }
                         newlyAddedFiles.add(target)
                     }
-                    testFaultInjectionHook?.invoke(RestoreFaultPhase.AFTER_FS_SWAP)
+
+                    // Record FS_SWAPPED state in Journal
+                    VaultRestoreJournal.recordState(
+                        context,
+                        RestoreJournalRecord(
+                            state = RestoreJournalState.FS_SWAPPED.name,
+                            isDecoy = isDecoy,
+                            nextGen = nextGen,
+                            intentFileName = genIntentFile.name,
+                            vaultDirPath = vaultDir.absolutePath,
+                            backupPrevGenDirPath = "",
+                            nextGenDirPath = genDir.absolutePath,
+                            isMergeMode = true,
+                            replacedFilesBackupDirPath = replacedFilesBackupDir.absolutePath,
+                            newlyAddedFilesPaths = newlyAddedFiles.map { it.absolutePath }
+                        )
+                    )
+
+                    activeFaultHook?.invoke(RestoreFaultPhase.AFTER_FS_SWAP)
 
                     db.withTransaction {
                         restoredFolders?.forEach { try { db.vaultDao().insertFolder(it) } catch (_: Exception) {} }
@@ -1893,21 +2139,51 @@ object VaultBackupManager {
                             db.vaultDao().insertVaultItem(item)
                             restoredCount++
                         }
-                        testFaultInjectionHook?.invoke(RestoreFaultPhase.DURING_DB_TRANSACTION)
+                        activeFaultHook?.invoke(RestoreFaultPhase.DURING_DB_TRANSACTION)
                     }
 
-                    testFaultInjectionHook?.invoke(RestoreFaultPhase.BEFORE_GENERATION_COMMIT)
+                    // Record DB_COMMITTED state in Journal
+                    VaultRestoreJournal.recordState(
+                        context,
+                        RestoreJournalRecord(
+                            state = RestoreJournalState.DB_COMMITTED.name,
+                            isDecoy = isDecoy,
+                            nextGen = nextGen,
+                            intentFileName = genIntentFile.name,
+                            vaultDirPath = vaultDir.absolutePath,
+                            backupPrevGenDirPath = "",
+                            nextGenDirPath = genDir.absolutePath,
+                            isMergeMode = true,
+                            replacedFilesBackupDirPath = replacedFilesBackupDir.absolutePath,
+                            newlyAddedFilesPaths = newlyAddedFiles.map { it.absolutePath }
+                        )
+                    )
+
+                    activeFaultHook?.invoke(RestoreFaultPhase.BEFORE_GENERATION_COMMIT)
                     VaultGenerationManager.commitGeneration(context, isDecoy, nextGen, genIntentFile)
+                    try { replacedFilesBackupDir.deleteRecursively() } catch (_: Exception) {}
+                    VaultRestoreJournal.clearJournal(context)
                 } catch (t: Throwable) {
-                    Log.e(TAG, "Merge restore transaction failed, rolling back newly added files...", t)
+                    Log.e(TAG, "Merge restore transaction failed, rolling back newly added files and restoring replaced originals...", t)
                     try { genIntentFile.delete() } catch (_: Throwable) {}
                     newlyAddedFiles.forEach { try { it.delete() } catch (_: Exception) {} }
+                    replacedOriginals.forEach { origBackup ->
+                        val restoredFile = File(vaultDir, origBackup.name)
+                        try {
+                            Files.move(origBackup.toPath(), restoredFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        } catch (_: Exception) {}
+                    }
+                    try { replacedFilesBackupDir.deleteRecursively() } catch (_: Exception) {}
+                    VaultRestoreJournal.clearJournal(context)
                     throw t
                 }
             }
 
             onProgress?.invoke(restoredCount, restoredCount, "Restoration Complete ($restoredCount files)", totalBytesRestored)
             Result.success(restoredCount)
+        } catch (e: BackupException) {
+            Log.e(TAG, "BackupException during import: ${e.message}", e)
+            Result.failure(e)
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException during import: ${e.message}", e)
             Result.failure(e)
