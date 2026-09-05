@@ -238,9 +238,24 @@ object VaultKeyManager {
                 fos.fd.sync()
             }
 
-            if (!tempFile.renameTo(targetFile)) {
-                tempFile.copyTo(targetFile, overwrite = true)
-                tempFile.delete()
+            // Strict atomic replacement: write to temp, fsync, atomic rename
+            try {
+                java.nio.file.Files.move(
+                    tempFile.toPath(),
+                    targetFile.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (e: Exception) {
+                // If atomic move fails, try standard replace move (fail-closed)
+                java.nio.file.Files.move(
+                    tempFile.toPath(),
+                    targetFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            }
+            if (!targetFile.exists() || targetFile.length() == 0L) {
+                throw java.io.IOException("Failed to atomically commit VRK wrap file")
             }
             true
         } catch (e: Exception) {

@@ -286,9 +286,19 @@ object CryptoManager {
                 }
             }
 
-            if (!tempDestFile.renameTo(destFile)) {
-                tempDestFile.copyTo(destFile, overwrite = true)
-                tempDestFile.delete()
+            try {
+                java.nio.file.Files.move(
+                    tempDestFile.toPath(),
+                    destFile.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (e: Exception) {
+                java.nio.file.Files.move(
+                    tempDestFile.toPath(),
+                    destFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
             }
         } catch (e: Throwable) {
             if (tempDestFile.exists()) {

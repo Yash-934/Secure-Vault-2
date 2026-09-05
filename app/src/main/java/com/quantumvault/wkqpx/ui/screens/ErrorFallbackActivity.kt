@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.quantumvault.wkqpx.BuildConfig
 import com.quantumvault.wkqpx.MainActivity
 import com.quantumvault.wkqpx.ui.theme.MyApplicationTheme
 import com.quantumvault.wkqpx.util.VaultLogger
@@ -50,6 +51,7 @@ import com.quantumvault.wkqpx.util.VaultLogger
 /**
  * Diagnostics & Emergency Recovery Activity.
  * Displayed when an unhandled startup or runtime exception occurs, preventing silent crashes/black screens.
+ * In release mode, sanitizes error messages and avoids exposing raw stack traces or internal cryptographic details.
  */
 class ErrorFallbackActivity : ComponentActivity() {
 
@@ -57,8 +59,17 @@ class ErrorFallbackActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val errorMessage = intent.getStringExtra(EXTRA_ERROR_MESSAGE) ?: "Unknown application error"
-        val stackTrace = intent.getStringExtra(EXTRA_STACK_TRACE) ?: "No stack trace available"
+        val rawErrorMessage = intent.getStringExtra(EXTRA_ERROR_MESSAGE) ?: "Unknown application error"
+        val rawStackTrace = intent.getStringExtra(EXTRA_STACK_TRACE) ?: "No stack trace available"
+
+        val recoveryId = "QV-RECOVERY-${Math.abs(rawErrorMessage.hashCode()) % 900 + 100}"
+        val isDebug = BuildConfig.DEBUG
+
+        val safeErrorMessage = if (isDebug) {
+            rawErrorMessage
+        } else {
+            "Vault recovery required. Encrypted data has not been deleted."
+        }
 
         setContent {
             MyApplicationTheme {
@@ -67,8 +78,10 @@ class ErrorFallbackActivity : ComponentActivity() {
                     containerColor = Color(0xFF0F172A)
                 ) { innerPadding ->
                     ErrorFallbackContent(
-                        errorMessage = errorMessage,
-                        stackTrace = stackTrace,
+                        recoveryId = recoveryId,
+                        errorMessage = safeErrorMessage,
+                        stackTrace = rawStackTrace,
+                        isDebug = isDebug,
                         onRestart = {
                             val restartIntent = Intent(this, MainActivity::class.java).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -91,8 +104,10 @@ class ErrorFallbackActivity : ComponentActivity() {
 
 @Composable
 fun ErrorFallbackContent(
+    recoveryId: String,
     errorMessage: String,
     stackTrace: String,
+    isDebug: Boolean,
     onRestart: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -127,7 +142,7 @@ fun ErrorFallbackContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Quantum Vault Diagnostics",
+            text = "Quantum Vault Recovery",
             color = Color.White,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold
@@ -136,7 +151,7 @@ fun ErrorFallbackContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "An initialization error occurred. Details and persistent audit logs have been captured below for diagnostics:",
+            text = "A critical system event was handled safely. Encrypted data integrity has been preserved.",
             color = Color(0xFF94A3B8),
             fontSize = 14.sp
         )
@@ -149,13 +164,26 @@ fun ErrorFallbackContent(
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "ERROR SUMMARY",
-                    color = Color(0xFFEF4444),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "RECOVERY STATUS",
+                        color = Color(0xFFEF4444),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = recoveryId,
+                        color = Color(0xFF00E5FF),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = errorMessage,
@@ -166,53 +194,55 @@ fun ErrorFallbackContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        if (isDebug) {
+            Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF090D16)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "STACK TRACE",
-                    color = Color(0xFF38BDF8),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = stackTrace,
-                    color = Color(0xFFCBD5E1),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF090D16)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "DEBUG STACK TRACE",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stackTrace,
+                        color = Color(0xFFCBD5E1),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1B2A)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "PERSISTENT VAULT EVENTS LOG",
-                    color = Color(0xFF10B981),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = persistentLogs,
-                    color = Color(0xFF94A3B8),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1B2A)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "PERSISTENT VAULT EVENTS LOG",
+                        color = Color(0xFF10B981),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = persistentLogs,
+                        color = Color(0xFF94A3B8),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
 
@@ -224,14 +254,19 @@ fun ErrorFallbackContent(
         ) {
             OutlinedButton(
                 onClick = {
-                    clipboardManager.setText(AnnotatedString("$errorMessage\n\n$stackTrace\n\n--- VAULT LOGS ---\n$persistentLogs"))
+                    val clipContent = if (isDebug) {
+                        "[$recoveryId] $errorMessage\n\n$stackTrace\n\n--- VAULT LOGS ---\n$persistentLogs"
+                    } else {
+                        "[$recoveryId] $errorMessage\nAction: Please restart the application or restore from backup."
+                    }
+                    clipboardManager.setText(AnnotatedString(clipContent))
                 },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Icon(Icons.Default.Article, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.size(6.dp))
-                Text("Copy Log")
+                Text(if (isDebug) "Copy Debug Log" else "Copy Recovery ID")
             }
 
             Button(

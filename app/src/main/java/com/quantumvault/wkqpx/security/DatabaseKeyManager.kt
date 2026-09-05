@@ -300,9 +300,22 @@ object DatabaseKeyManager {
                 fos.fd.sync()
             }
 
-            if (!tempFile.renameTo(targetFile)) {
-                tempFile.copyTo(targetFile, overwrite = true)
-                tempFile.delete()
+            try {
+                java.nio.file.Files.move(
+                    tempFile.toPath(),
+                    targetFile.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (e: Exception) {
+                java.nio.file.Files.move(
+                    tempFile.toPath(),
+                    targetFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            }
+            if (!targetFile.exists() || targetFile.length() == 0L) {
+                throw java.io.IOException("Failed to atomically commit DBW2 file")
             }
 
             VaultLogger.log(context, TAG, "Generated and securely stored DBW2 wrapper (decoy=$isDecoy)")
