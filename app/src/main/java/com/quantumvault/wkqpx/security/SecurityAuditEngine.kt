@@ -59,183 +59,228 @@ class SecurityAuditEngine @Inject constructor(
                 name = "Network Isolation Sandbox",
                 category = "Environment",
                 passed = internetCheck,
+                status = if (internetCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 10,
-                description = "INTERNET permission strictly removed from manifest",
-                terminalOutput = if (internetCheck) "PASS: Zero network permissions declared. Completely air-gapped from cloud."
-                else "FAIL: INTERNET permission detected in manifest."
+                description = "android.permission.INTERNET strictly removed from application manifest",
+                terminalOutput = if (internetCheck) "PASS: Zero network permissions declared in package manifest. Local sandbox offline execution strictly enforced."
+                else "FAIL: android.permission.INTERNET detected in manifest.",
+                evidence = "INTERNET_PERMISSION_GRANTED = ${!internetCheck}"
             ),
             SecurityCheckItem(
-                name = "Hardware Keystore TEE / StrongBox",
+                name = "Hardware Keystore / Key Storage",
                 category = "Cryptographic",
                 passed = keystoreCheck,
+                status = if (keystoreCheck) {
+                    if (isHardwareBackedKeyStore) AuditCheckStatus.PASS else AuditCheckStatus.PASS
+                } else AuditCheckStatus.FAIL,
                 weight = 10,
-                description = "Hardware-isolated AES-256 master cryptographic key",
-                terminalOutput = if (keystoreCheck) "PASS: Hardware root of trust verified. Keys bound to device TEE."
-                else "FAIL: Hardware Keystore unavailable or key generation failed."
+                description = "Hardware-isolated or software-backed AES-256 master cryptographic key",
+                terminalOutput = if (keystoreCheck) {
+                    if (isHardwareBackedKeyStore) "PASS: Hardware root of trust verified. Key backed by $keystoreSecurityLevelDescription."
+                    else "PASS: Keystore master key generated and verified. Hardware backing: Software / Emulated."
+                } else "FAIL: Keystore unavailable or key generation failed.",
+                evidence = "keystoreAliasExists = $keystoreCheck, isInsideSecureHardware = $isHardwareBackedKeyStore, level = $keystoreSecurityLevelDescription"
             ),
             SecurityCheckItem(
                 name = "Hardware Key Attestation & Nonce",
                 category = "Hardware Attestation",
                 passed = attestationCheck,
+                status = if (attestationCheck) AuditCheckStatus.PASS else if (!isHardwareBackedKeyStore) AuditCheckStatus.NOT_APPLICABLE else AuditCheckStatus.FAIL,
                 weight = 10,
                 description = "Root of trust, verified boot, & randomized challenge replay protection",
                 terminalOutput = if (attestationCheck) "PASS: Attestation challenge nonce verified against hardware keystore."
-                else "FAIL: Attestation challenge verification failed or unsupported."
+                else if (!isHardwareBackedKeyStore) "N/A: Hardware key attestation unsupported by current device profile / emulator environment."
+                else "FAIL: Attestation challenge verification failed.",
+                evidence = "isSystemSecure = ${attestationReport.isSystemSecure}, isChallengeVerified = ${attestationReport.isChallengeVerified}"
             ),
             SecurityCheckItem(
                 name = "Native Code & Memory Integrity Shield",
                 category = "Anti-Reverse Engineering",
                 passed = nativeIntegrityCheck,
+                status = if (nativeIntegrityCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 10,
                 description = "Control flow flattening, opaque predicates & .text self-verification",
                 terminalOutput = if (nativeIntegrityCheck) "PASS: Native binaries uncompromised. Memory checksum validated."
-                else "FAIL: Memory checksum mismatch or debugger hook detected."
+                else "FAIL: Memory checksum mismatch or debugger hook detected.",
+                evidence = "isNativeIntegrityValid = $nativeIntegrityCheck"
             ),
             SecurityCheckItem(
                 name = "In-Memory DEX Protection Engine",
                 category = "Anti-Reverse Engineering",
                 passed = dexMemoryCheck,
+                status = if (dexMemoryCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 10,
                 description = "InMemoryDexClassLoader sandbox with zero disk staging",
                 terminalOutput = if (dexMemoryCheck) "PASS: In-memory runtime execution isolated without disk artifacts."
-                else "FAIL: In-memory dex verification checksum mismatch."
+                else "FAIL: In-memory dex verification checksum mismatch.",
+                evidence = "isChecksumValid = $dexMemoryCheck"
             ),
             SecurityCheckItem(
                 name = "Native String Encryption & Masking",
                 category = "Anti-Reverse Engineering",
                 passed = nativeStringCheck,
+                status = if (nativeStringCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "Polymorphic multi-round XOR string encryption with auto-zeroing",
                 terminalOutput = if (nativeStringCheck) "PASS: String literals encrypted in native memory space."
-                else "FAIL: Native string obfuscation test failed."
+                else "FAIL: Native string obfuscation test failed.",
+                evidence = "obfuscatedStringsResolved = $nativeStringCheck"
             ),
             SecurityCheckItem(
                 name = "Root & Magisk / KernelSU Shield",
                 category = "Anti-Tamper",
                 passed = rootEnvironmentCheck,
+                status = if (rootEnvironmentCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 10,
                 description = "25+ SU binary paths, /proc mountinfo & SELinux verified",
                 terminalOutput = if (rootEnvironmentCheck) "PASS: 25+ SU binary paths & /proc mountinfo verified clean."
-                else "FAIL: Root binary or elevated kernel module detected."
+                else "FAIL: Root binary or elevated kernel module detected.",
+                evidence = "isRooted = ${rootReport.isRooted}, suBinaryFound = ${rootReport.suBinaryFound}"
             ),
             SecurityCheckItem(
                 name = "DEX & Binary Anti-Tamper Checksum",
                 category = "Anti-Tamper",
                 passed = dexIntegrityCheck,
+                status = if (dexIntegrityCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 10,
                 description = "Base APK classes.dex integrity confirmed",
                 terminalOutput = if (dexIntegrityCheck) "PASS: Base APK classes.dex SHA-256 integrity confirmed."
-                else "FAIL: DEX checksum altered or repacked."
+                else "FAIL: DEX checksum altered or repacked.",
+                evidence = "isDexIntegrityValid = $dexIntegrityCheck"
             ),
             SecurityCheckItem(
                 name = "APK Signing Certificate Fingerprint",
                 category = "Anti-Tamper",
                 passed = sigValid,
+                status = if (sigValid) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 10,
                 description = "SHA-256 signature certificate fingerprint validated",
                 terminalOutput = if (sigValid) "PASS: Signature certificate fingerprint valid and untampered."
-                else "FAIL: Signature mismatch or debug certificate detected."
+                else "FAIL: Signature mismatch or debug certificate detected.",
+                evidence = "isSignatureValid = $sigValid"
             ),
             SecurityCheckItem(
                 name = "AES-256-GCM AEAD Streaming",
                 category = "Cryptographic",
                 passed = cryptoCheck,
+                status = if (cryptoCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "Authenticated encryption with 12-byte unique nonce",
-                terminalOutput = if (cryptoCheck) "PASS: Hardware-accelerated AES-256-GCM authenticated cipher active."
-                else "FAIL: AES-GCM cipher initialization failed."
+                terminalOutput = if (cryptoCheck) "PASS: AES-256-GCM authenticated cipher roundtrip verified."
+                else "FAIL: AES-GCM cipher initialization failed.",
+                evidence = "aesGcmRoundtripValid = $cryptoCheck"
             ),
             SecurityCheckItem(
                 name = "Argon2id Memory-Hard KDF Matrix",
                 category = "Cryptographic",
                 passed = argon2Check,
+                status = if (argon2Check) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "Argon2id KDF resisting ASIC/GPU dictionary attacks",
-                terminalOutput = if (argon2Check) "PASS: Argon2id operational (4MB / 2-iter diagnostic derivation verified; production configured at 64MB / 3 iterations)."
-                else "FAIL: Argon2id test computation failed."
+                terminalOutput = if (argon2Check) "PASS: Argon2id operational (Diagnostic derivation verified; production configured at 64MB / 3 iterations / 4 parallelism)."
+                else "FAIL: Argon2id test computation failed.",
+                evidence = "argon2idDiagnosticSuccess = $argon2Check"
             ),
             SecurityCheckItem(
                 name = "Hardware Keystore Device-Binding",
                 category = "Cryptographic",
                 passed = deviceBindingCheck,
+                status = if (deviceBindingCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "Keystore cryptographic key wrapping & backup export binding",
                 terminalOutput = if (deviceBindingCheck) {
                     val hwType = keystoreSecurityLevelDescription
                     "PASS: Keystore device-binding operational ($hwType confirmed; probe alias generated, validated, and cleaned)."
-                } else "FAIL: Hardware Keystore key generation failed."
+                } else "FAIL: Hardware Keystore key generation failed.",
+                evidence = "deviceBindingProbeValid = $deviceBindingCheck, level = $keystoreSecurityLevelDescription"
             ),
             SecurityCheckItem(
                 name = "Anti-Debugging & Ptrace Shield",
                 category = "Anti-Reverse Engineering",
                 passed = antiDebugCheck,
+                status = if (antiDebugCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "Linux TracerPid & active JDWP/GDB detector",
                 terminalOutput = if (antiDebugCheck) "PASS: TracerPid is 0. No ptrace or debug engine attached."
-                else "FAIL: Debugger or ptrace process attachment detected."
+                else "FAIL: Debugger or ptrace process attachment detected.",
+                evidence = "isDebuggerAttached = ${antiTamperReport.isDebuggerAttached}"
             ),
             SecurityCheckItem(
                 name = "Anti-Hooking (Frida / Xposed Shield)",
                 category = "Anti-Reverse Engineering",
                 passed = antiHookCheck,
+                status = if (antiHookCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "Memory maps scan & default Frida port filters",
                 terminalOutput = if (antiHookCheck) "PASS: Dynamic instrumentation and hook frameworks absent."
-                else "FAIL: Injected library or hooking agent detected."
+                else "FAIL: Injected library or hooking agent detected.",
+                evidence = "isHookFrameworkDetected = ${antiTamperReport.isHookFrameworkDetected}, isMemoryTampered = ${antiTamperReport.isMemoryTampered}"
             ),
             SecurityCheckItem(
                 name = "Multi-Vector Screen Capture Shield",
                 category = "Runtime Protection",
                 passed = screenRecordingCheck,
+                status = if (screenRecordingCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 8,
                 description = "FLAG_SECURE, Virtual Display, & /proc screenrecord daemon detector",
                 terminalOutput = if (screenRecordingCheck) "PASS: Screen capture blocked. Surface composition shielded."
-                else "FAIL: Screen recording or virtual display detected."
+                else "FAIL: Screen recording or virtual display detected.",
+                evidence = "isScreenRecordingDetected = ${antiTamperReport.isScreenRecordingDetected}"
             ),
             SecurityCheckItem(
                 name = "Ephemeral Clipboard Auto-Purge",
                 category = "Runtime Protection",
                 passed = clipboardPurgeCheck,
+                status = if (clipboardPurgeCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 6,
                 description = "Auto-purge scheduler & clipboard hygiene engine",
                 terminalOutput = if (clipboardPurgeCheck) "PASS: Ephemeral clipboard hygiene active with verified system ClipboardManager access."
-                else "FAIL: Clipboard service inaccessible."
+                else "FAIL: Clipboard service inaccessible.",
+                evidence = "clipboardServiceAccessible = $clipboardPurgeCheck"
             ),
             SecurityCheckItem(
                 name = "OS Cloud Backup Disabled",
                 category = "Environment",
                 passed = backupDisabledCheck,
+                status = if (backupDisabledCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 5,
                 description = "allowBackup=false & dataExtractionRules prevent ADB, cloud, and D2D data extraction",
                 terminalOutput = if (backupDisabledCheck) "PASS: OS automatic backup disabled (allowBackup=false & strict dataExtractionRules domain exclusions configured)."
-                else "FAIL: allowBackup is true in manifest or dataExtractionRules unconfigured."
+                else "FAIL: allowBackup is true in manifest or dataExtractionRules unconfigured.",
+                evidence = "allowBackupDisabled = $backupDisabledCheck"
             ),
             SecurityCheckItem(
                 name = "App-Private Storage Sandbox",
                 category = "Environment",
                 passed = storageCheck,
+                status = if (storageCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 5,
                 description = "Data stored strictly in app-isolated private sandbox",
                 terminalOutput = if (storageCheck) "PASS: Storage path isolated to internal /data/data sandbox."
-                else "FAIL: External storage fallback detected."
+                else "FAIL: External storage fallback detected.",
+                evidence = "storagePath = ${context.filesDir.absolutePath}, isPrivate = $storageCheck"
             ),
             SecurityCheckItem(
                 name = "Biometric Hardware / Strong Authenticator",
                 category = "Authentication",
                 passed = biometricCheck,
+                status = if (biometricCheck) AuditCheckStatus.PASS else AuditCheckStatus.NOT_APPLICABLE,
                 weight = 5,
                 description = "Biometric prompt & Class 3 biometric security",
-                terminalOutput = if (biometricCheck) "PASS: Class 3 biometric authenticator enrolled and operational."
-                else "FAIL: Biometric hardware unavailable or no biometric credentials enrolled."
+                terminalOutput = if (biometricCheck) "PASS: Class 3 / Strong biometric authenticator enrolled and operational."
+                else "N/A: Biometric hardware unavailable or no biometric credentials currently enrolled on this device.",
+                evidence = "biometricAvailable = $biometricCheck"
             ),
             SecurityCheckItem(
                 name = "Scrambled Matrix Keypad Protection",
                 category = "Authentication",
                 passed = scrambledKeypadCheck,
+                status = if (scrambledKeypadCheck) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
                 weight = 5,
                 description = "Randomized pinpad layout defeating thermal/screen smudges",
                 terminalOutput = if (scrambledKeypadCheck) "PASS: Dynamic keypad permutation active with cryptographically random bijective mapping."
-                else "FAIL: Keypad matrix permutation test failed."
+                else "FAIL: Keypad matrix permutation test failed.",
+                evidence = "permutationBijective = $scrambledKeypadCheck"
             )
         )
 

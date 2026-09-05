@@ -1,12 +1,21 @@
 package com.quantumvault.wkqpx.security
 
+enum class AuditCheckStatus {
+    PASS,
+    FAIL,
+    UNKNOWN,
+    NOT_APPLICABLE
+}
+
 data class SecurityCheckItem(
     val name: String,
     val category: String,
     val passed: Boolean,
+    val status: AuditCheckStatus = if (passed) AuditCheckStatus.PASS else AuditCheckStatus.FAIL,
     val weight: Int,
     val description: String,
-    val terminalOutput: String = ""
+    val terminalOutput: String = "",
+    val evidence: String = ""
 )
 
 /**
@@ -28,3 +37,4 @@ data class AuditResult(
     val checkItems: List<SecurityCheckItem> = emptyList(),
     val timestamp: Long = System.currentTimeMillis()
 )
+

@@ -49,9 +49,32 @@ import com.quantumvault.wkqpx.ui.theme.MyApplicationTheme
 import com.quantumvault.wkqpx.util.VaultLogger
 
 /**
+ * Models defining the strict separation between Debug Diagnostics and Release Emergency Recovery.
+ */
+sealed interface FallbackDisplayModel {
+    val recoveryId: String
+    val timestamp: Long
+
+    data class Release(
+        override val recoveryId: String,
+        val genericGuidance: String = "A critical system event was handled safely. Encrypted data integrity has been preserved.",
+        val actionInstructions: String = "Please restart the application. If this condition persists after restart, restore your vault from a verified backup archive.",
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : FallbackDisplayModel
+
+    data class Debug(
+        override val recoveryId: String,
+        val rawErrorMessage: String,
+        val stackTrace: String,
+        val persistentLogs: String,
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : FallbackDisplayModel
+}
+
+/**
  * Diagnostics & Emergency Recovery Activity.
  * Displayed when an unhandled startup or runtime exception occurs, preventing silent crashes/black screens.
- * In release mode, sanitizes error messages and avoids exposing raw stack traces or internal cryptographic details.
+ * In release mode, strictly uses ReleaseRecoveryModel to avoid leaking internal cryptographic or stack traces.
  */
 class ErrorFallbackActivity : ComponentActivity() {
 
@@ -65,10 +88,17 @@ class ErrorFallbackActivity : ComponentActivity() {
         val recoveryId = "QV-RECOVERY-${Math.abs(rawErrorMessage.hashCode()) % 900 + 100}"
         val isDebug = BuildConfig.DEBUG
 
-        val safeErrorMessage = if (isDebug) {
-            rawErrorMessage
+        val model: FallbackDisplayModel = if (isDebug) {
+            FallbackDisplayModel.Debug(
+                recoveryId = recoveryId,
+                rawErrorMessage = rawErrorMessage,
+                stackTrace = rawStackTrace,
+                persistentLogs = VaultLogger.readLogs(this)
+            )
         } else {
-            "Vault recovery required. Encrypted data has not been deleted."
+            FallbackDisplayModel.Release(
+                recoveryId = recoveryId
+            )
         }
 
         setContent {
@@ -78,10 +108,7 @@ class ErrorFallbackActivity : ComponentActivity() {
                     containerColor = Color(0xFF0F172A)
                 ) { innerPadding ->
                     ErrorFallbackContent(
-                        recoveryId = recoveryId,
-                        errorMessage = safeErrorMessage,
-                        stackTrace = rawStackTrace,
-                        isDebug = isDebug,
+                        model = model,
                         onRestart = {
                             val restartIntent = Intent(this, MainActivity::class.java).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -104,17 +131,12 @@ class ErrorFallbackActivity : ComponentActivity() {
 
 @Composable
 fun ErrorFallbackContent(
-    recoveryId: String,
-    errorMessage: String,
-    stackTrace: String,
-    isDebug: Boolean,
+    model: FallbackDisplayModel,
     onRestart: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
-    val persistentLogs = remember { VaultLogger.readLogs(context) }
 
     Column(
         modifier = modifier
@@ -151,7 +173,10 @@ fun ErrorFallbackContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "A critical system event was handled safely. Encrypted data integrity has been preserved.",
+            text = when (model) {
+                is FallbackDisplayModel.Release -> model.genericGuidance
+                is FallbackDisplayModel.Debug -> "A critical system event was handled safely. Encrypted data integrity has been preserved."
+            },
             color = Color(0xFF94A3B8),
             fontSize = 14.sp
         )
@@ -177,7 +202,7 @@ fun ErrorFallbackContent(
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
-                        text = recoveryId,
+                        text = model.recoveryId,
                         color = Color(0xFF00E5FF),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -186,7 +211,10 @@ fun ErrorFallbackContent(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = errorMessage,
+                    text = when (model) {
+                        is FallbackDisplayModel.Release -> model.actionInstructions
+                        is FallbackDisplayModel.Debug -> model.rawErrorMessage
+                    },
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
@@ -194,7 +222,7 @@ fun ErrorFallbackContent(
             }
         }
 
-        if (isDebug) {
+        if (model is FallbackDisplayModel.Debug) {
             Spacer(modifier = Modifier.height(16.dp))
 
             Card(
@@ -212,7 +240,7 @@ fun ErrorFallbackContent(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = stackTrace,
+                        text = model.stackTrace,
                         color = Color(0xFFCBD5E1),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
@@ -237,7 +265,7 @@ fun ErrorFallbackContent(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = persistentLogs,
+                        text = model.persistentLogs,
                         color = Color(0xFF94A3B8),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
@@ -254,10 +282,11 @@ fun ErrorFallbackContent(
         ) {
             OutlinedButton(
                 onClick = {
-                    val clipContent = if (isDebug) {
-                        "[$recoveryId] $errorMessage\n\n$stackTrace\n\n--- VAULT LOGS ---\n$persistentLogs"
-                    } else {
-                        "[$recoveryId] $errorMessage\nAction: Please restart the application or restore from backup."
+                    val clipContent = when (model) {
+                        is FallbackDisplayModel.Debug ->
+                            "[${model.recoveryId}] ${model.rawErrorMessage}\n\n${model.stackTrace}\n\n--- VAULT LOGS ---\n${model.persistentLogs}"
+                        is FallbackDisplayModel.Release ->
+                            "[${model.recoveryId}] ${model.genericGuidance}\nAction: ${model.actionInstructions}"
                     }
                     clipboardManager.setText(AnnotatedString(clipContent))
                 },
@@ -266,7 +295,7 @@ fun ErrorFallbackContent(
             ) {
                 Icon(Icons.Default.Article, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.size(6.dp))
-                Text(if (isDebug) "Copy Debug Log" else "Copy Recovery ID")
+                Text(if (model is FallbackDisplayModel.Debug) "Copy Debug Log" else "Copy Recovery ID")
             }
 
             Button(

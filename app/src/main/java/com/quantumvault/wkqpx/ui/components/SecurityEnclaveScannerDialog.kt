@@ -587,6 +587,13 @@ private fun FuturisticRadarGauge(
 /**
  * Expandable Security Check Card with Terminal Diagnostic Box
  */
+private data class AuditBadgeStyle(
+    val bg: Color,
+    val border: Color,
+    val text: Color,
+    val label: String
+)
+
 @Composable
 private fun CheckItemCard(
     item: SecurityCheckItem,
@@ -643,24 +650,45 @@ private fun CheckItemCard(
                     }
                 }
 
-                // PASS/FAIL Badge + Chevron
+                // Status Badge (PASS / FAIL / UNKNOWN / N/A) + Chevron
+                val badgeStyle = when (item.status) {
+                    com.quantumvault.wkqpx.security.AuditCheckStatus.PASS -> AuditBadgeStyle(
+                        Color(0xFF003830),
+                        NeonGreen.copy(alpha = 0.4f),
+                        NeonGreen,
+                        "PASS"
+                    )
+                    com.quantumvault.wkqpx.security.AuditCheckStatus.FAIL -> AuditBadgeStyle(
+                        PanicRed.copy(alpha = 0.2f),
+                        PanicRed.copy(alpha = 0.4f),
+                        PanicRed,
+                        "FAIL"
+                    )
+                    com.quantumvault.wkqpx.security.AuditCheckStatus.UNKNOWN -> AuditBadgeStyle(
+                        Color(0xFF3E2723),
+                        Color(0xFFFFB300).copy(alpha = 0.4f),
+                        Color(0xFFFFB300),
+                        "UNKNOWN"
+                    )
+                    com.quantumvault.wkqpx.security.AuditCheckStatus.NOT_APPLICABLE -> AuditBadgeStyle(
+                        Color(0xFF1E293B),
+                        Color(0xFF64748B).copy(alpha = 0.4f),
+                        Color(0xFF94A3B8),
+                        "N/A"
+                    )
+                }
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                if (item.passed) Color(0xFF003830) else PanicRed.copy(alpha = 0.2f)
-                            )
-                            .border(
-                                0.8.dp,
-                                if (item.passed) NeonGreen.copy(alpha = 0.4f) else PanicRed.copy(alpha = 0.4f),
-                                RoundedCornerShape(6.dp)
-                            )
+                            .background(badgeStyle.bg)
+                            .border(0.8.dp, badgeStyle.border, RoundedCornerShape(6.dp))
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Text(
-                            text = if (item.passed) "PASS" else "FAIL",
-                            color = if (item.passed) NeonGreen else PanicRed,
+                            text = badgeStyle.label,
+                            color = badgeStyle.text,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.ExtraBold,
                             fontFamily = FontFamily.Monospace

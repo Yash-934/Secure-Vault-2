@@ -123,12 +123,16 @@ class QuantumVaultNuclearAndV4Test {
             {
                 "formatVersion": 4,
                 "sourceRealm": 1,
+                "backupUuid": "11111111-1111-1111-1111-111111111111",
+                "algorithmSuite": "ARGON2ID_HKDF_AES256GCM_V4",
                 "itemsCount": 1,
                 "foldersCount": 0,
                 "passwordsCount": 0,
                 "logsCount": 0,
                 "fileInventory": [
                     {
+                        "payloadId": "file_1",
+                        "archivePath": "vault_data_v4/file_1.enc",
                         "fileName": "file_1.enc",
                         "originalName": "doc.pdf",
                         "sizeBytes": 100,
@@ -164,7 +168,7 @@ class QuantumVaultNuclearAndV4Test {
             zos.closeEntry()
 
             // File content whose actual SHA-256 does NOT match the manifest's declared 000...000
-            zos.putNextEntry(ZipEntry("vault_data_v2/file_1.enc"))
+            zos.putNextEntry(ZipEntry("vault_data_v4/file_1.enc"))
             zos.write("TAMPERED_OR_CORRUPT_PAYLOAD_BYTES".toByteArray(Charsets.UTF_8))
             zos.closeEntry()
         }
@@ -265,40 +269,57 @@ class QuantumVaultNuclearAndV4Test {
         val derivedKey = com.quantumvault.wkqpx.security.Argon2Kdf.deriveKey(
             backupPassword.toCharArray(),
             salt,
-            memoryKb = 1024,
-            iterations = 1
+            memoryKb = 65536,
+            iterations = 3,
+            parallelism = 1
         )
-
-        val zip1 = ByteArrayOutputStream().also { bos ->
-            ZipOutputStream(bos).use { zos ->
-                zos.putNextEntry(ZipEntry("vault_manifest.json"))
-                zos.write("[]".toByteArray(Charsets.UTF_8))
-                zos.closeEntry()
-            }
-        }.toByteArray()
-
-        val zip2 = ByteArrayOutputStream().also { bos ->
-            ZipOutputStream(bos).use { zos ->
-                zos.putNextEntry(ZipEntry("vault_manifest.json"))
-                zos.write("[]".toByteArray(Charsets.UTF_8))
-                zos.closeEntry()
-            }
-        }.toByteArray()
+        val uuid = "11111111-1111-1111-1111-111111111111"
+        val rootDigest = "0".repeat(64)
+        val cryptoContext = VaultBackupManager.buildCryptoContext(uuid, 1, rootDigest)
 
         val backupOut = ByteArrayOutputStream()
         backupOut.write("VLT_BCK4".toByteArray(Charsets.UTF_8))
         backupOut.write(0)
         backupOut.write(salt)
-        val bb = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.BIG_ENDIAN)
-        bb.putInt(1024)
-        bb.putInt(1)
+        val bb = java.nio.ByteBuffer.allocate(20).order(java.nio.ByteOrder.BIG_ENDIAN)
+        bb.putInt(65536)
+        bb.putInt(3)
         bb.putInt(1)
         bb.putInt(0)
+        bb.putInt(1)
         backupOut.write(bb.array())
+        backupOut.write(uuid.toByteArray(Charsets.UTF_8))
+        backupOut.write(rootDigest.toByteArray(Charsets.UTF_8))
 
-        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, derivedKey)
-        chunkedOut.write(zip1)
-        chunkedOut.write(zip2)
+        val rawZipOut = ByteArrayOutputStream()
+        ZipOutputStream(rawZipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("vault_manifest_a.json"))
+            zos.write("[]".toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("vault_manifest_b.json"))
+            zos.write("[]".toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+        val rawZipBytes = rawZipOut.toByteArray()
+        val targetPattern = "vault_manifest_b.json".toByteArray(Charsets.UTF_8)
+        val replacementPattern = "vault_manifest_a.json".toByteArray(Charsets.UTF_8)
+        // Find and replace all occurrences of vault_manifest_b.json with vault_manifest_a.json
+        for (i in 0..(rawZipBytes.size - targetPattern.size)) {
+            var match = true
+            for (j in targetPattern.indices) {
+                if (rawZipBytes[i + j] != targetPattern[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) {
+                System.arraycopy(replacementPattern, 0, rawZipBytes, i, replacementPattern.size)
+            }
+        }
+
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, derivedKey, cryptoContext = cryptoContext)
+        chunkedOut.write(rawZipBytes)
         chunkedOut.close()
 
         val restoreInput = ByteArrayInputStream(backupOut.toByteArray())
@@ -330,22 +351,29 @@ class QuantumVaultNuclearAndV4Test {
         val derivedKey = com.quantumvault.wkqpx.security.Argon2Kdf.deriveKey(
             backupPassword.toCharArray(),
             salt,
-            memoryKb = 1024,
-            iterations = 1
+            memoryKb = 65536,
+            iterations = 3,
+            parallelism = 1
         )
+        val uuid = "11111111-1111-1111-1111-111111111111"
+        val rootDigest = "0".repeat(64)
+        val cryptoContext = VaultBackupManager.buildCryptoContext(uuid, 1, rootDigest)
 
         val backupOut = ByteArrayOutputStream()
         backupOut.write("VLT_BCK4".toByteArray(Charsets.UTF_8))
         backupOut.write(0)
         backupOut.write(salt)
-        val bb = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.BIG_ENDIAN)
-        bb.putInt(1024)
-        bb.putInt(1)
+        val bb = java.nio.ByteBuffer.allocate(20).order(java.nio.ByteOrder.BIG_ENDIAN)
+        bb.putInt(65536)
+        bb.putInt(3)
         bb.putInt(1)
         bb.putInt(0)
+        bb.putInt(1)
         backupOut.write(bb.array())
+        backupOut.write(uuid.toByteArray(Charsets.UTF_8))
+        backupOut.write(rootDigest.toByteArray(Charsets.UTF_8))
 
-        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, derivedKey)
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, derivedKey, cryptoContext = cryptoContext)
         ZipOutputStream(chunkedOut).use { zos ->
             // Omitting backup_manifest_v4.json in a V4 backup
             zos.putNextEntry(ZipEntry("vault_manifest.json"))
@@ -895,12 +923,16 @@ class QuantumVaultNuclearAndV4Test {
 
         // Step 2: Inject an undeclared/orphaned file into the inner zip
         val backupBytes = backupOut.toByteArray()
-        val header = backupBytes.copyOfRange(0, 41)
+        val header = backupBytes.copyOfRange(0, 145)
         val salt = backupBytes.copyOfRange(9, 25)
-        val bb = java.nio.ByteBuffer.wrap(backupBytes, 25, 16)
+        val bb = java.nio.ByteBuffer.wrap(backupBytes, 25, 20)
         val memoryKb = bb.getInt()
         val iterations = bb.getInt()
         val parallelism = bb.getInt()
+        val wrappedKeyLen = bb.getInt()
+        val headerRealm = bb.getInt()
+        val headerUuid = String(backupBytes.copyOfRange(45, 81), Charsets.UTF_8).trim('\u0000', ' ')
+        val headerDigest = String(backupBytes.copyOfRange(81, 145), Charsets.UTF_8).trim('\u0000', ' ')
 
         val derivedKey = Argon2Kdf.deriveKey(
             backupPassword.toCharArray(),
@@ -909,9 +941,16 @@ class QuantumVaultNuclearAndV4Test {
             iterations = iterations,
             parallelism = parallelism
         )
+        val cryptoContext = VaultBackupManager.buildCryptoContext(headerUuid, headerRealm, headerDigest)
 
-        val payloadStream = ByteArrayInputStream(backupBytes, 41, backupBytes.size - 41)
-        val chunkedIn = VaultBackupManager.ChunkedGcmInputStream(payloadStream, derivedKey, useAad = true)
+        val payloadStream = ByteArrayInputStream(backupBytes, 145, backupBytes.size - 145)
+        val chunkedIn = VaultBackupManager.ChunkedGcmInputStream(
+            payloadStream,
+            derivedKey,
+            useAad = true,
+            aadMode = VaultBackupManager.AadMode.HARDENED_V4,
+            cryptoContext = cryptoContext
+        )
         val decryptedZipBytes = chunkedIn.readBytes()
 
         // Re-pack inner zip adding an unmanifested payload: "vault_data_v4/unmanifested_trojan.enc"
@@ -935,7 +974,7 @@ class QuantumVaultNuclearAndV4Test {
         // Re-encrypt modified zip using ChunkedGcmOutputStream with V4 header
         val tamperedBackupOut = ByteArrayOutputStream()
         tamperedBackupOut.write(header)
-        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(tamperedBackupOut, derivedKey)
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(tamperedBackupOut, derivedKey, cryptoContext = cryptoContext)
         chunkedOut.write(modifiedZipOut.toByteArray())
         chunkedOut.close()
 

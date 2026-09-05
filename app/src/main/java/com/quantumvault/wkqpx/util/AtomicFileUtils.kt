@@ -65,7 +65,7 @@ object AtomicFileUtils {
                 )
                 return
             } catch (e: Exception) {
-                Log.w(TAG, "ATOMIC_MOVE failed, falling back to atomic REPLACE_EXISTING: ${e.message}")
+                Log.w(TAG, "ATOMIC_MOVE failed, attempting atomic REPLACE_EXISTING: ${e.message}")
                 try {
                     Files.move(
                         sourceFile.toPath(),

@@ -69,7 +69,11 @@ class VaultRepository(private val vaultDao: VaultDao, private val vaultDirName: 
             val newEncryptedFileName = "enc_${UUID.randomUUID()}.bin"
             val targetEncryptedFile = File(vaultDir, newEncryptedFileName)
 
-            sourceEncryptedFile.copyTo(targetEncryptedFile, overwrite = true)
+            java.nio.file.Files.copy(
+                sourceEncryptedFile.toPath(),
+                targetEncryptedFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
 
             val newItem = VaultItem(
                 originalName = "Copy_${item.originalName}",
