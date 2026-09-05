@@ -57,11 +57,8 @@ abstract class AppDatabase : RoomDatabase() {
         var simulateSqlCipherUnavailableForTesting: Boolean = false
 
         private fun isRobolectricTestEnv(): Boolean {
-            return try {
-                Class.forName("org.junit.Test") != null || android.os.Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
-            } catch (_: Exception) {
-                false
-            }
+            return com.quantumvault.wkqpx.BuildConfig.DEBUG &&
+                    android.os.Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
         }
 
         fun getDatabase(context: Context): AppDatabase {

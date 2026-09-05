@@ -77,13 +77,30 @@ object VaultKeyManager {
         ALIAS_DB_WRAPPER_DECOY
     )
 
-    private val jvmFallbackKeys = ConcurrentHashMap<String, SecretKey>()
+    private var keyProvider: VaultKeyProvider = AndroidKeystoreKeyProvider()
 
-    val keyStore: KeyStore? = try {
-        KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to load AndroidKeyStore", e)
-        null
+    @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
+    fun setKeyProviderForTesting(provider: VaultKeyProvider) {
+        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) {
+            throw SecurityException("Test KeyProvider injection is forbidden in release builds.")
+        }
+        keyProvider = provider
+    }
+
+    @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
+    fun resetKeyProviderForTesting() {
+        keyProvider = AndroidKeystoreKeyProvider()
+    }
+
+    @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
+    fun setAuthorizedSessionForTesting(vrk: ByteArray, isDecoy: Boolean = false) {
+        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) {
+            throw SecurityException("Direct session authorization is strictly prohibited in release builds.")
+        }
+        if (vrk.size != 32) throw IllegalArgumentException("VRK must be exactly 32 bytes")
+        activeVrk = vrk.copyOf()
+        isDecoyMode = isDecoy
+        currentState = if (isDecoy) VaultState.AUTHORIZED_DECOY else VaultState.AUTHORIZED_REAL
     }
 
     @Volatile
@@ -170,9 +187,7 @@ object VaultKeyManager {
 
     fun getLegacyDatabaseWrapKey(): SecretKey? {
         return try {
-            if (keyStore?.containsAlias("SecureVaultAES256MasterKey") == true) {
-                keyStore.getKey("SecureVaultAES256MasterKey", null) as SecretKey
-            } else null
+            keyProvider.getKey("SecureVaultAES256MasterKey")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get legacy database wrap key", e)
             null
@@ -341,21 +356,6 @@ object VaultKeyManager {
     }
 
     /**
-     * Direct authorization strictly for programmatic testing or migration workflows where VRK is known.
-     * Enforces build-time guard so arbitrary authorization is prohibited in release builds.
-     */
-    @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
-    fun setAuthorizedSession(vrk: ByteArray, isDecoy: Boolean = false) {
-        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) {
-            throw SecurityException("Direct session authorization is strictly prohibited in release builds.")
-        }
-        if (vrk.size != 32) throw IllegalArgumentException("VRK must be exactly 32 bytes")
-        activeVrk = vrk.copyOf()
-        isDecoyMode = isDecoy
-        currentState = if (isDecoy) VaultState.AUTHORIZED_DECOY else VaultState.AUTHORIZED_REAL
-    }
-
-    /**
      * Inspects active BIE1 biometric envelope to determine the committed key slot (1L or 2L).
      */
     fun getActiveBiometricSlot(context: Context): Long {
@@ -390,21 +390,7 @@ object VaultKeyManager {
      */
     @Synchronized
     fun getExistingBiometricMasterKey(alias: String = ALIAS_BIOMETRIC_UNLOCK): SecretKey? {
-        if (keyStore != null) {
-            try {
-                if (!keyStore.containsAlias(alias)) {
-                    return null
-                }
-                val entry = keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry
-                return entry?.secretKey
-            } catch (e: KeyPermanentlyInvalidatedException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get existing biometric master key for alias $alias", e)
-                return null
-            }
-        }
-        return jvmFallbackKeys[alias]
+        return keyProvider.getKey(alias)
     }
 
     /**
@@ -501,21 +487,10 @@ object VaultKeyManager {
             }
 
             // Transactional cleanup: New key + envelope are live. Safely delete superseded old slot key.
-            if (keyStore != null) {
-                try {
-                    val oldAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_A else ALIAS_BIOMETRIC_SLOT_B
-                    if (keyStore.containsAlias(oldAlias)) keyStore.deleteEntry(oldAlias)
-                    if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
-                    if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)) keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Non-critical cleanup warning during biometric promotion", e)
-                }
-            } else {
-                val oldAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_A else ALIAS_BIOMETRIC_SLOT_B
-                jvmFallbackKeys.remove(oldAlias)
-                jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK)
-                jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
-            }
+            val oldAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_A else ALIAS_BIOMETRIC_SLOT_B
+            keyProvider.deleteKey(oldAlias)
+            keyProvider.deleteKey(ALIAS_BIOMETRIC_UNLOCK)
+            keyProvider.deleteKey(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
             provisionalTargetSlot = null
 
             Log.i(TAG, "BIE1 biometric envelope provisioned and committed successfully in slot $targetSlot")
@@ -650,33 +625,26 @@ object VaultKeyManager {
         }
 
         val activeAlias = getActiveBiometricAlias(context)
-        if (keyStore != null) {
-            try {
-                if (!keyStore.containsAlias(activeAlias)) {
-                    envelopeFile.delete()
-                    settingsDataStore.setBiometricsEnabled(false)
-                    return BiometricEnrollmentState.UNAVAILABLE
-                }
-                val entry = keyStore.getEntry(activeAlias, null) as? KeyStore.SecretKeyEntry
-                if (entry == null) {
-                    envelopeFile.delete()
-                    settingsDataStore.setBiometricsEnabled(false)
-                    return BiometricEnrollmentState.UNAVAILABLE
-                }
-
-                val testCipher = Cipher.getInstance("AES/GCM/NoPadding")
-                val iv = ByteArray(12)
-                testCipher.init(Cipher.DECRYPT_MODE, entry.secretKey, GCMParameterSpec(128, iv))
-            } catch (e: KeyPermanentlyInvalidatedException) {
-                Log.w(TAG, "Biometric key invalidated by system biometric changes")
+        try {
+            val key = keyProvider.getKey(activeAlias)
+            if (key == null) {
                 envelopeFile.delete()
                 settingsDataStore.setBiometricsEnabled(false)
-                return BiometricEnrollmentState.KEY_INVALIDATED
-            } catch (e: UserNotAuthenticatedException) {
-                // Key is healthy
-            } catch (e: Exception) {
-                // Other transient / init states
+                return BiometricEnrollmentState.UNAVAILABLE
             }
+
+            val testCipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val iv = ByteArray(12)
+            testCipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            Log.w(TAG, "Biometric key invalidated by system biometric changes")
+            envelopeFile.delete()
+            settingsDataStore.setBiometricsEnabled(false)
+            return BiometricEnrollmentState.KEY_INVALIDATED
+        } catch (e: UserNotAuthenticatedException) {
+            // Key is healthy
+        } catch (e: Exception) {
+            // Other transient / init states
         }
 
         return BiometricEnrollmentState.ENROLLED
@@ -688,143 +656,31 @@ object VaultKeyManager {
             if (file.exists()) file.delete()
             val staged = File(context.filesDir, "$BIOMETRIC_WRAP_FILE.staged")
             if (staged.exists()) staged.delete()
-            keyStore?.let {
-                listOf(ALIAS_BIOMETRIC_UNLOCK, ALIAS_BIOMETRIC_SLOT_A, ALIAS_BIOMETRIC_SLOT_B, ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL).forEach { alias ->
-                    if (it.containsAlias(alias)) {
-                        it.deleteEntry(alias)
-                    }
-                }
-            }
             listOf(ALIAS_BIOMETRIC_UNLOCK, ALIAS_BIOMETRIC_SLOT_A, ALIAS_BIOMETRIC_SLOT_B, ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL).forEach { alias ->
-                jvmFallbackKeys.remove(alias)
+                keyProvider.deleteKey(alias)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error removing biometric envelope", e)
         }
     }
 
-    private fun isRunningInTestEnvironment(): Boolean {
-        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) return false
-        return Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
-    }
-
     @Synchronized
     fun getOrCreateKey(alias: String): SecretKey {
-        if (keyStore != null) {
-            try {
-                val existing = keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry
-                if (existing != null) {
-                    return existing.secretKey
-                }
-                val keyGenerator = KeyGenerator.getInstance(
-                    KeyProperties.KEY_ALGORITHM_AES,
-                    ANDROID_KEYSTORE
-                )
-                val keyGenSpec = KeyGenParameterSpec.Builder(
-                    alias,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .setRandomizedEncryptionRequired(true)
-                    .build()
-                keyGenerator.init(keyGenSpec)
-                return keyGenerator.generateKey()
-            } catch (e: Exception) {
-                Log.e(TAG, "Keystore exception for alias $alias: ${e.message}")
-                if (!isRunningInTestEnvironment()) {
-                    throw IllegalStateException("Critical KeyStore failure for alias $alias. App cannot proceed.", e)
-                }
-            }
-        }
-        if (!isRunningInTestEnvironment()) {
-            throw IllegalStateException("Keystore is null in production environment. Failing securely.")
-        }
-        return jvmFallbackKeys.getOrPut(alias) {
-            val kg = KeyGenerator.getInstance("AES")
-            kg.init(256)
-            kg.generateKey()
-        }
+        return keyProvider.getOrCreateKey(alias)
     }
 
     fun getDeviceBindingKey(): SecretKey = getOrCreateKey(ALIAS_DEVICE_BINDING)
 
     private fun createBiometricMasterKey(alias: String): SecretKey {
-        if (keyStore != null) {
-            try {
-                if (keyStore.containsAlias(alias)) {
-                    keyStore.deleteEntry(alias)
-                }
-                val keyGenerator = KeyGenerator.getInstance(
-                    KeyProperties.KEY_ALGORITHM_AES,
-                    ANDROID_KEYSTORE
-                )
-                val builder = KeyGenParameterSpec.Builder(
-                    alias,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .setUserAuthenticationRequired(true)
-                    .setInvalidatedByBiometricEnrollment(true)
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    builder.setUserAuthenticationParameters(
-                        0,
-                        KeyProperties.AUTH_BIOMETRIC_STRONG
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    builder.setUserAuthenticationValidityDurationSeconds(-1)
-                }
-                keyGenerator.init(builder.build())
-                return keyGenerator.generateKey()
-            } catch (e: Exception) {
-                Log.e(TAG, "Biometric key generation failed for alias $alias: ${e.message}", e)
-                if (!isRunningInTestEnvironment()) {
-                    throw IllegalStateException("Critical KeyStore failure for biometric key.", e)
-                }
-            }
-        }
-        if (!isRunningInTestEnvironment()) {
-            throw IllegalStateException("Keystore is null in production environment.")
-        }
-        val kg = KeyGenerator.getInstance("AES")
-        kg.init(256)
-        val key = kg.generateKey()
-        jvmFallbackKeys[alias] = key
-        return key
+        return keyProvider.createBiometricMasterKey(alias)
     }
 
     /**
      * Authoritatively deletes all keys in the registry.
-     * Section 7.1: If KeyStore is null or unavailable, it MUST report false, never true!
+     * Fails closed with verified boolean per key.
      */
     @Synchronized
     fun destroyAllKeys(): Map<String, Boolean> {
-        val results = mutableMapOf<String, Boolean>()
-        jvmFallbackKeys.clear()
-        if (keyStore == null) {
-            ALL_KEY_ALIASES.forEach { results[it] = false }
-            return results
-        }
-        val targetAliases = (ALL_KEY_ALIASES + try { keyStore.aliases().toList() } catch (_: Exception) { emptyList() }).distinct()
-        targetAliases.forEach { alias ->
-            try {
-                if (keyStore.containsAlias(alias)) {
-                    keyStore.deleteEntry(alias)
-                    val stillExists = keyStore.containsAlias(alias)
-                    results[alias] = !stillExists
-                } else {
-                    results[alias] = true
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete key alias $alias", e)
-                results[alias] = false
-            }
-        }
-        return results
+        return keyProvider.destroyAllKeys(ALL_KEY_ALIASES)
     }
 }
