@@ -1,16 +1,49 @@
 package com.quantumvault.wkqpx
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.quantumvault.wkqpx.security.VaultBackupManager
 import com.quantumvault.wkqpx.security.VaultGenerationManager
+import com.quantumvault.wkqpx.security.VaultKeyManager
 import com.quantumvault.wkqpx.ui.screens.ErrorFallbackActivity
 import com.quantumvault.wkqpx.util.VaultLogger
 import net.sqlcipher.database.SQLiteDatabase
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
+
+object VaultApplicationState {
+    @Volatile
+    var isRecoveryRequired: Boolean = false
+        private set
+
+    @Volatile
+    var recoveryFailureReason: String? = null
+        private set
+
+    @Volatile
+    var startupError: Throwable? = null
+        private set
+
+    fun markRecoveryRequired(reason: String, cause: Throwable? = null) {
+        isRecoveryRequired = true
+        recoveryFailureReason = reason
+        startupError = cause
+    }
+
+    fun clearRecoveryState() {
+        isRecoveryRequired = false
+        recoveryFailureReason = null
+        startupError = null
+    }
+
+    @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
+    fun resetForTesting() {
+        clearRecoveryState()
+    }
+}
 
 class VaultApplication : Application() {
 
@@ -21,11 +54,11 @@ class VaultApplication : Application() {
         VaultLogger.log(this, "VaultApplication", "Quantum Vault Application starting up")
 
         try {
-            VaultBackupManager.recoverPendingRestoreIfAny(this)
-            VaultGenerationManager.recoverPendingIntentIfAny(this, isDecoy = false)
-            VaultGenerationManager.recoverPendingIntentIfAny(this, isDecoy = true)
+            checkStartupIntegrity(this)
         } catch (e: Exception) {
-            Log.e("VaultApplication", "Failed during crash recovery checks on startup", e)
+            Log.e("VaultApplication", "FATAL: Startup integrity verification or disaster recovery failed!", e)
+            VaultApplicationState.markRecoveryRequired("Startup disaster recovery failure: ${e.message}", e)
+            logStartupErrorToFile(e)
         }
 
         try {
@@ -43,6 +76,22 @@ class VaultApplication : Application() {
             Log.e("VaultApplication", "Exception during SQLCipher initialization", e)
             VaultLogger.logError(this, "VaultApplication", "Exception during SQLCipher initialization", e)
             logStartupErrorToFile(e)
+        }
+    }
+
+    companion object {
+        fun checkStartupIntegrity(context: Context) {
+            VaultBackupManager.recoverPendingRestoreIfAny(context)
+            VaultGenerationManager.recoverPendingIntentIfAny(context, isDecoy = false)
+            VaultGenerationManager.recoverPendingIntentIfAny(context, isDecoy = true)
+
+            // Validate active generation for initialized realms
+            if (VaultKeyManager.hasCredentialWrap(context, isDecoy = false)) {
+                VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+            }
+            if (VaultKeyManager.hasCredentialWrap(context, isDecoy = true)) {
+                VaultGenerationManager.getActiveGeneration(context, isDecoy = true)
+            }
         }
     }
 

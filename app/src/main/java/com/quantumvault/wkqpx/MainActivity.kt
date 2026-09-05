@@ -1,8 +1,10 @@
 package com.quantumvault.wkqpx
 
 import android.app.Activity.RESULT_OK
+import android.content.Intent
 import android.content.IntentSender
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,6 +39,7 @@ import com.quantumvault.wkqpx.security.BiometricPromptManager
 import com.quantumvault.wkqpx.security.PanicSensorManager
 import com.quantumvault.wkqpx.ui.VaultViewModel
 import com.quantumvault.wkqpx.ui.navigation.VaultNavHost
+import com.quantumvault.wkqpx.ui.screens.ErrorFallbackActivity
 import com.quantumvault.wkqpx.ui.theme.MyApplicationTheme
 import com.quantumvault.wkqpx.ui.viewmodel.SettingsViewModel
 import com.quantumvault.wkqpx.util.VaultLogger
@@ -67,6 +70,21 @@ class MainActivity : FragmentActivity() {
             com.quantumvault.wkqpx.security.RootDetectionManager.isDeviceRooted(applicationContext) && !com.quantumvault.wkqpx.security.RootDetectionManager.isEmulator()
         } catch (e: Exception) {
             false
+        }
+
+        if (VaultApplicationState.isRecoveryRequired) {
+            val reason = VaultApplicationState.recoveryFailureReason ?: "State Recovery Required"
+            val intent = Intent(this, ErrorFallbackActivity::class.java).apply {
+                putExtra(ErrorFallbackActivity.EXTRA_ERROR_MESSAGE, reason)
+                putExtra(
+                    ErrorFallbackActivity.EXTRA_STACK_TRACE,
+                    VaultApplicationState.startupError?.let { Log.getStackTraceString(it) } ?: "Startup disaster recovery check failed."
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            }
+            startActivity(intent)
+            finish()
+            return
         }
 
         enableEdgeToEdge()

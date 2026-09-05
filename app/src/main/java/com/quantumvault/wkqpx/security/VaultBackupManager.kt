@@ -1601,7 +1601,9 @@ object VaultBackupManager {
             var logsToRestore: List<IntruderLog>? = null
 
             val stagedFiles = mutableMapOf<String, File>()
+            val stagedV4PayloadFiles = mutableMapOf<String, File>()
             val stagedPlaintextShaMap = mutableMapOf<String, String>()
+            val stagedV4PlaintextShaMap = mutableMapOf<String, String>()
             val seenEntries = mutableSetOf<String>()
             val isV4 = streamResult.formatDescription.startsWith("V4")
 
@@ -1762,6 +1764,9 @@ object VaultBackupManager {
                                     if (uniqueStagedName != cleanFileName) {
                                         stagedPlaintextShaMap[uniqueStagedName] = sha
                                     }
+                                    if (entryName.startsWith("vault_data_v4/")) {
+                                        stagedV4PlaintextShaMap[payloadIdKey] = sha
+                                    }
                                 }
 
                                 totalBytesRestored += stagedFile.length()
@@ -1771,6 +1776,9 @@ object VaultBackupManager {
                                 stagedFiles[payloadIdKey] = stagedFile
                                 if (uniqueStagedName != cleanFileName) {
                                     stagedFiles[uniqueStagedName] = stagedFile
+                                }
+                                if (entryName.startsWith("vault_data_v4/")) {
+                                    stagedV4PayloadFiles[payloadIdKey] = stagedFile
                                 }
                                 val targetTotal = maxOf(stagedFiles.size + 4, (restoredItems?.size ?: 0) + 4)
                                 onProgress?.invoke(
@@ -1818,53 +1826,28 @@ object VaultBackupManager {
                     throw BackupManifestIntegrityException("Manifest inventory mismatch: fileInventory has $actualInventoryCount entries, but items manifest has $actualItemsCount items.")
                 }
 
-                val declaredPayloads = manifestV4.fileInventory.mapNotNull { it.payloadId.takeIf { p -> p.isNotBlank() } }.toSet()
-                val declaredArchivePaths = manifestV4.fileInventory.mapNotNull { it.archivePath.takeIf { a -> a.isNotBlank() } }.toSet()
-                val declaredArchiveBaseNames = manifestV4.fileInventory.mapNotNull { File(it.archivePath).name.takeIf { a -> a.isNotBlank() } }.toSet()
-                val declaredFileNames = manifestV4.fileInventory.map { File(it.fileName).name }.toSet()
-                val declaredOrigNames = manifestV4.fileInventory.map { File(it.originalName).name }.toSet()
-                val allDeclaredIdentifiers = declaredPayloads + declaredArchivePaths + declaredArchiveBaseNames + declaredFileNames + declaredOrigNames
-
-                // Check 1: Every declared file in manifest must exist in staged files and match SHA-256
+                // Check 1: Strict Bijection: Every declared file in manifest must exist in staged V4 payloads and match SHA-256
+                val declaredPayloadIds = manifestV4.fileInventory.map { 
+                    it.payloadId.ifBlank { it.fileName.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin") }
+                }.toSet()
                 for (entry in manifestV4.fileInventory) {
-                    val candidatePayload = entry.payloadId.ifBlank { "" }
-                    val cleanArchiveName = File(entry.archivePath).name
-                    val cleanFileName = File(entry.fileName).name
-                    val cleanOrigName = File(entry.originalName).name
+                    val payloadId = entry.payloadId.ifBlank {
+                        entry.fileName.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin")
+                    }
+                    val staged = stagedV4PayloadFiles[payloadId] ?: stagedFiles[payloadId] ?: stagedFiles[entry.fileName]
+                        ?: throw BackupManifestIntegrityException("Strict V4 Bijection failure: Declared payloadId '$payloadId' (${entry.originalName}) is missing from archive.")
 
-                    val staged = stagedFiles[candidatePayload]
-                        ?: stagedFiles[cleanArchiveName]
-                        ?: stagedFiles[entry.archivePath]
-                        ?: stagedFiles[cleanFileName]
-                        ?: stagedFiles[cleanOrigName]
-                        ?: throw BackupManifestIntegrityException("Backup integrity violation: Declared payload '${entry.payloadId}' (${entry.originalName}) is missing from archive.")
-
-                    val actualSha = stagedPlaintextShaMap[candidatePayload]
-                        ?: stagedPlaintextShaMap[cleanArchiveName]
-                        ?: stagedPlaintextShaMap[entry.archivePath]
-                        ?: stagedPlaintextShaMap[cleanFileName]
-                        ?: stagedPlaintextShaMap[cleanOrigName]
-                        ?: computeSha256Hex(staged)
-
+                    val actualSha = stagedV4PlaintextShaMap[payloadId] ?: stagedPlaintextShaMap[payloadId] ?: stagedPlaintextShaMap[entry.fileName] ?: computeSha256Hex(staged)
                     if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
                         throw BackupManifestIntegrityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive payload corrupted or tampered.")
                     }
                 }
 
-                // Check 2: Strict Bijection: Every staged file must be explicitly declared in manifestV4
-                val physicalStagedFiles = stagedFiles.values.toSet()
-                for (file in physicalStagedFiles) {
-                    val name = file.name
-                    val stripped = name.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin")
-                    val isDeclared = allDeclaredIdentifiers.contains(name) ||
-                                     allDeclaredIdentifiers.contains(stripped) ||
-                                     manifestV4.fileInventory.any {
-                                         it.payloadId == name || it.payloadId == stripped ||
-                                         it.fileName == name || it.originalName == name ||
-                                         File(it.archivePath).name == name || File(it.archivePath).name == stripped
-                                     }
-                    if (!isDeclared) {
-                        throw BackupManifestIntegrityException("Backup integrity violation: Archive contains undeclared file payload '$name'. Undeclared entries are forbidden in strict V4.")
+                // Check 2: Strict Reverse Bijection: Every staged V4 payload must be explicitly declared in manifestV4
+                val physicalPayloadIds = if (stagedV4PayloadFiles.isNotEmpty()) stagedV4PayloadFiles.keys else stagedFiles.keys
+                for (stagedPayloadId in physicalPayloadIds) {
+                    if (!declaredPayloadIds.contains(stagedPayloadId) && !manifestV4.fileInventory.any { it.fileName == stagedPayloadId || it.archivePath.endsWith(stagedPayloadId) || it.fileName.removeSuffix(".enc").removeSuffix(".aes").removeSuffix(".bin") == stagedPayloadId }) {
+                        throw BackupManifestIntegrityException("Strict V4 Bijection failure: Archive contains undeclared file payload '$stagedPayloadId'. Undeclared entries are forbidden in strict V4.")
                     }
                 }
             } else if (isV4) {
@@ -1877,16 +1860,7 @@ object VaultBackupManager {
 
             if (manifestV4 != null) {
                 for (entry in manifestV4.fileInventory) {
-                    val candidatePayload = entry.payloadId.ifBlank { "" }
-                    val cleanArchiveName = File(entry.archivePath).name
-                    val cleanFileName = File(entry.fileName).name
-                    val cleanOrigName = File(entry.originalName).name
-
-                    val matched = stagedFiles[candidatePayload]
-                        ?: stagedFiles[cleanArchiveName]
-                        ?: stagedFiles[entry.archivePath]
-                        ?: stagedFiles[cleanFileName]
-                        ?: stagedFiles[cleanOrigName]
+                    val matched = stagedV4PayloadFiles[entry.payloadId] ?: stagedFiles[entry.payloadId]
                         ?: throw BackupManifestIntegrityException("Strict V4 Backup validation failed: Item '${entry.originalName}' missing payload in archive.")
 
                     matchedStagedNames.add(matched.name)
@@ -2132,9 +2106,9 @@ object VaultBackupManager {
                     activeFaultHook?.invoke(RestoreFaultPhase.AFTER_FS_SWAP)
 
                     db.withTransaction {
-                        restoredFolders?.forEach { try { db.vaultDao().insertFolder(it) } catch (_: Exception) {} }
-                        restoredPasswords?.forEach { try { db.vaultPasswordDao().insertPassword(it) } catch (_: Exception) {} }
-                        logsToRestore?.forEach { try { db.intruderLogDao().insertLog(it) } catch (_: Exception) {} }
+                        restoredFolders?.forEach { db.vaultDao().insertFolder(it) }
+                        restoredPasswords?.forEach { db.vaultPasswordDao().insertPassword(it) }
+                        logsToRestore?.forEach { db.intruderLogDao().insertLog(it) }
                         finalItemsToInsert.forEach { item ->
                             db.vaultDao().insertVaultItem(item)
                             restoredCount++

@@ -45,7 +45,12 @@ object VaultGenerationManager {
         val fileName = if (isDecoy) DECOY_GEN_FILE else REAL_GEN_FILE
         val file = File(context.filesDir, fileName)
         if (!file.exists()) {
-            // First initialization of vault generation
+            if (VaultKeyManager.hasCredentialWrap(context, isDecoy)) {
+                throw GenerationCorruptionException(
+                    "Missing generation metadata file '$fileName' for initialized vault (credential wrap exists). Replay/Rollback protection record lost. RECOVERY_REQUIRED."
+                )
+            }
+            // First initialization of vault generation for fresh uninitialized vault
             val initialGen = 1L
             persistGeneration(context, isDecoy, initialGen)
             return initialGen
@@ -137,13 +142,24 @@ object VaultGenerationManager {
         val intentFile = File(context.filesDir, intentFileName)
         if (!intentFile.exists()) return false
 
-        val journal = VaultRestoreJournal.readJournal(context)
+        // Fail-closed: If reading the journal throws JournalCorruptedException or any parse failure,
+        // we MUST NOT treat the journal as absent. We must abort intent cleanup and fail closed into RECOVERY_REQUIRED.
+        val journal = try {
+            VaultRestoreJournal.readJournal(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "Corrupt or unauthenticated restore journal detected while intent file '$intentFileName' exists. Aborting intent cleanup. RECOVERY_REQUIRED.", e)
+            throw GenerationCorruptionException(
+                "Corrupt restore journal detected while generation intent file '$intentFileName' exists. Recovery state protected. RECOVERY_REQUIRED.",
+                e
+            )
+        }
+
         if (journal != null) {
             // Restore journal manages recovery
             return false
         }
 
-        Log.w(TAG, "Cleaning orphaned generation intent file: $intentFileName")
+        Log.w(TAG, "Cleaning verified orphaned generation intent file: $intentFileName")
         return try {
             intentFile.delete()
         } catch (_: Exception) {
@@ -201,7 +217,7 @@ object VaultGenerationManager {
         persistGeneration(context, isDecoy, newGen)
     }
 
-    private fun persistGeneration(context: Context, isDecoy: Boolean, gen: Long) {
+    internal fun persistGeneration(context: Context, isDecoy: Boolean, gen: Long) {
         val fileName = if (isDecoy) DECOY_GEN_FILE else REAL_GEN_FILE
         val targetFile = File(context.filesDir, fileName)
         val tempFile = File(context.filesDir, "$fileName.tmp")
@@ -244,11 +260,12 @@ object VaultGenerationManager {
 
     private fun computeAuthenticationTag(context: Context, recordHeaderBytes: ByteArray): Pair<ByteArray, ByteArray> {
         val key = VaultKeyManager.getOrCreateKey(VaultKeyAliases.ALIAS_GENERATION_AUTH)
+        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
         cipher.updateAAD(recordHeaderBytes, 0, 24)
         val authTag = cipher.doFinal() // 16-byte authentication tag
-        return Pair(cipher.iv, authTag)
+        return Pair(iv, authTag)
     }
 
     private fun verifyAuthenticationTag(context: Context, recordBytes: ByteArray, iv: ByteArray, tag: ByteArray) {

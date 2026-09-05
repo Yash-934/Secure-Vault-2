@@ -377,12 +377,13 @@ object VaultKeyManager {
         currentState = VaultState.INITIALIZING
         val vrk = ByteArray(32).also { SecureRandom().nextBytes(it) }
         try {
+            VaultGenerationManager.persistGeneration(context, isDecoy, 1L)
             val written = writeVrkPinWrap(context, vrk, pin, isDecoy)
             if (!written) {
                 currentState = VaultState.CORRUPTED
                 throw IllegalStateException("Failed to write VRK pin wrap file")
             }
-            VaultSentinelManager.createSentinel(context, vrk, isDecoy)
+            VaultSentinelManager.createSentinel(context, vrk, isDecoy, generationId = 1L)
             currentState = VaultState.INITIALIZED
         } finally {
             vrk.fill(0)

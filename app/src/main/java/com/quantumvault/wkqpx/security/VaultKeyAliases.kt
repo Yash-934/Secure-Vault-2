@@ -18,6 +18,7 @@ object VaultKeyAliases {
     const val ALIAS_DB_WRAPPER = "SecureVaultDatabaseWrapperMasterKey"
     const val ALIAS_DB_WRAPPER_DECOY = "SecureVaultDatabaseWrapperDecoyMasterKey"
     const val ALIAS_GENERATION_AUTH = "VaultGenerationAuthHardwareKey"
+    const val ALIAS_RESTORE_JOURNAL = "VaultRestoreJournalAuthHardwareKey"
 
     val ALL_KNOWN_ALIASES: List<String> = listOf(
         ALIAS_BIOMETRIC_UNLOCK,
@@ -31,6 +32,7 @@ object VaultKeyAliases {
         ALIAS_AUDIT_PROBE,
         ALIAS_DB_WRAPPER,
         ALIAS_DB_WRAPPER_DECOY,
-        ALIAS_GENERATION_AUTH
+        ALIAS_GENERATION_AUTH,
+        ALIAS_RESTORE_JOURNAL
     )
 }
