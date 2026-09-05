@@ -195,6 +195,25 @@ object VaultKeyManager {
     }
 
     private fun derivePinKek(pin: String, salt: ByteArray): ByteArray {
+        return try {
+            // Memory-hard Argon2id KEK derivation (16 MiB RAM, 3 iterations) to resist GPU/FPGA PIN brute-forcing
+            Argon2Kdf.deriveKey(
+                password = pin.toCharArray(),
+                salt = salt,
+                memoryKb = 16 * 1024,
+                iterations = 3,
+                parallelism = 1,
+                keyLengthBytes = 32
+            ).encoded
+        } catch (_: Throwable) {
+            // Fallback to PBKDF2 with 100,000 iterations if Argon2 unavailable
+            val spec = PBEKeySpec(pin.toCharArray(), salt, 100000, 256)
+            val skf = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            skf.generateSecret(spec).encoded
+        }
+    }
+
+    private fun deriveLegacyPinKek(pin: String, salt: ByteArray): ByteArray {
         val spec = PBEKeySpec(pin.toCharArray(), salt, 12000, 256)
         val skf = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
         return skf.generateSecret(spec).encoded
@@ -267,25 +286,65 @@ object VaultKeyManager {
                 offset += ivLen
 
                 val ciphertext = bytes.copyOfRange(offset, bytes.size)
-                val kek = derivePinKek(pin, salt)
+                
+                // Try primary Argon2id KEK first
+                var decrypted: ByteArray? = try {
+                    val kek = derivePinKek(pin, salt)
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
+                    cipher.doFinal(ciphertext)
+                } catch (_: Exception) {
+                    null
+                }
 
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
-                cipher.doFinal(ciphertext)
+                // Fallback to legacy 12k PBKDF2 KEK for existing envelopes
+                if (decrypted == null) {
+                    try {
+                        val legacyKek = deriveLegacyPinKek(pin, salt)
+                        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(legacyKek, "AES"), GCMParameterSpec(128, iv))
+                        decrypted = cipher.doFinal(ciphertext)
+                        // Seamlessly upgrade existing envelope to Argon2id upon successful PIN verification
+                        if (decrypted != null && decrypted.size == 32 && VaultSentinelManager.verifyVrk(context, decrypted, isDecoy)) {
+                            writeVrkPinWrap(context, decrypted, pin, isDecoy)
+                        }
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+
+                decrypted ?: return null
             } else {
                 val saltFile = File(context.filesDir, KEK_SALT_FILE)
                 if (!saltFile.exists()) return null
                 val salt = saltFile.readBytes()
-                val kek = derivePinKek(pin, salt)
 
                 val ivLen = bytes[0].toInt() and 0xFF
                 if (bytes.size < 1 + ivLen) return null
                 val iv = bytes.copyOfRange(1, 1 + ivLen)
                 val ciphertext = bytes.copyOfRange(1 + ivLen, bytes.size)
 
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
-                cipher.doFinal(ciphertext)
+                var decrypted: ByteArray? = try {
+                    val kek = derivePinKek(pin, salt)
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
+                    cipher.doFinal(ciphertext)
+                } catch (_: Exception) {
+                    null
+                }
+
+                if (decrypted == null) {
+                    try {
+                        val legacyKek = deriveLegacyPinKek(pin, salt)
+                        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(legacyKek, "AES"), GCMParameterSpec(128, iv))
+                        decrypted = cipher.doFinal(ciphertext)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+
+                decrypted ?: return null
             }
 
             if (vrk.size != 32) {
@@ -486,14 +545,26 @@ object VaultKeyManager {
                 return false
             }
 
-            // Transactional cleanup: New key + envelope are live. Safely delete superseded old slot key.
+            // Post-commit verification: Ensure targetFile exists on disk and has valid envelope header before destroying old key
+            if (!targetFile.exists() || targetFile.length() != EXPECTED_BIE1_SIZE.toLong()) {
+                Log.e(TAG, "Biometric post-commit verification failed: Envelope missing or size mismatch on disk")
+                return false
+            }
+
+            val committedBytes = targetFile.readBytes()
+            if (!committedBytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
+                Log.e(TAG, "Biometric post-commit verification failed: Corrupted magic header in committed envelope")
+                return false
+            }
+
+            // Transactional cleanup: New key + envelope are live and verified. Safely delete superseded old slot key.
             val oldAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_A else ALIAS_BIOMETRIC_SLOT_B
             keyProvider.deleteKey(oldAlias)
             keyProvider.deleteKey(ALIAS_BIOMETRIC_UNLOCK)
             keyProvider.deleteKey(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
             provisionalTargetSlot = null
 
-            Log.i(TAG, "BIE1 biometric envelope provisioned and committed successfully in slot $targetSlot")
+            Log.i(TAG, "BIE1 biometric envelope provisioned, committed, and verified successfully in slot $targetSlot")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to provision biometric envelope: ${e.message}", e)

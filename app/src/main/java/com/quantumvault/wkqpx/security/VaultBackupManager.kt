@@ -833,9 +833,89 @@ object VaultBackupManager {
 
         var detectedDeviceLocked = false
 
-        // Phase A: If V4 or V3 format detected
-        if ((isV4 || isV3) && headerBytes.size >= 25) {
-            onProgress?.invoke(0, 0, "Inspecting Argon2id Parameters...", 0L)
+        // Strict V4 Backup Header Grammar:
+        // [0..7]: MAGIC_V4 ("VLT_BCK4")
+        // [8]: flags (1 byte: 1 = device-locked, 0 = portable)
+        // [9..24]: Argon2id Salt (16 bytes)
+        // [25..28]: memoryKb (4 bytes Int)
+        // [29..32]: iterations (4 bytes Int)
+        // [33..36]: parallelism (4 bytes Int)
+        // [37..40]: wrappedKeyLen (4 bytes Int)
+        // [41..41+wrappedKeyLen-1]: wrappedKeyBytes (if device-locked)
+        // [Offset]: ChunkedGcmInputStream ciphertext stream (strict AAD=true)
+        if (isV4) {
+            onProgress?.invoke(0, 0, "Inspecting V4 Argon2id Parameters...", 0L)
+            if (headerBytes.size < 41) {
+                throw SecurityException("Corrupted V4 backup: Header truncated (less than 41 bytes)")
+            }
+
+            val flags = headerBytes[8].toInt()
+            detectedDeviceLocked = (flags and 1) != 0
+            val salt = headerBytes.copyOfRange(9, 25)
+
+            val bb = java.nio.ByteBuffer.wrap(headerBytes, 25, 16)
+            val memoryKb = bb.getInt()
+            val iterations = bb.getInt()
+            val parallelism = bb.getInt()
+            val wrappedKeyLen = bb.getInt()
+
+            if (memoryKb !in 1024..524288 || iterations !in 1..20 || parallelism !in 1..8) {
+                throw SecurityException("Corrupted V4 backup: Invalid Argon2 parameters (mem=$memoryKb, iter=$iterations, par=$parallelism)")
+            }
+
+            val payloadOffset: Long
+            val activeKey: SecretKey
+
+            if (detectedDeviceLocked) {
+                if (wrappedKeyLen !in 16..4096) {
+                    throw SecurityException("Corrupted V4 device-locked backup: Invalid wrapped key length ($wrappedKeyLen)")
+                }
+                payloadOffset = 41L + wrappedKeyLen
+                if (tempBackupFile.length() < payloadOffset) {
+                    throw SecurityException("Corrupted V4 backup: File size smaller than header + wrapped key")
+                }
+
+                val fis = FileInputStream(tempBackupFile).buffered(65536)
+                fis.skip(41L)
+                val wrappedBytes = ByteArray(wrappedKeyLen)
+                readFully(fis, wrappedBytes, 0, wrappedKeyLen)
+                fis.close()
+
+                val argon2Key = Argon2Kdf.deriveKey(masterPassword.toCharArray(), salt, memoryKb, iterations, parallelism)
+                val hwKey = getDeviceBindingMasterKey()
+
+                val hwIv = wrappedBytes.copyOfRange(0, IV_SIZE_BYTES)
+                val hwEncrypted = wrappedBytes.copyOfRange(IV_SIZE_BYTES, wrappedBytes.size)
+
+                val hwCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                hwCipher.init(Cipher.DECRYPT_MODE, hwKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, hwIv))
+                val passWrapped = hwCipher.doFinal(hwEncrypted)
+
+                val passIv = passWrapped.copyOfRange(0, IV_SIZE_BYTES)
+                val passEncrypted = passWrapped.copyOfRange(IV_SIZE_BYTES, passWrapped.size)
+                val passCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                passCipher.init(Cipher.DECRYPT_MODE, argon2Key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, passIv))
+                val rawEphemeralKey = passCipher.doFinal(passEncrypted)
+                activeKey = SecretKeySpec(rawEphemeralKey, "AES")
+            } else {
+                if (wrappedKeyLen != 0) {
+                    throw SecurityException("Corrupted V4 portable backup: Non-zero wrapped key length ($wrappedKeyLen)")
+                }
+                payloadOffset = 41L
+                activeKey = Argon2Kdf.deriveKey(masterPassword.toCharArray(), salt, memoryKb, iterations, parallelism)
+            }
+
+            // Strict V4 stream initialization with deterministic AAD
+            val stream = FileInputStream(tempBackupFile).buffered(65536)
+            stream.skip(payloadOffset)
+            val chunkedStream = ChunkedGcmInputStream(stream, activeKey, useAad = true)
+            val desc = if (detectedDeviceLocked) "V4 Argon2id (Device-Locked, AAD)" else "V4 Argon2id Portable (AAD)"
+            return DecryptedStreamResult(chunkedStream, desc)
+        }
+
+        // Phase A2: Legacy V3 format parsing
+        if (isV3 && headerBytes.size >= 25) {
+            onProgress?.invoke(0, 0, "Inspecting V3 Argon2id Parameters...", 0L)
             try {
                 val flags = headerBytes[8].toInt()
                 detectedDeviceLocked = (flags and 1) != 0
@@ -892,8 +972,7 @@ object VaultBackupManager {
                             }) {
                                 val s = FileInputStream(tempBackupFile).buffered(65536)
                                 s.skip(actualDataOffset)
-                                val desc = if (isV4) "V4 Argon2id (Device-Locked, AAD)" else "V3 Argon2id (Device-Locked, AAD)"
-                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = true), desc)
+                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = true), "V3 Argon2id (Device-Locked, AAD)")
                             }
 
                             if (testDecryptionCandidate {
@@ -903,16 +982,15 @@ object VaultBackupManager {
                             }) {
                                 val s = FileInputStream(tempBackupFile).buffered(65536)
                                 s.skip(actualDataOffset)
-                                val desc = if (isV4) "V4 Argon2id (Device-Locked, Standard)" else "V3 Argon2id (Device-Locked, Standard)"
-                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = false), desc)
+                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = false), "V3 Argon2id (Device-Locked, Standard)")
                             }
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Device-locked unwrapping attempt failed: ${e.message}")
+                        Log.w(TAG, "V3 Device-locked unwrapping attempt failed: ${e.message}")
                     }
                 }
 
-                // Try direct Argon2id key
+                // Try direct Argon2id key for V3
                 for (pwd in passwordsToTry) {
                     val argon2Key = Argon2Kdf.deriveKey(pwd.toCharArray(), salt, memoryKb, iterations, parallelism)
 
@@ -923,8 +1001,7 @@ object VaultBackupManager {
                     }) {
                         val s = FileInputStream(tempBackupFile).buffered(65536)
                         s.skip(payloadOffset)
-                        val desc = if (isV4) "V4 Argon2id Portable (AAD)" else "V3 Argon2id Portable (AAD)"
-                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), desc)
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V3 Argon2id Portable (AAD)")
                     }
 
                     if (testDecryptionCandidate {
@@ -934,33 +1011,13 @@ object VaultBackupManager {
                     }) {
                         val s = FileInputStream(tempBackupFile).buffered(65536)
                         s.skip(payloadOffset)
-                        val desc = if (isV4) "V4 Argon2id Portable (Standard)" else "V3 Argon2id Portable (Standard)"
-                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = false), desc)
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = false), "V3 Argon2id Portable (Standard)")
                     }
-
-                    if (payloadOffset != 25L) {
-                        if (testDecryptionCandidate {
-                            val s = FileInputStream(tempBackupFile).buffered(65536)
-                            s.skip(25L)
-                            ChunkedGcmInputStream(s, argon2Key, useAad = true)
-                        }) {
-                            val s = FileInputStream(tempBackupFile).buffered(65536)
-                            s.skip(25L)
-                            return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V4/V3 Argon2id (Compact)")
-                        }
-                    }
-                }
-
-                if (isV4) {
-                    throw SecurityException("Authentication failed: Incorrect master password or corrupted V4 backup.")
                 }
             } catch (e: SecurityException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "V4/V3 parsing failed: ${e.message}")
-                if (isV4) {
-                    throw SecurityException("Failed to decrypt V4 backup: ${e.message}", e)
-                }
+                Log.w(TAG, "V3 parsing failed: ${e.message}")
             }
         }
 
@@ -1460,7 +1517,7 @@ object VaultBackupManager {
                 }
             }
 
-            // Phase 3: Manifest V4 Authentication and Integrity Checks
+            // Phase 3: Manifest Authentication, Strict Bijection, and Integrity Checks
             val targetTotal = stagedFiles.size + 4
             onProgress?.invoke(stagedFiles.size + 1, targetTotal, "Verifying manifest integrity & checksums...", totalBytesRestored)
             if (manifestV4 != null) {
@@ -1469,22 +1526,34 @@ object VaultBackupManager {
                     throw SecurityException("Backup realm mismatch: Backup was created for realm ${manifestV4.sourceRealm}, but active vault is in realm $currentRealm. Decoy/Real isolation violation.")
                 }
 
-                // Verify file checksums against plaintext SHA-256
+                val declaredFileNames = manifestV4.fileInventory.map { File(it.fileName).name }.toSet()
+                val declaredOrigNames = manifestV4.fileInventory.map { File(it.originalName).name }.toSet()
+
+                // Check 1: Every declared file in manifest must exist in staged files and match SHA-256
                 for (entry in manifestV4.fileInventory) {
-                    val actualSha = stagedPlaintextShaMap[entry.fileName] ?: stagedPlaintextShaMap[entry.originalName]
-                    if (actualSha == null) {
-                        val staged = stagedFiles[entry.fileName] ?: stagedFiles[entry.originalName]
-                        if (staged == null) {
-                            throw SecurityException("Backup integrity violation: Declared file '${entry.originalName}' is missing from archive.")
+                    val cleanFileName = File(entry.fileName).name
+                    val cleanOrigName = File(entry.originalName).name
+                    val staged = stagedFiles[cleanFileName] ?: stagedFiles[cleanOrigName]
+                        ?: throw SecurityException("Backup integrity violation: Declared file '${entry.originalName}' is missing from archive.")
+
+                    val actualSha = stagedPlaintextShaMap[cleanFileName] ?: stagedPlaintextShaMap[cleanOrigName]
+                    if (actualSha != null) {
+                        if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
+                            throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive payload corrupted or tampered.")
                         }
+                    } else {
                         val fileSha = computeSha256Hex(staged)
                         if (!fileSha.equals(entry.sha256Hex, ignoreCase = true)) {
                             throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive has been corrupted or tampered.")
                         }
-                    } else {
-                        if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
-                            throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive payload corrupted or tampered.")
-                        }
+                    }
+                }
+
+                // Check 2: Strict Bijection: Every staged file must be explicitly declared in manifestV4
+                for (stagedKey in stagedFiles.keys) {
+                    val cleanKey = File(stagedKey).name
+                    if (!declaredFileNames.contains(cleanKey) && !declaredOrigNames.contains(cleanKey)) {
+                        throw SecurityException("Backup integrity violation: Archive contains undeclared file payload '$cleanKey'. Undeclared entries are forbidden in strict V4.")
                     }
                 }
             } else if (isV4) {
@@ -1511,28 +1580,34 @@ object VaultBackupManager {
                             )
                         )
                     } else {
-                        Log.w(TAG, "Item '${item.originalName}' (file: ${item.encryptedFileName}) missing from backup files.")
+                        if (isV4) {
+                            throw SecurityException("Strict V4 Backup validation failed: Item '${item.originalName}' missing payload in archive.")
+                        } else {
+                            Log.w(TAG, "Item '${item.originalName}' (file: ${item.encryptedFileName}) missing from backup files.")
+                        }
                     }
                 }
             }
 
-            // Synthesize VaultItems for any staged files not in manifest so NO files are lost
-            for ((fileName, stagedFile) in stagedFiles) {
-                if (!matchedStagedNames.contains(stagedFile.name)) {
-                    matchedStagedNames.add(stagedFile.name)
-                    val mime = inferMimeTypeFromName(fileName)
-                    finalItemsToInsert.add(
-                        VaultItem(
-                            id = 0L,
-                            originalName = fileName.removeSuffix(".aes").removeSuffix(".enc").removeSuffix(".bin"),
-                            encryptedFileName = stagedFile.name,
-                            mimeType = mime,
-                            sizeBytes = stagedFile.length(),
-                            addedTimestamp = System.currentTimeMillis(),
-                            isVideo = mime.startsWith("video/"),
-                            folderName = "Root"
+            // Legacy fallback only for pre-V4 backups: synthesize items for orphaned staged files
+            if (!isV4) {
+                for ((fileName, stagedFile) in stagedFiles) {
+                    if (!matchedStagedNames.contains(stagedFile.name)) {
+                        matchedStagedNames.add(stagedFile.name)
+                        val mime = inferMimeTypeFromName(fileName)
+                        finalItemsToInsert.add(
+                            VaultItem(
+                                id = 0L,
+                                originalName = fileName.removeSuffix(".aes").removeSuffix(".enc").removeSuffix(".bin"),
+                                encryptedFileName = stagedFile.name,
+                                mimeType = mime,
+                                sizeBytes = stagedFile.length(),
+                                addedTimestamp = System.currentTimeMillis(),
+                                isVideo = mime.startsWith("video/"),
+                                folderName = "Root"
+                            )
                         )
-                    )
+                    }
                 }
             }
 
