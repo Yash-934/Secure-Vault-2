@@ -48,6 +48,7 @@ import javax.crypto.spec.SecretKeySpec
 object VaultBackupManager {
 
     private const val TAG = "VaultBackup"
+    private val BACKUP_MAGIC_V4 = "VLT_BCK4".toByteArray(Charsets.UTF_8) // 8 bytes
     private val BACKUP_MAGIC_V3 = "VLT_BCK3".toByteArray(Charsets.UTF_8) // 8 bytes
     private val BACKUP_MAGIC_V2 = "VLT_BCK2".toByteArray(Charsets.UTF_8) // 8 bytes
     private val BACKUP_MAGIC_V1 = "VLT_BCK1".toByteArray(Charsets.UTF_8) // 8 bytes
@@ -466,7 +467,7 @@ object VaultBackupManager {
             }
 
             // 4. Write Header:
-            outputStream.write(BACKUP_MAGIC_V3)
+            outputStream.write(BACKUP_MAGIC_V4)
             val flags = if (isDeviceLocked) 1.toByte() else 0.toByte()
             outputStream.write(flags.toInt())
             outputStream.write(salt)
@@ -478,7 +479,7 @@ object VaultBackupManager {
                 outputStream.write(wrappedKeyBytes)
             }
 
-            var totalBytesWritten = (BACKUP_MAGIC_V3.size + 1 + salt.size + 16 + wrappedKeyBytes.size).toLong()
+            var totalBytesWritten = (BACKUP_MAGIC_V4.size + 1 + salt.size + 16 + wrappedKeyBytes.size).toLong()
 
             val countingOut = object : OutputStream() {
                 override fun write(b: Int) {
@@ -508,7 +509,7 @@ object VaultBackupManager {
                 for (item in items) {
                     val file = File(vaultDir, item.encryptedFileName)
                     if (file.exists() && file.length() > 0) {
-                        val sha = computeSha256Hex(file)
+                        val sha = computePlaintextSha256(file)
                         fileEntries.add(
                             BackupFileEntry(
                                 fileName = item.encryptedFileName,
@@ -634,6 +635,27 @@ object VaultBackupManager {
             while (fis.read(buf).also { r = it } != -1) {
                 digest.update(buf, 0, r)
             }
+        }
+        val bytes = digest.digest()
+        val sb = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            sb.append(String.format("%02x", b))
+        }
+        return sb.toString()
+    }
+
+    private fun computePlaintextSha256(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).buffered(65536).use { fis ->
+            val out = object : OutputStream() {
+                override fun write(b: Int) {
+                    digest.update(b.toByte())
+                }
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    digest.update(b, off, len)
+                }
+            }
+            CryptoManager.decryptStreamToOutputStream(fis, out)
         }
         val bytes = digest.digest()
         val sb = StringBuilder(bytes.size * 2)
@@ -792,6 +814,7 @@ object VaultBackupManager {
         }
 
         // Header detection
+        val isV4 = headerBytes.size >= 8 && headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_V4)
         val isV3 = headerBytes.size >= 8 && headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_V3)
         val isV2 = headerBytes.size >= 8 && headerBytes.copyOfRange(0, 8).contentEquals(BACKUP_MAGIC_V2)
         val isV1 = headerBytes.size >= 8 && (
@@ -802,6 +825,7 @@ object VaultBackupManager {
             headerBytes.copyOfRange(0, 8).contentEquals("QV_BACK1".toByteArray(Charsets.UTF_8))
         )
         val is4ByteVlt = headerBytes.size >= 4 && (
+            (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x34.toByte()) ||
             (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x33.toByte()) ||
             (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x32.toByte()) ||
             (headerBytes[0] == 0x56.toByte() && headerBytes[1] == 0x4C.toByte() && headerBytes[2] == 0x54.toByte() && headerBytes[3] == 0x31.toByte())
@@ -809,8 +833,8 @@ object VaultBackupManager {
 
         var detectedDeviceLocked = false
 
-        // Phase A: If V3 format detected
-        if (isV3 && headerBytes.size >= 25) {
+        // Phase A: If V4 or V3 format detected
+        if ((isV4 || isV3) && headerBytes.size >= 25) {
             onProgress?.invoke(0, 0, "Inspecting Argon2id Parameters...", 0L)
             try {
                 val flags = headerBytes[8].toInt()
@@ -868,7 +892,8 @@ object VaultBackupManager {
                             }) {
                                 val s = FileInputStream(tempBackupFile).buffered(65536)
                                 s.skip(actualDataOffset)
-                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = true), "V3 Argon2id (Device-Locked, AAD)")
+                                val desc = if (isV4) "V4 Argon2id (Device-Locked, AAD)" else "V3 Argon2id (Device-Locked, AAD)"
+                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = true), desc)
                             }
 
                             if (testDecryptionCandidate {
@@ -878,7 +903,8 @@ object VaultBackupManager {
                             }) {
                                 val s = FileInputStream(tempBackupFile).buffered(65536)
                                 s.skip(actualDataOffset)
-                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = false), "V3 Argon2id (Device-Locked, Standard)")
+                                val desc = if (isV4) "V4 Argon2id (Device-Locked, Standard)" else "V3 Argon2id (Device-Locked, Standard)"
+                                return DecryptedStreamResult(ChunkedGcmInputStream(s, activeKey, useAad = false), desc)
                             }
                         }
                     } catch (e: Exception) {
@@ -897,7 +923,8 @@ object VaultBackupManager {
                     }) {
                         val s = FileInputStream(tempBackupFile).buffered(65536)
                         s.skip(payloadOffset)
-                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V3 Argon2id Portable (AAD)")
+                        val desc = if (isV4) "V4 Argon2id Portable (AAD)" else "V3 Argon2id Portable (AAD)"
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), desc)
                     }
 
                     if (testDecryptionCandidate {
@@ -907,7 +934,8 @@ object VaultBackupManager {
                     }) {
                         val s = FileInputStream(tempBackupFile).buffered(65536)
                         s.skip(payloadOffset)
-                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = false), "V3 Argon2id Portable (Standard)")
+                        val desc = if (isV4) "V4 Argon2id Portable (Standard)" else "V3 Argon2id Portable (Standard)"
+                        return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = false), desc)
                     }
 
                     if (payloadOffset != 25L) {
@@ -918,12 +946,21 @@ object VaultBackupManager {
                         }) {
                             val s = FileInputStream(tempBackupFile).buffered(65536)
                             s.skip(25L)
-                            return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V3 Argon2id (Compact)")
+                            return DecryptedStreamResult(ChunkedGcmInputStream(s, argon2Key, useAad = true), "V4/V3 Argon2id (Compact)")
                         }
                     }
                 }
+
+                if (isV4) {
+                    throw SecurityException("Authentication failed: Incorrect master password or corrupted V4 backup.")
+                }
+            } catch (e: SecurityException) {
+                throw e
             } catch (e: Exception) {
-                Log.w(TAG, "V3 parsing failed: ${e.message}")
+                Log.w(TAG, "V4/V3 parsing failed: ${e.message}")
+                if (isV4) {
+                    throw SecurityException("Failed to decrypt V4 backup: ${e.message}", e)
+                }
             }
         }
 
@@ -1255,7 +1292,9 @@ object VaultBackupManager {
             var logsToRestore: List<IntruderLog>? = null
 
             val stagedFiles = mutableMapOf<String, File>()
+            val stagedPlaintextShaMap = mutableMapOf<String, String>()
             val seenEntries = mutableSetOf<String>()
+            val isV4 = streamResult.formatDescription.startsWith("V4")
 
             streamResult.stream.use { rawDecryptedStream ->
                 ZipInputStream(rawDecryptedStream).use { zis ->
@@ -1282,10 +1321,7 @@ object VaultBackupManager {
                         }
 
                         if (!seenEntries.add(entryName)) {
-                            Log.w(TAG, "Duplicate entry in backup archive, skipping duplicate: $entryName")
-                            try { zis.closeEntry() } catch (_: Throwable) {}
-                            entry = try { zis.nextEntry } catch (_: Throwable) { null }
-                            continue
+                            throw SecurityException("Duplicate entry detected in backup archive: $entryName. Archive rejected for ambiguity.")
                         }
 
                         val lower = cleanFileName.lowercase()
@@ -1295,8 +1331,13 @@ object VaultBackupManager {
                                 try {
                                     val v4Json = zis.readBytes().toString(Charsets.UTF_8)
                                     manifestV4 = manifestV4Adapter.fromJson(v4Json)
+                                        ?: throw SecurityException("Parsed V4 manifest was null")
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "V4 manifest parse warning: ${e.message}")
+                                    if (isV4) {
+                                        throw SecurityException("Failed to parse mandatory V4 manifest: ${e.message}", e)
+                                    } else {
+                                        Log.w(TAG, "V4 manifest parse warning: ${e.message}")
+                                    }
                                 }
                             }
                             lower == MANIFEST_METADATA_FILENAME || lower == "metadata.json" -> {
@@ -1361,11 +1402,41 @@ object VaultBackupManager {
                                      (peek[3] == 0x34.toByte() || peek[3] == 0x33.toByte() || peek[3] == 0x32.toByte()))
                                 )
 
+                                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                                val teeIn = object : InputStream() {
+                                    override fun read(): Int {
+                                        val b = pushback.read()
+                                        if (b != -1) digest.update(b.toByte())
+                                        return b
+                                    }
+                                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                                        val r = pushback.read(b, off, len)
+                                        if (r > 0) digest.update(b, off, r)
+                                        return r
+                                    }
+                                    override fun close() {
+                                        pushback.close()
+                                    }
+                                }
+
                                 FileOutputStream(stagedFile).buffered(65536).use { fos ->
                                     if (isAlreadyVaultEncrypted) {
                                         pushback.copyTo(fos)
                                     } else {
-                                        CryptoManager.encryptStream(pushback, fos)
+                                        CryptoManager.encryptStream(teeIn, fos)
+                                    }
+                                }
+
+                                if (!isAlreadyVaultEncrypted) {
+                                    val bytes = digest.digest()
+                                    val sb = StringBuilder(bytes.size * 2)
+                                    for (b in bytes) {
+                                        sb.append(String.format("%02x", b))
+                                    }
+                                    val sha = sb.toString()
+                                    stagedPlaintextShaMap[cleanFileName] = sha
+                                    if (uniqueStagedName != cleanFileName) {
+                                        stagedPlaintextShaMap[uniqueStagedName] = sha
                                     }
                                 }
 
@@ -1398,17 +1469,26 @@ object VaultBackupManager {
                     throw SecurityException("Backup realm mismatch: Backup was created for realm ${manifestV4.sourceRealm}, but active vault is in realm $currentRealm. Decoy/Real isolation violation.")
                 }
 
-                // Verify file checksums
+                // Verify file checksums against plaintext SHA-256
                 for (entry in manifestV4.fileInventory) {
-                    val staged = stagedFiles[entry.fileName] ?: stagedFiles[entry.originalName]
-                    if (staged == null) {
-                        throw SecurityException("Backup integrity violation: Declared file '${entry.originalName}' is missing from archive.")
-                    }
-                    val actualSha = computeSha256Hex(staged)
-                    if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
-                        throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive has been corrupted or tampered.")
+                    val actualSha = stagedPlaintextShaMap[entry.fileName] ?: stagedPlaintextShaMap[entry.originalName]
+                    if (actualSha == null) {
+                        val staged = stagedFiles[entry.fileName] ?: stagedFiles[entry.originalName]
+                        if (staged == null) {
+                            throw SecurityException("Backup integrity violation: Declared file '${entry.originalName}' is missing from archive.")
+                        }
+                        val fileSha = computeSha256Hex(staged)
+                        if (!fileSha.equals(entry.sha256Hex, ignoreCase = true)) {
+                            throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive has been corrupted or tampered.")
+                        }
+                    } else {
+                        if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
+                            throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive payload corrupted or tampered.")
+                        }
                     }
                 }
+            } else if (isV4) {
+                throw SecurityException("Strict V4 Backup validation failed: Missing or unparseable backup_manifest_v4.json")
             }
 
             // Reconcile manifest items with staged files

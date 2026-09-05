@@ -341,9 +341,14 @@ object VaultKeyManager {
     }
 
     /**
-     * Direct authorization for programmatic testing or migration workflows where VRK is known.
+     * Direct authorization strictly for programmatic testing or migration workflows where VRK is known.
+     * Enforces build-time guard so arbitrary authorization is prohibited in release builds.
      */
+    @androidx.annotation.VisibleForTesting(otherwise = androidx.annotation.VisibleForTesting.NONE)
     fun setAuthorizedSession(vrk: ByteArray, isDecoy: Boolean = false) {
+        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) {
+            throw SecurityException("Direct session authorization is strictly prohibited in release builds.")
+        }
         if (vrk.size != 32) throw IllegalArgumentException("VRK must be exactly 32 bytes")
         activeVrk = vrk.copyOf()
         isDecoyMode = isDecoy
@@ -475,10 +480,24 @@ object VaultKeyManager {
                 return false
             }
 
-            // Atomically rename staged envelope to active envelope
-            if (!stagedFile.renameTo(targetFile)) {
-                stagedFile.copyTo(targetFile, overwrite = true)
+            // Atomically rename staged envelope to active envelope with OS-level atomic move guarantee
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    java.nio.file.Files.move(
+                        stagedFile.toPath(),
+                        targetFile.toPath(),
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                    )
+                } else {
+                    if (!stagedFile.renameTo(targetFile)) {
+                        throw java.io.IOException("Atomic renameTo failed for biometric envelope")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Critical failure during atomic biometric envelope commit: ${e.message}", e)
                 stagedFile.delete()
+                return false
             }
 
             // Transactional cleanup: New key + envelope are live. Safely delete superseded old slot key.
@@ -685,11 +704,8 @@ object VaultKeyManager {
     }
 
     private fun isRunningInTestEnvironment(): Boolean {
-        return try {
-            Class.forName("org.junit.Test") != null || Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
-        } catch (e: Exception) {
-            false
-        }
+        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) return false
+        return Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
     }
 
     @Synchronized

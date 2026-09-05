@@ -399,8 +399,8 @@ class SecurityAuditEngine @Inject constructor(
         return try {
             val filesDir = context.filesDir
             val absolutePath = filesDir.absolutePath
-            val isTestEnv = Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric") ||
-                    try { Class.forName("org.junit.Test") != null } catch (_: Exception) { false }
+            val isTestEnv = com.quantumvault.wkqpx.BuildConfig.DEBUG &&
+                    Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
             val isAppPrivate = isTestEnv || ((absolutePath.startsWith("/data/") || absolutePath.startsWith("/user/")) &&
                     absolutePath.contains(context.packageName))
             val isWritable = filesDir.exists() && filesDir.canWrite()
@@ -415,11 +415,9 @@ class SecurityAuditEngine @Inject constructor(
      */
     fun checkNativeStringMasking(): Boolean {
         return try {
-            val original = "QuantumVaultSecureBuffer"
-            val key = 0x5A.toByte()
-            val masked = original.toByteArray(Charsets.UTF_8).map { (it.toInt() xor key.toInt()).toByte() }.toByteArray()
-            val unmasked = String(masked.map { (it.toInt() xor key.toInt()).toByte() }.toByteArray(), Charsets.UTF_8)
-            unmasked == original
+            val resolvedFrida = ObfuscatedStrings.resolve(ObfuscatedStrings.SIG_FRIDA_AGENT)
+            val resolvedSu = ObfuscatedStrings.resolve(ObfuscatedStrings.PATH_SYSTEM_BIN_SU)
+            resolvedFrida.isNotBlank() && resolvedSu.isNotBlank() && resolvedFrida != resolvedSu
         } catch (_: Exception) {
             false
         }

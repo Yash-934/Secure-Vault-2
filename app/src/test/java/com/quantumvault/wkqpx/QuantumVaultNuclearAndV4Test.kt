@@ -221,4 +221,121 @@ class QuantumVaultNuclearAndV4Test {
             exceptionMessage.lowercase().contains("realm mismatch") || exceptionMessage.lowercase().contains("decoy")
         )
     }
+
+    @Test
+    fun testV4BackupRejectsDuplicateZipEntries() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+
+        val backupPassword = "V4BackupPassword2026!"
+        val salt = ByteArray(16) { 0x55.toByte() }
+        val derivedKey = com.quantumvault.wkqpx.security.Argon2Kdf.deriveKey(
+            backupPassword.toCharArray(),
+            salt,
+            memoryKb = 1024,
+            iterations = 1
+        )
+
+        val zip1 = ByteArrayOutputStream().also { bos ->
+            ZipOutputStream(bos).use { zos ->
+                zos.putNextEntry(ZipEntry("vault_manifest.json"))
+                zos.write("[]".toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+        }.toByteArray()
+
+        val zip2 = ByteArrayOutputStream().also { bos ->
+            ZipOutputStream(bos).use { zos ->
+                zos.putNextEntry(ZipEntry("vault_manifest.json"))
+                zos.write("[]".toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+        }.toByteArray()
+
+        val backupOut = ByteArrayOutputStream()
+        backupOut.write("VLT_BCK4".toByteArray(Charsets.UTF_8))
+        backupOut.write(0)
+        backupOut.write(salt)
+        val bb = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.BIG_ENDIAN)
+        bb.putInt(1024)
+        bb.putInt(1)
+        bb.putInt(1)
+        bb.putInt(0)
+        backupOut.write(bb.array())
+
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, derivedKey)
+        chunkedOut.write(zip1)
+        chunkedOut.write(zip2)
+        chunkedOut.close()
+
+        val restoreInput = ByteArrayInputStream(backupOut.toByteArray())
+        val result = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            inputStream = restoreInput,
+            vaultRepository = repo,
+            isReplaceMode = false
+        )
+
+        assertFalse("Duplicate entry archive must fail", result.isSuccess)
+        val exceptionMessage = result.exceptionOrNull()?.message ?: ""
+        assertTrue(
+            "Exception must indicate duplicate entry rejection or corruption: $exceptionMessage",
+            exceptionMessage.contains("Duplicate entry") || exceptionMessage.contains("ambiguity") || exceptionMessage.contains("failed")
+        )
+    }
+
+    @Test
+    fun testV4MissingManifestFailsClosed() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+
+        val backupPassword = "V4BackupPassword2026!"
+        val salt = ByteArray(16) { 0x66.toByte() }
+        val derivedKey = com.quantumvault.wkqpx.security.Argon2Kdf.deriveKey(
+            backupPassword.toCharArray(),
+            salt,
+            memoryKb = 1024,
+            iterations = 1
+        )
+
+        val backupOut = ByteArrayOutputStream()
+        backupOut.write("VLT_BCK4".toByteArray(Charsets.UTF_8))
+        backupOut.write(0)
+        backupOut.write(salt)
+        val bb = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.BIG_ENDIAN)
+        bb.putInt(1024)
+        bb.putInt(1)
+        bb.putInt(1)
+        bb.putInt(0)
+        backupOut.write(bb.array())
+
+        val chunkedOut = VaultBackupManager.ChunkedGcmOutputStream(backupOut, derivedKey)
+        ZipOutputStream(chunkedOut).use { zos ->
+            // Omitting backup_manifest_v4.json in a V4 backup
+            zos.putNextEntry(ZipEntry("vault_manifest.json"))
+            zos.write("[]".toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+
+        val restoreInput = ByteArrayInputStream(backupOut.toByteArray())
+        val result = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            inputStream = restoreInput,
+            vaultRepository = repo,
+            isReplaceMode = false
+        )
+
+        assertFalse("V4 backup with missing manifest must fail", result.isSuccess)
+        val exceptionMessage = result.exceptionOrNull()?.message ?: ""
+        assertTrue(
+            "Exception must indicate missing manifest: $exceptionMessage",
+            exceptionMessage.contains("Strict V4") || exceptionMessage.contains("validation failed") || exceptionMessage.contains("manifest")
+        )
+    }
 }

@@ -35,28 +35,37 @@ object SelfDestructManager {
         var keyResults = emptyMap<String, Boolean>()
 
         try {
-            // 1. Close and delete Room databases (both real and decoy)
+            // 1. Close and delete Room databases (both real and decoy) with explicit verification
             try {
                 AppDatabase.closeDatabases()
-                context.deleteDatabase("secure_vault_db")
-                context.deleteDatabase("secure_vault_decoy_db")
+                val deletedReal = context.deleteDatabase("secure_vault_db")
+                val deletedDecoy = context.deleteDatabase("secure_vault_decoy_db")
                 DatabaseKeyManager.destroyKeys(context)
-                dbDestroyed = true
+
+                val realDbFile = context.getDatabasePath("secure_vault_db")
+                val decoyDbFile = context.getDatabasePath("secure_vault_decoy_db")
+                val realStillExists = realDbFile != null && realDbFile.exists()
+                val decoyStillExists = decoyDbFile != null && decoyDbFile.exists()
+
+                dbDestroyed = !realStillExists && !decoyStillExists
             } catch (e: Exception) {
                 Log.e(TAG, "Error closing/deleting databases during self-destruct", e)
+                dbDestroyed = false
             }
 
-            // 2. Wipe / shred files in Context.filesDir and datastore recursively
+            // 2. Wipe / shred files in Context.filesDir and datastore recursively with authoritative verification
             try {
-                shredDirectory(context.filesDir)
+                val filesDirWiped = shredDirectory(context.filesDir)
                 val datastoreDir = File(context.filesDir.parent, "datastore")
-                if (datastoreDir.exists()) shredDirectory(datastoreDir)
+                val datastoreWiped = if (datastoreDir.exists()) shredDirectory(datastoreDir) else true
                 val sharedPrefsDir = File(context.filesDir.parent, "shared_prefs")
-                if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir)
-                shredDirectory(context.cacheDir)
-                storageWiped = true
+                val sharedPrefsWiped = if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir) else true
+                val cacheDirWiped = shredDirectory(context.cacheDir)
+                
+                storageWiped = filesDirWiped && datastoreWiped && sharedPrefsWiped && cacheDirWiped
             } catch (e: Exception) {
                 Log.e(TAG, "Error wiping storage directories during self-destruct", e)
+                storageWiped = false
             }
 
             // 3. Authoritatively destroy ALL Keystore keys via central VaultKeyManager
@@ -98,20 +107,22 @@ object SelfDestructManager {
         }
     }
 
-    private fun shredDirectory(dir: File?) {
-        if (dir == null || !dir.exists()) return
+    private fun shredDirectory(dir: File?): Boolean {
+        if (dir == null || !dir.exists()) return true
+        var allSuccess = true
         dir.listFiles()?.forEach { file ->
             if (file.isDirectory) {
-                shredDirectory(file)
+                if (!shredDirectory(file)) allSuccess = false
             } else {
-                shredFile(file)
+                if (!shredFile(file)) allSuccess = false
             }
         }
-        dir.delete()
+        val dirDeleted = dir.delete() || !dir.exists()
+        return allSuccess && dirDeleted
     }
 
-    fun shredFile(file: File) {
-        try {
+    fun shredFile(file: File): Boolean {
+        return try {
             if (file.exists() && file.canWrite()) {
                 val length = file.length()
                 if (length > 0) {
@@ -124,12 +135,13 @@ object SelfDestructManager {
                             remaining -= writeLen
                         }
                         fos.flush()
+                        fos.fd.sync()
                     }
                 }
             }
-            file.delete()
+            file.delete() || !file.exists()
         } catch (e: Exception) {
-            file.delete()
+            file.delete() || !file.exists()
         }
     }
 }
