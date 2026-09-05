@@ -60,10 +60,18 @@ object SelfDestructManager {
     fun quiesceApplication() {
         isApplicationQuiesced = true
         try {
+            VaultKeyManager.lockVault()
+        } catch (e: Exception) {
+            Log.w(TAG, "Vault lock during quiesce: ${e.message}")
+        }
+        try {
             AppDatabase.closeDatabases()
         } catch (e: Exception) {
             Log.w(TAG, "Database close during quiesce: ${e.message}")
         }
+        try {
+            System.gc()
+        } catch (_: Exception) {}
     }
 
     suspend fun executeNuclearSelfDestruct(context: Context): SelfDestructResult = withContext(Dispatchers.IO) {
@@ -217,9 +225,15 @@ object SelfDestructManager {
 
         // 2. Cryptographic Wrappers
         val wrapperNames = listOf(
+            "vrk_pin_wrap.bin", "decoy_vrk_pin_wrap.bin",
+            "vrk_pin_wrap.bin.tmp", "decoy_vrk_pin_wrap.bin.tmp",
+            "biometric_wrap.bin", "decoy_biometric_wrap.bin",
+            "biometric_wrap.bin.staged", "decoy_biometric_wrap.bin.staged",
+            "biometric_envelope_real.bin", "biometric_envelope_decoy.bin",
             "vrk_wrapper_real.bin", "vrk_wrapper_decoy.bin",
             "db_key_wrapper_real.bin", "db_key_wrapper_decoy.bin",
-            "biometric_envelope_real.bin", "biometric_envelope_decoy.bin"
+            "credential_wrap.bin", "decoy_credential_wrap.bin",
+            "kek_salt.bin"
         )
         val wrapperFiles = wrapperNames.map { File(context.filesDir, it) }
 
@@ -228,12 +242,17 @@ object SelfDestructManager {
             "vault_gen_real.bin", "vault_gen_decoy.bin",
             "vault_gen_real.intent", "vault_gen_decoy.intent",
             "vault_gen_real.bin.tmp", "vault_gen_decoy.bin.tmp",
+            "vault_restore_journal.bin", "vault_restore_journal.bin.tmp",
             "vault_restore_journal.json", "vault_restore_journal.json.tmp"
         )
         val generationFiles = genNames.map { File(context.filesDir, it) }
 
         // 4. Cryptographic Sentinels
-        val sentinelNames = listOf("vault_sentinel_real.bin", "vault_sentinel_decoy.bin")
+        val sentinelNames = listOf(
+            "vault_sentinel.bin", "decoy_vault_sentinel.bin",
+            "vault_sentinel.bin.tmp", "decoy_vault_sentinel.bin.tmp",
+            "vault_sentinel_real.bin", "vault_sentinel_decoy.bin"
+        )
         val sentinelFiles = sentinelNames.map { File(context.filesDir, it) }
 
         // 5. Vault Payload Directories & Staging Generations

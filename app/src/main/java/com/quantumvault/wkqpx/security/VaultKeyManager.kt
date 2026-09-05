@@ -117,6 +117,13 @@ object VaultKeyManager {
     // EXACT SINGLE AAD FOR BIOMETRIC ENVELOPE (Rule 3.3)
     val BIOMETRIC_AAD = "QUANTUM_VAULT_REAL_BIOMETRIC_V1".toByteArray(Charsets.UTF_8)
 
+    enum class BiometricSlotState {
+        SLOT_A,
+        SLOT_B,
+        CORRUPT,
+        MISSING
+    }
+
     fun getVaultState(): VaultState = currentState
 
     fun setVaultState(state: VaultState) {
@@ -402,31 +409,53 @@ object VaultKeyManager {
     }
 
     /**
+     * Inspects active biometric envelope and returns its precise structural state.
+     */
+    fun getBiometricSlotState(context: Context): BiometricSlotState {
+        val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
+        if (!file.exists() || file.length() == 0L) return BiometricSlotState.MISSING
+        if (file.length() != EXPECTED_BIE1_SIZE.toLong()) return BiometricSlotState.CORRUPT
+
+        return try {
+            val bytes = file.readBytes()
+            if (bytes.size != EXPECTED_BIE1_SIZE) return BiometricSlotState.CORRUPT
+            if (!bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) return BiometricSlotState.CORRUPT
+            val version = bytes[4]
+            if (version != BIE1_VERSION) return BiometricSlotState.CORRUPT
+            val realm = bytes[5]
+            if (realm != BIE1_REALM_REAL && realm != BIE1_REALM_DECOY) return BiometricSlotState.CORRUPT
+            val bb = ByteBuffer.wrap(bytes)
+            val slot = bb.getLong(6)
+            when (slot) {
+                1L -> BiometricSlotState.SLOT_A
+                2L -> BiometricSlotState.SLOT_B
+                else -> BiometricSlotState.CORRUPT
+            }
+        } catch (_: Exception) {
+            BiometricSlotState.CORRUPT
+        }
+    }
+
+    /**
      * Inspects active BIE1 biometric envelope to determine the committed key slot (1L or 2L).
      */
     fun getActiveBiometricSlot(context: Context): Long {
-        val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
-        if (!file.exists() || file.length() < EXPECTED_BIE1_SIZE) return 0L
-        return try {
-            val bytes = file.readBytes()
-            if (bytes.size >= 14 && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
-                ByteBuffer.wrap(bytes).getLong(6)
-            } else {
-                0L
-            }
-        } catch (_: Exception) {
-            0L
+        return when (getBiometricSlotState(context)) {
+            BiometricSlotState.SLOT_A -> 1L
+            BiometricSlotState.SLOT_B -> 2L
+            BiometricSlotState.CORRUPT, BiometricSlotState.MISSING -> 0L
         }
     }
 
     /**
      * Resolves the Keystore alias corresponding to the currently active biometric envelope.
+     * Returns null if envelope is corrupt, missing, or malformed, preventing legacy alias fallback.
      */
-    fun getActiveBiometricAlias(context: Context): String {
-        return when (getActiveBiometricSlot(context)) {
-            2L -> ALIAS_BIOMETRIC_SLOT_B
-            1L -> ALIAS_BIOMETRIC_SLOT_A
-            else -> ALIAS_BIOMETRIC_UNLOCK
+    fun getActiveBiometricAlias(context: Context): String? {
+        return when (getBiometricSlotState(context)) {
+            BiometricSlotState.SLOT_A -> ALIAS_BIOMETRIC_SLOT_A
+            BiometricSlotState.SLOT_B -> ALIAS_BIOMETRIC_SLOT_B
+            BiometricSlotState.CORRUPT, BiometricSlotState.MISSING -> null
         }
     }
 
@@ -435,7 +464,7 @@ object VaultKeyManager {
      * Section 3.1: Unlock path may ONLY retrieve existing key; never create inside unlock.
      */
     @Synchronized
-    fun getExistingBiometricMasterKey(alias: String = ALIAS_BIOMETRIC_UNLOCK): SecretKey? {
+    fun getExistingBiometricMasterKey(alias: String = ALIAS_BIOMETRIC_SLOT_A): SecretKey? {
         return keyProvider.getKey(alias)
     }
 
@@ -563,22 +592,24 @@ object VaultKeyManager {
     /**
      * Initializes BiometricPrompt.CryptoObject in DECRYPT mode using the IV stored in the envelope.
      * STRICT INVARIANT: Unlock path NEVER generates a key; only retrieves existing active key.
+     * Current production biometric flow parses BIE1 ONLY. If malformed, returns null (ENVELOPE_CORRUPT).
      */
     fun getBiometricDecryptCryptoObject(context: Context): androidx.biometric.BiometricPrompt.CryptoObject? {
-        val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
-        if (!file.exists() || file.length() < 30) return null
+        val slotState = getBiometricSlotState(context)
+        if (slotState != BiometricSlotState.SLOT_A && slotState != BiometricSlotState.SLOT_B) {
+            Log.w(TAG, "getBiometricDecryptCryptoObject rejected: Biometric envelope state is $slotState")
+            return null
+        }
 
+        val activeAlias = getActiveBiometricAlias(context) ?: return null
+        val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
         return try {
             val bytes = file.readBytes()
-            val iv: ByteArray = if (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
-                val ivLen = bytes[14].toInt() and 0xFF
-                bytes.copyOfRange(15, 15 + ivLen)
-            } else {
-                val ivLen = bytes[0].toInt() and 0xFF
-                bytes.copyOfRange(1, 1 + ivLen)
-            }
+            if (bytes.size != EXPECTED_BIE1_SIZE) return null
+            val ivLen = bytes[14].toInt() and 0xFF
+            if (ivLen != 12) return null
+            val iv = bytes.copyOfRange(15, 15 + ivLen)
 
-            val activeAlias = getActiveBiometricAlias(context)
             val biometricKey = getExistingBiometricMasterKey(activeAlias) ?: run {
                 Log.w(TAG, "Existing biometric master key not found for alias $activeAlias during unlock attempt")
                 return null
@@ -598,6 +629,7 @@ object VaultKeyManager {
     /**
      * Unwraps the VRK from the biometric envelope using the authenticated Cipher.
      * Enforces strict BIE1 format, realm check, single AAD, and authenticated sentinel check.
+     * NEVER falls back to legacy envelope parsing or alternative key aliases.
      */
     fun unwrapBiometricSessionKey(context: Context, authenticatedCipher: Cipher): Boolean {
         val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
@@ -605,36 +637,47 @@ object VaultKeyManager {
 
         return try {
             val bytes = file.readBytes()
-            val ciphertext: ByteArray
-
-            if (bytes.size == EXPECTED_BIE1_SIZE && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
-                val bb = ByteBuffer.wrap(bytes)
-                val magic = ByteArray(4)
-                bb.get(magic)
-                val version = bb.get()
-                val realm = bb.get()
-                val gen = bb.long
-                val ivLen = bb.get().toInt() and 0xFF
-                val iv = ByteArray(ivLen)
-                bb.get(iv)
-                val cipherLen = bb.short.toInt() and 0xFFFF
-                ciphertext = ByteArray(cipherLen)
-                bb.get(ciphertext)
-
-                // Enforce realm check: Decoy envelope must never unlock real vault!
-                if (realm != BIE1_REALM_REAL) {
-                    Log.e(TAG, "Biometric unwrap rejected: Wrong realm ($realm)")
-                    return false
-                }
-            } else if (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals("QVBE".toByteArray(Charsets.US_ASCII))) {
-                val ivLen = bytes[5].toInt() and 0xFF
-                val offset = 6 + ivLen
-                val cipherLen = ((bytes[offset].toInt() and 0xFF) shl 8) or (bytes[offset + 1].toInt() and 0xFF)
-                ciphertext = bytes.copyOfRange(offset + 2, offset + 2 + cipherLen)
-            } else {
-                val ivLen = bytes[0].toInt() and 0xFF
-                ciphertext = bytes.copyOfRange(1 + ivLen, bytes.size)
+            if (bytes.size != EXPECTED_BIE1_SIZE) {
+                Log.e(TAG, "Biometric unwrap rejected: Envelope size ${bytes.size} != expected $EXPECTED_BIE1_SIZE")
+                return false
             }
+            if (!bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
+                Log.e(TAG, "Biometric unwrap rejected: Invalid magic header (non-BIE1)")
+                return false
+            }
+
+            val bb = ByteBuffer.wrap(bytes)
+            val magic = ByteArray(4)
+            bb.get(magic)
+            val version = bb.get()
+            if (version != BIE1_VERSION) {
+                Log.e(TAG, "Biometric unwrap rejected: Unsupported BIE1 version ($version)")
+                return false
+            }
+            val realm = bb.get()
+            if (realm != BIE1_REALM_REAL) {
+                Log.e(TAG, "Biometric unwrap rejected: Wrong realm ($realm)")
+                return false
+            }
+            val gen = bb.long
+            if (gen != 1L && gen != 2L) {
+                Log.e(TAG, "Biometric unwrap rejected: Invalid slot ID ($gen)")
+                return false
+            }
+            val ivLen = bb.get().toInt() and 0xFF
+            if (ivLen != 12) {
+                Log.e(TAG, "Biometric unwrap rejected: Invalid IV length ($ivLen)")
+                return false
+            }
+            val iv = ByteArray(ivLen)
+            bb.get(iv)
+            val cipherLen = bb.short.toInt() and 0xFFFF
+            if (cipherLen != 48) {
+                Log.e(TAG, "Biometric unwrap rejected: Invalid ciphertext length ($cipherLen)")
+                return false
+            }
+            val ciphertext = ByteArray(cipherLen)
+            bb.get(ciphertext)
 
             authenticatedCipher.updateAAD(BIOMETRIC_AAD)
             val unwrappedBytes = authenticatedCipher.doFinal(ciphertext)
@@ -676,13 +719,19 @@ object VaultKeyManager {
             return BiometricEnrollmentState.ENVELOPE_MISSING
         }
 
-        if (envelopeFile.length() < 60) {
+        val slotState = getBiometricSlotState(context)
+        if (slotState == BiometricSlotState.CORRUPT) {
             envelopeFile.delete()
             settingsDataStore.setBiometricsEnabled(false)
             return BiometricEnrollmentState.ENVELOPE_CORRUPT
         }
 
-        val activeAlias = getActiveBiometricAlias(context)
+        val activeAlias = getActiveBiometricAlias(context) ?: run {
+            envelopeFile.delete()
+            settingsDataStore.setBiometricsEnabled(false)
+            return BiometricEnrollmentState.ENVELOPE_CORRUPT
+        }
+
         try {
             val key = keyProvider.getKey(activeAlias)
             if (key == null) {

@@ -33,10 +33,13 @@ class DatabaseKeyContinuityTest {
         runBlocking {
             val settingsDataStore = SettingsDataStore(context)
             settingsDataStore.clearAllForTesting()
-            File(context.filesDir, "vrk_wrap.bin").delete()
+            VaultKeyManager.lockVault()
+            File(context.filesDir, "vrk_pin_wrap.bin").delete()
             File(context.filesDir, "decoy_vrk_pin_wrap.bin").delete()
+            File(context.filesDir, "vrk_wrap.bin").delete()
             File(context.filesDir, "vault_sentinel.bin").delete()
             File(context.filesDir, "decoy_vault_sentinel.bin").delete()
+            File(context.filesDir, "biometric_wrap.bin").delete()
             File(context.filesDir, "vrk_biometric_envelope.bin").delete()
             com.quantumvault.wkqpx.security.DatabaseKeyManager.destroyKeys(context)
         }

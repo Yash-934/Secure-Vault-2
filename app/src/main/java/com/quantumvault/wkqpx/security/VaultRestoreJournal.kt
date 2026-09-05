@@ -165,11 +165,18 @@ object VaultRestoreJournal {
         }
 
         if (legacyFile.exists() && legacyFile.length() > 0L) {
+            // P0-3: A plaintext journal is not cryptographically authenticated.
+            // For initialized vaults, an unauthenticated plaintext legacy journal MUST NOT automatically become trusted recovery state.
+            if (VaultKeyManager.hasCredentialWrap(context, isDecoy = false) || VaultKeyManager.hasCredentialWrap(context, isDecoy = true)) {
+                throw JournalCorruptedException(
+                    "Unauthenticated plaintext legacy restore journal rejected on initialized vault. Tamper-evident recovery required. RECOVERY_REQUIRED."
+                )
+            }
             return try {
                 val json = legacyFile.readText(Charsets.UTF_8)
                 val record = adapter.fromJson(json)
                     ?: throw JournalCorruptedException("Corrupt legacy restore journal. RECOVERY_REQUIRED.")
-                // Upgrade to authenticated journal
+                // Upgrade to authenticated journal for uninitialized vault
                 recordState(context, record)
                 legacyFile.delete()
                 record

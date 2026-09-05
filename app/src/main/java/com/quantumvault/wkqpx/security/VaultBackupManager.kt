@@ -43,6 +43,8 @@ class DeviceBindingMismatchException(message: String, cause: Throwable? = null) 
 class InvalidBackupPasswordException(message: String, cause: Throwable? = null) : BackupException(message, cause)
 class CorruptedBackupException(message: String, cause: Throwable? = null) : BackupException(message, cause)
 class BackupManifestIntegrityException(message: String, cause: Throwable? = null) : BackupException(message, cause)
+class CryptoDowngradeException(message: String, cause: Throwable? = null) : BackupException(message, cause)
+class GenerationRegressionException(message: String, cause: Throwable? = null) : BackupException(message, cause)
 
 enum class RestoreFaultPhase {
     AFTER_FS_SWAP,
@@ -105,6 +107,9 @@ object VaultBackupManager {
     data class VaultBackupManifestV4(
         val formatVersion: Int = 4,
         val sourceRealm: Int = 1, // 1: Real Vault, 2: Decoy Vault
+        val backupUuid: String = java.util.UUID.randomUUID().toString(),
+        val algorithmSuite: String = "ARGON2ID_HKDF_AES256GCM_V4",
+        val payloadRootDigest: String = "",
         val itemsCount: Int = 0,
         val foldersCount: Int = 0,
         val passwordsCount: Int = 0,
@@ -591,9 +596,24 @@ object VaultBackupManager {
                     }
                 } else emptyList()
 
+                val sortedShaList = fileEntries.map { it.sha256Hex }.sorted()
+                val rootDigest = if (sortedShaList.isNotEmpty()) {
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    sortedShaList.forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+                    val digestBytes = md.digest()
+                    val sb = StringBuilder(digestBytes.size * 2)
+                    for (b in digestBytes) {
+                        sb.append(String.format("%02x", b))
+                    }
+                    sb.toString()
+                } else ""
+
                 val manifestV4 = VaultBackupManifestV4(
                     formatVersion = 4,
                     sourceRealm = currentRealm,
+                    backupUuid = java.util.UUID.randomUUID().toString(),
+                    algorithmSuite = "ARGON2ID_HKDF_AES256GCM_V4",
+                    payloadRootDigest = rootDigest,
                     itemsCount = items.size,
                     foldersCount = folders.size,
                     passwordsCount = passwords.size,
@@ -1799,6 +1819,10 @@ object VaultBackupManager {
             val targetTotal = stagedFiles.size + 4
             onProgress?.invoke(stagedFiles.size + 1, targetTotal, "Verifying manifest integrity & checksums...", totalBytesRestored)
             if (manifestV4 != null) {
+                if (manifestV4.algorithmSuite != "ARGON2ID_HKDF_AES256GCM_V4") {
+                    throw CryptoDowngradeException("CRYPTO_DOWNGRADE_DETECTED: Backup claims V4 format but uses unsupported algorithm suite '${manifestV4.algorithmSuite}'")
+                }
+
                 val currentRealm = if (VaultKeyManager.isDecoyVaultAuthorized()) 2 else 1
                 if (manifestV4.sourceRealm != currentRealm) {
                     throw DeviceBindingMismatchException("Backup realm mismatch: Backup was created for realm ${manifestV4.sourceRealm}, but active vault is in realm $currentRealm. Decoy/Real isolation violation.")
@@ -1824,6 +1848,23 @@ object VaultBackupManager {
                 }
                 if (actualInventoryCount != actualItemsCount) {
                     throw BackupManifestIntegrityException("Manifest inventory mismatch: fileInventory has $actualInventoryCount entries, but items manifest has $actualItemsCount items.")
+                }
+
+                // Verify payload root digest if present
+                val declaredRootDigest = manifestV4.payloadRootDigest
+                if (declaredRootDigest.isNotBlank()) {
+                    val sortedShaList = manifestV4.fileInventory.map { it.sha256Hex }.sorted()
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    sortedShaList.forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+                    val digestBytes = md.digest()
+                    val sb = StringBuilder(digestBytes.size * 2)
+                    for (b in digestBytes) {
+                        sb.append(String.format("%02x", b))
+                    }
+                    val recomputedRootDigest = sb.toString()
+                    if (!declaredRootDigest.equals(recomputedRootDigest, ignoreCase = true)) {
+                        throw BackupManifestIntegrityException("Payload root digest mismatch: Manifest inventory digest does not match recomputed payload root digest. Tamper detected.")
+                    }
                 }
 
                 // Check 1: Strict Bijection: Every declared file in manifest must exist in staged V4 payloads and match SHA-256
