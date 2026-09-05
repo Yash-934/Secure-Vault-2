@@ -64,6 +64,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -440,29 +441,46 @@ fun PasswordCardItem(
     val context = LocalContext.current
     var isPasswordVisible by remember { mutableStateOf(false) }
 
-    val passwordResult = remember(item.encryptedPasswordBlob) {
-        com.quantumvault.wkqpx.security.PasswordCryptoHelper.decryptPassword(item.encryptedPasswordBlob)
-    }
-    val notesResult = remember(item.encryptedNotesBlob) {
-        com.quantumvault.wkqpx.security.PasswordCryptoHelper.decryptPassword(item.encryptedNotesBlob)
-    }
-
-    val isLegacy = passwordResult is com.quantumvault.wkqpx.security.PasswordDecryptResult.LegacyRecordRequiresMigration ||
-                   notesResult is com.quantumvault.wkqpx.security.PasswordDecryptResult.LegacyRecordRequiresMigration
-
-    val (decryptedPassword, canCopy) = when (passwordResult) {
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.Success -> passwordResult.plaintext to true
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> passwordResult.legacyPlaintext to true
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.WrongKey -> "[INCORRECT KEY]" to false
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.CorruptCiphertext -> "[CORRUPTED DATA]" to false
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.VaultLocked -> "[VAULT LOCKED]" to false
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.KeyUnavailable -> "[KEY UNAVAILABLE]" to false
+    // Privacy-preserving: Do NOT decrypt passwords during list view composition
+    val isLegacy = remember(item.encryptedPasswordBlob, item.encryptedNotesBlob) {
+        com.quantumvault.wkqpx.security.PasswordCryptoHelper.isLegacyRecord(item.encryptedPasswordBlob) ||
+        com.quantumvault.wkqpx.security.PasswordCryptoHelper.isLegacyRecord(item.encryptedNotesBlob)
     }
 
-    val decryptedNotes = when (notesResult) {
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.Success -> notesResult.plaintext
-        is com.quantumvault.wkqpx.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> notesResult.legacyPlaintext
-        else -> ""
+    // Ephemeral decrypted password & notes: Only populated on explicit Reveal action
+    val decryptedPassword = remember(item.encryptedPasswordBlob, isPasswordVisible) {
+        if (isPasswordVisible) {
+            when (val res = com.quantumvault.wkqpx.security.PasswordCryptoHelper.decryptPassword(item.encryptedPasswordBlob)) {
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.Success -> res.plaintext
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> res.legacyPlaintext
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.WrongKey -> "[INCORRECT KEY]"
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.CorruptCiphertext -> "[CORRUPTED DATA]"
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.VaultLocked -> "[VAULT LOCKED]"
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.KeyUnavailable -> "[KEY UNAVAILABLE]"
+            }
+        } else {
+            ""
+        }
+    }
+
+    val decryptedNotes = remember(item.encryptedNotesBlob, isPasswordVisible) {
+        if (isPasswordVisible) {
+            when (val res = com.quantumvault.wkqpx.security.PasswordCryptoHelper.decryptPassword(item.encryptedNotesBlob)) {
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.Success -> res.plaintext
+                is com.quantumvault.wkqpx.security.PasswordDecryptResult.LegacyRecordRequiresMigration -> res.legacyPlaintext
+                else -> ""
+            }
+        } else {
+            ""
+        }
+    }
+
+    val canCopy = isPasswordVisible && decryptedPassword.isNotBlank() && !decryptedPassword.startsWith("[")
+
+    DisposableEffect(Unit) {
+        onDispose {
+            isPasswordVisible = false
+        }
     }
 
     val categoryIcon = when (item.category.lowercase()) {

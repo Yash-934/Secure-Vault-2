@@ -37,10 +37,7 @@ object SelfDestructManager {
         try {
             // 1. Close and delete Room databases (both real and decoy)
             try {
-                val db = AppDatabase.getDatabase(context)
-                db.close()
-                val decoyDb = AppDatabase.getDecoyDatabase(context)
-                decoyDb.close()
+                AppDatabase.closeDatabases()
                 context.deleteDatabase("secure_vault_db")
                 context.deleteDatabase("secure_vault_decoy_db")
                 DatabaseKeyManager.destroyKeys(context)

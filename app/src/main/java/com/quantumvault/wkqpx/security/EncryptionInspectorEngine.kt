@@ -223,7 +223,7 @@ object EncryptionInspectorEngine {
 
         val specs = listOf(
             "Encryption Mode" to "AES-256-GCM (Authenticated Encryption)",
-            "Envelope Format" to "V3 Envelope ('VLT3' Magic Header)",
+            "Envelope Format" to "V4 Envelope ('VLT4' Magic Header)",
             "Key per File" to "Unique 256-bit DEK (Data Encryption Key)",
             "Master KEK" to "Hardware-Backed Android Keystore Master Key",
             "IV Length" to "12 bytes (96-bit unique nonce per chunk)",
@@ -236,7 +236,7 @@ object EncryptionInspectorEngine {
             componentId = "vault_files",
             name = "Vault File Encryption",
             status = if (cryptoCheckPassed) "ACTIVE" else "DEGRADED",
-            libraryOrEngine = "CryptoManager V3 Envelope Engine",
+            libraryOrEngine = "CryptoManager V4 Envelope Engine",
             algorithm = "AES-256-GCM",
             keyProtection = "Per-file DEK + Keystore TEE KEK + Argon2id",
             specs = specs,
@@ -414,7 +414,7 @@ object EncryptionInspectorEngine {
         }
 
         val specs = listOf(
-            "Archive Format" to "VLT_BCK3 (Disaster Recovery Archive)",
+            "Archive Format" to "VLT_BCK3 + V4 Manifest (SHA-256 Bound, Realm Isolated)",
             "Key Derivation (KDF)" to "Argon2id (64 MiB RAM, 3 iterations, 1 parallelism)",
             "Payload Encryption" to "Chunked AES-256-GCM (1 MB independent blocks)",
             "Key Binding Modes" to "Portable (Cross-device) or Hardware Keystore Bound",

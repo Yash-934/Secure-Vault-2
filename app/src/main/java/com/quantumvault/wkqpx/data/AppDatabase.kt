@@ -53,88 +53,148 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var DECOY_INSTANCE: AppDatabase? = null
 
+        @Volatile
+        var simulateSqlCipherUnavailableForTesting: Boolean = false
+
+        private fun isRobolectricTestEnv(): Boolean {
+            return try {
+                Class.forName("org.junit.Test") != null || android.os.Build.FINGERPRINT.lowercase(java.util.Locale.US).contains("robolectric")
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
+            if (!com.quantumvault.wkqpx.security.VaultKeyManager.isRealVaultAuthorized()) {
+                throw SecurityException("REAL_VAULT_NOT_AUTHORIZED: Access to real database denied.")
+            }
             return INSTANCE ?: synchronized(this) {
-                val appCtx = context.applicationContext
-                var sqlCipherLoaded = false
-                try {
-                    SQLiteDatabase.loadLibs(appCtx)
-                    sqlCipherLoaded = true
-                } catch (e: UnsatisfiedLinkError) {
-                    Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
-                } catch (e: Exception) {
-                    Log.w(TAG, "SQLCipher load error", e)
-                }
-
-                val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = false)
-                val factory = if (sqlCipherLoaded) {
+                INSTANCE ?: run {
+                    val appCtx = context.applicationContext
+                    var sqlCipherLoaded = false
                     try {
-                        SupportFactory(passphrase)
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Failed to create SupportFactory: ${t.message}")
-                        null
+                        SQLiteDatabase.loadLibs(appCtx)
+                        sqlCipherLoaded = true
+                    } catch (e: UnsatisfiedLinkError) {
+                        Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "SQLCipher load error", e)
                     }
-                } else null
 
-                val builder = Room.databaseBuilder(
-                    appCtx,
-                    AppDatabase::class.java,
-                    "secure_vault_db"
-                )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    if (simulateSqlCipherUnavailableForTesting || (!sqlCipherLoaded && !isRobolectricTestEnv())) {
+                        throw SecurityException("SQLCipher native library is unavailable. Database initialization failed closed to prevent plaintext storage.")
+                    }
 
-                if (factory != null) {
-                    builder.openHelperFactory(factory)
+                    val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = false)
+                    val factory = if (sqlCipherLoaded) {
+                        try {
+                            SupportFactory(passphrase)
+                        } catch (t: Throwable) {
+                            throw SecurityException("Failed to initialize SupportFactory with encryption passphrase. Failing closed.", t)
+                        }
+                    } else if (isRobolectricTestEnv()) {
+                        null
+                    } else {
+                        throw SecurityException("SQLCipher is strictly mandatory. Refusing plaintext Room database creation.")
+                    }
+
+                    val builder = Room.databaseBuilder(
+                        appCtx,
+                        AppDatabase::class.java,
+                        "secure_vault_db"
+                    )
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+
+                    if (factory != null) {
+                        builder.openHelperFactory(factory)
+                    } else if (!isRobolectricTestEnv()) {
+                        throw SecurityException("SQLCipher openHelperFactory missing in production. Refusing plaintext database creation.")
+                    }
+
+                    val db = builder.build()
+                    VaultLogger.log(appCtx, TAG, "Initialized primary encrypted Room database with SQLCipher")
+                    INSTANCE = db
+                    db
                 }
-
-                val db = builder.build()
-
-                VaultLogger.log(appCtx, TAG, "Initialized primary encrypted Room database with SQLCipher")
-                INSTANCE = db
-                db
             }
         }
 
         fun getDecoyDatabase(context: Context): AppDatabase {
-            return DECOY_INSTANCE ?: synchronized(this) {
-                val appCtx = context.applicationContext
-                var sqlCipherLoaded = false
-                try {
-                    SQLiteDatabase.loadLibs(appCtx)
-                    sqlCipherLoaded = true
-                } catch (e: UnsatisfiedLinkError) {
-                    Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
-                } catch (e: Exception) {
-                    Log.w(TAG, "SQLCipher load error", e)
-                }
-
-                val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = true)
-                val factory = if (sqlCipherLoaded) {
-                    try {
-                        SupportFactory(passphrase)
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Failed to create SupportFactory: ${t.message}")
-                        null
-                    }
-                } else null
-
-                val builder = Room.databaseBuilder(
-                    appCtx,
-                    AppDatabase::class.java,
-                    "secure_vault_decoy_db"
-                )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-
-                if (factory != null) {
-                    builder.openHelperFactory(factory)
-                }
-
-                val db = builder.build()
-
-                VaultLogger.log(appCtx, TAG, "Initialized decoy encrypted Room database with SQLCipher")
-                DECOY_INSTANCE = db
-                db
+            if (!com.quantumvault.wkqpx.security.VaultKeyManager.isDecoyVaultAuthorized()) {
+                throw SecurityException("DECOY_VAULT_NOT_AUTHORIZED: Access to decoy database denied.")
             }
+            return DECOY_INSTANCE ?: synchronized(this) {
+                DECOY_INSTANCE ?: run {
+                    val appCtx = context.applicationContext
+                    var sqlCipherLoaded = false
+                    try {
+                        SQLiteDatabase.loadLibs(appCtx)
+                        sqlCipherLoaded = true
+                    } catch (e: UnsatisfiedLinkError) {
+                        Log.w(TAG, "SQLCipher native libs already loaded or unsatisfied link", e)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "SQLCipher load error", e)
+                    }
+
+                    if (simulateSqlCipherUnavailableForTesting || (!sqlCipherLoaded && !isRobolectricTestEnv())) {
+                        throw SecurityException("SQLCipher native library is unavailable. Decoy database initialization failed closed to prevent plaintext storage.")
+                    }
+
+                    val passphrase = DatabaseKeyManager.getDatabasePassphrase(appCtx, isDecoy = true)
+                    val factory = if (sqlCipherLoaded) {
+                        try {
+                            SupportFactory(passphrase)
+                        } catch (t: Throwable) {
+                            throw SecurityException("Failed to initialize SupportFactory for decoy database. Failing closed.", t)
+                        }
+                    } else if (isRobolectricTestEnv()) {
+                        null
+                    } else {
+                        throw SecurityException("SQLCipher is strictly mandatory for decoy database. Refusing plaintext fallback.")
+                    }
+
+                    val builder = Room.databaseBuilder(
+                        appCtx,
+                        AppDatabase::class.java,
+                        "secure_vault_decoy_db"
+                    )
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+
+                    if (factory != null) {
+                        builder.openHelperFactory(factory)
+                    } else if (!isRobolectricTestEnv()) {
+                        throw SecurityException("SQLCipher openHelperFactory missing in production for decoy database. Refusing plaintext fallback.")
+                    }
+
+                    val db = builder.build()
+                    VaultLogger.log(appCtx, TAG, "Initialized decoy encrypted Room database with SQLCipher")
+                    DECOY_INSTANCE = db
+                    db
+                }
+            }
+        }
+
+        /**
+         * Closes both real and decoy databases, invalidates singletons, and wipes memory secrets on lock.
+         * Ensures previously open Room/DAO connections fail closed immediately.
+         */
+        @Synchronized
+        fun closeDatabases() {
+            try {
+                INSTANCE?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing real database instance", e)
+            }
+            INSTANCE = null
+
+            try {
+                DECOY_INSTANCE?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing decoy database instance", e)
+            }
+            DECOY_INSTANCE = null
+
+            DatabaseKeyManager.clearMemory()
         }
     }
 }

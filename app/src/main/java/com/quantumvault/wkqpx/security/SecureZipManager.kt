@@ -3,6 +3,7 @@ package com.quantumvault.wkqpx.security
 import android.content.Context
 import com.quantumvault.wkqpx.data.VaultItem
 import com.quantumvault.wkqpx.data.VaultRepository
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -27,7 +28,8 @@ object SecureZipManager {
 
         try {
             FileInputStream(encryptedZipFile).use { fis ->
-                CryptoManager.getDecryptedInputStream(fis).use { decryptedStream ->
+                val decryptedBytes = CryptoManager.decryptStreamToByteArray(fis)
+                ByteArrayInputStream(decryptedBytes).use { decryptedStream ->
                     ZipInputStream(decryptedStream).use { zipStream ->
                         var entry: ZipEntry? = zipStream.nextEntry
                         while (entry != null) {
@@ -45,7 +47,7 @@ object SecureZipManager {
                 }
             }
         } catch (e: Exception) {
-            android.util.Log.e("Security", "Exception caught")
+            android.util.Log.e("Security", "Exception in listZipEntries", e)
         }
         return entries
     }
@@ -68,7 +70,8 @@ object SecureZipManager {
             var extractedItem: VaultItem? = null
 
             FileInputStream(encryptedZipFile).use { fis ->
-                CryptoManager.getDecryptedInputStream(fis).use { decryptedStream ->
+                val decryptedBytes = CryptoManager.decryptStreamToByteArray(fis)
+                ByteArrayInputStream(decryptedBytes).use { decryptedStream ->
                     ZipInputStream(decryptedStream).use { zipStream ->
                         var entry: ZipEntry? = zipStream.nextEntry
                         while (entry != null) {

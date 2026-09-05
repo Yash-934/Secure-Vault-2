@@ -2,6 +2,7 @@ package com.quantumvault.wkqpx.security
 
 import android.util.Base64
 import android.util.Log
+import com.quantumvault.wkqpx.data.VaultPassword
 import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
@@ -17,6 +18,12 @@ sealed class PasswordDecryptResult {
     object VaultLocked : PasswordDecryptResult()
 }
 
+data class PasswordMigrationStats(
+    val totalRecords: Int,
+    val currentRecords: Int,
+    val legacyRecordsRemaining: Int
+)
+
 object PasswordCryptoHelper {
     private const val TAG = "PasswordCryptoHelper"
     const val FORMAT_V2_PREFIX = "QVPM2:"
@@ -26,6 +33,30 @@ object PasswordCryptoHelper {
     private const val IV_LENGTH_BYTE = 12
 
     private fun getKey(): SecretKey = VaultKeyManager.getPasswordMasterKey()
+
+    fun isLegacyRecord(cipherBlob: String): Boolean {
+        if (cipherBlob.isEmpty()) return false
+        return !cipherBlob.startsWith(FORMAT_V2_PREFIX)
+    }
+
+    fun computeMigrationStats(records: List<VaultPassword>): PasswordMigrationStats {
+        var legacyCount = 0
+        var currentCount = 0
+        for (r in records) {
+            val passLegacy = isLegacyRecord(r.encryptedPasswordBlob)
+            val notesLegacy = isLegacyRecord(r.encryptedNotesBlob)
+            if (passLegacy || notesLegacy) {
+                legacyCount++
+            } else {
+                currentCount++
+            }
+        }
+        return PasswordMigrationStats(
+            totalRecords = records.size,
+            currentRecords = currentCount,
+            legacyRecordsRemaining = legacyCount
+        )
+    }
 
     fun encryptText(plainText: String): String {
         if (plainText.isEmpty()) return ""
@@ -57,7 +88,7 @@ object PasswordCryptoHelper {
             return PasswordDecryptResult.KeyUnavailable
         }
 
-        // Format 1: Current V2 Format with explicit prefix
+        // Format 1: Current QVPM2 Format with explicit prefix
         if (cipherBlob.startsWith(FORMAT_V2_PREFIX)) {
             val cleanBlob = cipherBlob.removePrefix(FORMAT_V2_PREFIX)
             val combined = try {
@@ -85,7 +116,6 @@ object PasswordCryptoHelper {
         }
 
         // Format 2: Un-prefixed ciphertext (could be unmigrated V2 or legacy)
-        // First try decrypting with current VRK key
         val unPrefixedBytes = try {
             Base64.decode(cipherBlob, Base64.NO_WRAP)
         } catch (_: Exception) {
@@ -104,7 +134,7 @@ object PasswordCryptoHelper {
                 decryptedBytes.fill(0)
                 return PasswordDecryptResult.Success(text)
             } catch (_: AEADBadTagException) {
-                // VRK key did not match, check legacy migrator below
+                // VRK key did not match, fall through to legacy migrator
             } catch (_: Exception) {
                 // Ignore and try legacy
             }
@@ -185,7 +215,6 @@ object PasswordCryptoHelper {
         if (password.isEmpty()) return 0 to "EMPTY"
         var score = 0
 
-        // Length score
         score += when {
             password.length >= 16 -> 40
             password.length >= 12 -> 30
@@ -193,7 +222,6 @@ object PasswordCryptoHelper {
             else -> 5
         }
 
-        // Diversity score
         val hasLower = password.any { it.isLowerCase() }
         val hasUpper = password.any { it.isUpperCase() }
         val hasDigit = password.any { it.isDigit() }

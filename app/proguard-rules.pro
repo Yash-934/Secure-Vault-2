@@ -57,6 +57,8 @@
 
 # Keep Data Models / Entities explicitly
 -keep class com.quantumvault.wkqpx.data.VaultItem { *; }
+-keep class com.quantumvault.wkqpx.data.VaultFolder { *; }
+-keep class com.quantumvault.wkqpx.data.VaultPassword { *; }
 -keep class com.quantumvault.wkqpx.data.IntruderLog { *; }
 -keep class com.quantumvault.wkqpx.data.local.VaultSettings { *; }
 

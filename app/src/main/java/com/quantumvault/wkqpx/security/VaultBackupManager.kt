@@ -67,6 +67,30 @@ object VaultBackupManager {
     private const val DEVICE_BINDING_KEY_ALIAS = "VaultBackupDeviceBindingHardwareKey"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
+    private const val MANIFEST_V4_FILENAME = "backup_manifest_v4.json"
+
+    @com.squareup.moshi.JsonClass(generateAdapter = true)
+    data class BackupFileEntry(
+        val fileName: String,
+        val originalName: String,
+        val sizeBytes: Long,
+        val sha256Hex: String,
+        val mimeType: String,
+        val folderName: String
+    )
+
+    @com.squareup.moshi.JsonClass(generateAdapter = true)
+    data class VaultBackupManifestV4(
+        val formatVersion: Int = 4,
+        val sourceRealm: Int = 1, // 1: Real Vault, 2: Decoy Vault
+        val itemsCount: Int = 0,
+        val foldersCount: Int = 0,
+        val passwordsCount: Int = 0,
+        val logsCount: Int = 0,
+        val fileInventory: List<BackupFileEntry> = emptyList(),
+        val createdAt: Long = System.currentTimeMillis()
+    )
+
     @com.squareup.moshi.JsonClass(generateAdapter = true)
     data class BackupManifestMetadata(
         val formatVersion: Int = 3,
@@ -81,6 +105,7 @@ object VaultBackupManager {
     )
 
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    private val manifestV4Adapter = moshi.adapter(VaultBackupManifestV4::class.java)
     private val metadataJsonAdapter = moshi.adapter(BackupManifestMetadata::class.java)
     private val listType = Types.newParameterizedType(List::class.java, VaultItem::class.java)
     private val jsonAdapter = moshi.adapter<List<VaultItem>>(listType)
@@ -478,9 +503,45 @@ object VaultBackupManager {
 
                 onProgress?.invoke(0, items.size, "Writing Metadata Manifests...", totalBytesWritten)
 
-                // 0. Add backup_metadata_manifest.json
+                // 0. Add backup_manifest_v4.json (V4 authenticated inventory with SHA-256 and realm binding)
+                val fileEntries = mutableListOf<BackupFileEntry>()
+                for (item in items) {
+                    val file = File(vaultDir, item.encryptedFileName)
+                    if (file.exists() && file.length() > 0) {
+                        val sha = computeSha256Hex(file)
+                        fileEntries.add(
+                            BackupFileEntry(
+                                fileName = item.encryptedFileName,
+                                originalName = item.originalName,
+                                sizeBytes = item.sizeBytes,
+                                sha256Hex = sha,
+                                mimeType = item.mimeType,
+                                folderName = item.folderName
+                            )
+                        )
+                    }
+                }
+                val currentRealm = if (VaultKeyManager.isDecoyVaultAuthorized()) 2 else 1
+                val manifestV4 = VaultBackupManifestV4(
+                    formatVersion = 4,
+                    sourceRealm = currentRealm,
+                    itemsCount = items.size,
+                    foldersCount = folders.size,
+                    passwordsCount = passwords.size,
+                    logsCount = if (includeSecurityLogs) {
+                        try { db.intruderLogDao().getAllLogsSync().size } catch (_: Exception) { 0 }
+                    } else 0,
+                    fileInventory = fileEntries,
+                    createdAt = System.currentTimeMillis()
+                )
+                val manifestV4Json = manifestV4Adapter.toJson(manifestV4)
+                zos.putNextEntry(ZipEntry(MANIFEST_V4_FILENAME))
+                zos.write(manifestV4Json.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+
+                // 0b. Add backup_metadata_manifest.json (V3 backward compatibility)
                 val metadata = BackupManifestMetadata(
-                    formatVersion = 3,
+                    formatVersion = 4,
                     itemsCount = items.size,
                     foldersCount = folders.size,
                     passwordsCount = passwords.size,
@@ -563,6 +624,23 @@ object VaultBackupManager {
             Log.e(TAG, "Export failed: ${e.message}", e)
             Result.failure(e)
         }
+    }
+
+    private fun computeSha256Hex(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(65536).use { fis ->
+            val buf = ByteArray(65536)
+            var r: Int
+            while (fis.read(buf).also { r = it } != -1) {
+                digest.update(buf, 0, r)
+            }
+        }
+        val bytes = digest.digest()
+        val sb = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            sb.append(String.format("%02x", b))
+        }
+        return sb.toString()
     }
 
     private fun inferMimeTypeFromName(name: String): String {
@@ -1170,6 +1248,7 @@ object VaultBackupManager {
             var totalBytesRestored = 0L
 
             var metadata: BackupManifestMetadata? = null
+            var manifestV4: VaultBackupManifestV4? = null
             var restoredItems: List<VaultItem>? = null
             var restoredFolders: List<VaultFolder>? = null
             var restoredPasswords: List<VaultPassword>? = null
@@ -1212,6 +1291,14 @@ object VaultBackupManager {
                         val lower = cleanFileName.lowercase()
 
                         when {
+                            lower == MANIFEST_V4_FILENAME || lower == "backup_manifest_v4.json" -> {
+                                try {
+                                    val v4Json = zis.readBytes().toString(Charsets.UTF_8)
+                                    manifestV4 = manifestV4Adapter.fromJson(v4Json)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "V4 manifest parse warning: ${e.message}")
+                                }
+                            }
                             lower == MANIFEST_METADATA_FILENAME || lower == "metadata.json" -> {
                                 try {
                                     val metaJson = zis.readBytes().toString(Charsets.UTF_8)
@@ -1270,8 +1357,8 @@ object VaultBackupManager {
                                 }
 
                                 val isAlreadyVaultEncrypted = peekRead == 4 && (
-                                    (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() && peek[3] == 0x33.toByte()) ||
-                                    (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() && peek[3] == 0x32.toByte())
+                                    (peek[0] == 0x56.toByte() && peek[1] == 0x4C.toByte() && peek[2] == 0x54.toByte() &&
+                                     (peek[3] == 0x34.toByte() || peek[3] == 0x33.toByte() || peek[3] == 0x32.toByte()))
                                 )
 
                                 FileOutputStream(stagedFile).buffered(65536).use { fos ->
@@ -1287,9 +1374,10 @@ object VaultBackupManager {
                                 if (uniqueStagedName != cleanFileName) {
                                     stagedFiles[uniqueStagedName] = stagedFile
                                 }
+                                val targetTotal = maxOf(stagedFiles.size + 4, (restoredItems?.size ?: 0) + 4)
                                 onProgress?.invoke(
                                     stagedFiles.size,
-                                    maxOf(stagedFiles.size, restoredItems?.size ?: 0),
+                                    targetTotal,
                                     "Staging: $cleanFileName",
                                     totalBytesRestored
                                 )
@@ -1297,6 +1385,28 @@ object VaultBackupManager {
                         }
                         try { zis.closeEntry() } catch (_: Throwable) {}
                         entry = try { zis.nextEntry } catch (_: Throwable) { null }
+                    }
+                }
+            }
+
+            // Phase 3: Manifest V4 Authentication and Integrity Checks
+            val targetTotal = stagedFiles.size + 4
+            onProgress?.invoke(stagedFiles.size + 1, targetTotal, "Verifying manifest integrity & checksums...", totalBytesRestored)
+            if (manifestV4 != null) {
+                val currentRealm = if (VaultKeyManager.isDecoyVaultAuthorized()) 2 else 1
+                if (manifestV4.sourceRealm != currentRealm) {
+                    throw SecurityException("Backup realm mismatch: Backup was created for realm ${manifestV4.sourceRealm}, but active vault is in realm $currentRealm. Decoy/Real isolation violation.")
+                }
+
+                // Verify file checksums
+                for (entry in manifestV4.fileInventory) {
+                    val staged = stagedFiles[entry.fileName] ?: stagedFiles[entry.originalName]
+                    if (staged == null) {
+                        throw SecurityException("Backup integrity violation: Declared file '${entry.originalName}' is missing from archive.")
+                    }
+                    val actualSha = computeSha256Hex(staged)
+                    if (!actualSha.equals(entry.sha256Hex, ignoreCase = true)) {
+                        throw SecurityException("Backup integrity violation: Checksum mismatch for '${entry.originalName}'. Archive has been corrupted or tampered.")
                     }
                 }
             }
@@ -1349,21 +1459,10 @@ object VaultBackupManager {
             val oldItems = if (isReplaceMode) db.vaultDao().getAllItemsSync() else emptyList()
             val restoredFileNames = finalItemsToInsert.map { it.encryptedFileName }.toSet()
 
-            // Phase 5: Atomic Commit Files to vault directory
-            for ((_, stagedFile) in stagedFiles) {
-                val targetFile = File(vaultDir, stagedFile.name)
-                if (targetFile.exists()) targetFile.delete()
-                if (!stagedFile.renameTo(targetFile)) {
-                    stagedFile.copyTo(targetFile, overwrite = true)
-                    stagedFile.delete()
-                }
-                movedTargetFiles.add(targetFile)
-            }
-
-            // Phase 6: Atomic Database Transaction
+            // Phase 4: Atomic Database Transaction (Executed FIRST before moving files to ensure fail-closed atomicity)
             onProgress?.invoke(
-                stagedFiles.size,
-                stagedFiles.size,
+                stagedFiles.size + 2,
+                targetTotal,
                 "Finalizing Vault Database...",
                 totalBytesRestored
             )
@@ -1389,6 +1488,24 @@ object VaultBackupManager {
                     db.vaultDao().insertVaultItem(item)
                     restoredCount++
                 }
+            }
+
+            // Phase 5: Atomic Commit Files to vault directory (Only executed if DB transaction succeeds)
+            onProgress?.invoke(
+                stagedFiles.size + 3,
+                targetTotal,
+                "Finalizing storage files...",
+                totalBytesRestored
+            )
+
+            for ((_, stagedFile) in stagedFiles) {
+                val targetFile = File(vaultDir, stagedFile.name)
+                if (targetFile.exists()) targetFile.delete()
+                if (!stagedFile.renameTo(targetFile)) {
+                    stagedFile.copyTo(targetFile, overwrite = true)
+                    stagedFile.delete()
+                }
+                movedTargetFiles.add(targetFile)
             }
 
             if (isReplaceMode) {

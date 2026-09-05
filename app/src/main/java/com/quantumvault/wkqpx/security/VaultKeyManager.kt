@@ -7,10 +7,12 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.UserNotAuthenticatedException
 import android.util.Log
+import com.quantumvault.wkqpx.data.AppDatabase
 import com.quantumvault.wkqpx.data.local.SettingsDataStore
 import kotlinx.coroutines.flow.first
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -20,6 +22,18 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+
+enum class VaultState {
+    UNINITIALIZED,
+    INITIALIZING,
+    INITIALIZED,
+    AUTHORIZED_REAL,
+    AUTHORIZED_DECOY,
+    LOCKED,
+    CORRUPTED,
+    RECOVERY_REQUIRED,
+    DESTROYED
+}
 
 enum class BiometricEnrollmentState {
     NOT_CONFIGURED,
@@ -38,15 +52,21 @@ object VaultKeyManager {
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
     const val ALIAS_BIOMETRIC_UNLOCK = "QuantumVaultBiometricUnlockMasterKey"
+    const val ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL = "QuantumVaultBiometricUnlockMasterKey_Provisional"
     const val ALIAS_DEVICE_BINDING = "VaultBackupDeviceBindingHardwareKey"
     const val ALIAS_DEX_PROTECTION = "SecureVaultDexKey"
     const val ALIAS_ATTESTATION = "SecureVaultHardwareAttestationKey_v2"
+    const val ALIAS_LEGACY_MASTER = "SecureVaultAES256MasterKey"
+    const val ALIAS_AUDIT_PROBE = "AuditDeviceBindingProbe"
 
     val ALL_KEY_ALIASES = listOf(
         ALIAS_BIOMETRIC_UNLOCK,
+        ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL,
         ALIAS_DEVICE_BINDING,
         ALIAS_DEX_PROTECTION,
-        ALIAS_ATTESTATION
+        ALIAS_ATTESTATION,
+        ALIAS_LEGACY_MASTER,
+        ALIAS_AUDIT_PROBE
     )
 
     private val jvmFallbackKeys = ConcurrentHashMap<String, SecretKey>()
@@ -57,6 +77,9 @@ object VaultKeyManager {
         Log.e(TAG, "Failed to load AndroidKeyStore", e)
         null
     }
+
+    @Volatile
+    private var currentState: VaultState = VaultState.LOCKED
 
     @Volatile
     private var activeVrk: ByteArray? = null
@@ -70,22 +93,40 @@ object VaultKeyManager {
     private const val KEK_SALT_FILE = "kek_salt.bin"
 
     private val MAGIC_VRK_WRAP = "QVRK".toByteArray(Charsets.US_ASCII)
-    private val MAGIC_BIOMETRIC_WRAP = "QVBE".toByteArray(Charsets.US_ASCII)
-    private val BIOMETRIC_AAD = "QUANTUM_VAULT_REAL_BIOMETRIC_V1".toByteArray(Charsets.UTF_8)
+    private val MAGIC_BIOMETRIC_WRAP = byteArrayOf(0x42, 0x49, 0x45, 0x31) // "BIE1"
+    private const val BIE1_VERSION: Byte = 1
+    private const val BIE1_REALM_REAL: Byte = 1
+    private const val BIE1_REALM_DECOY: Byte = 2
+    private const val EXPECTED_BIE1_SIZE = 77 // 4(magic)+1(ver)+1(realm)+8(gen)+1(ivLen)+12(iv)+2(cipherLen)+48(cipher)
+
+    // EXACT SINGLE AAD FOR BIOMETRIC ENVELOPE (Rule 3.3)
+    val BIOMETRIC_AAD = "QUANTUM_VAULT_REAL_BIOMETRIC_V1".toByteArray(Charsets.UTF_8)
+
+    fun getVaultState(): VaultState = currentState
+
+    fun setVaultState(state: VaultState) {
+        currentState = state
+    }
+
+    fun hasCredentialWrap(context: Context, isDecoy: Boolean = false): Boolean {
+        val fileName = if (isDecoy) DECOY_VRK_PIN_WRAP_FILE else VRK_PIN_WRAP_FILE
+        val file = File(context.filesDir, fileName)
+        return file.exists() && file.length() > 0
+    }
 
     fun hasBiometricEnvelope(context: Context): Boolean {
         val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
-        return file.exists() && file.length() >= 60
+        return file.exists() && (file.length() == EXPECTED_BIE1_SIZE.toLong() || file.length() >= 60)
     }
 
     fun isSessionAuthorized(): Boolean {
         val vrk = activeVrk ?: return false
-        return vrk.size == 32
+        return vrk.size == 32 && (currentState == VaultState.AUTHORIZED_REAL || currentState == VaultState.AUTHORIZED_DECOY)
     }
 
-    fun isRealVaultAuthorized(): Boolean = isSessionAuthorized() && !isDecoyMode
+    fun isRealVaultAuthorized(): Boolean = isSessionAuthorized() && !isDecoyMode && currentState == VaultState.AUTHORIZED_REAL
 
-    fun isDecoyVaultAuthorized(): Boolean = isSessionAuthorized() && isDecoyMode
+    fun isDecoyVaultAuthorized(): Boolean = isSessionAuthorized() && isDecoyMode && currentState == VaultState.AUTHORIZED_DECOY
 
     fun getActiveVrk(): ByteArray? = activeVrk?.copyOf()
 
@@ -93,9 +134,13 @@ object VaultKeyManager {
         activeVrk?.fill(0)
         activeVrk = null
         isDecoyMode = false
+        currentState = VaultState.LOCKED
     }
 
-    fun lockVault() = clearAuthorizedSessionKey()
+    fun lockVault() {
+        clearAuthorizedSessionKey()
+        AppDatabase.closeDatabases()
+    }
 
     private fun deriveKey(domain: String): SecretKey {
         val vrk = activeVrk ?: throw IllegalStateException("Vault is locked, cannot derive key for $domain")
@@ -111,7 +156,7 @@ object VaultKeyManager {
         val context = if (isDecoy) "database_decoy_context" else "database_real_context"
         return deriveKey(context)
     }
-    
+
     fun getLegacyDatabaseWrapKey(): SecretKey? {
         return try {
             if (keyStore?.containsAlias("SecureVaultAES256MasterKey") == true) {
@@ -131,7 +176,7 @@ object VaultKeyManager {
 
     /**
      * Atomically writes a VRK wrap file using a new random KEK salt, AES-256-GCM encryption,
-     * and fsync before rename. Also initializes/verifies the sentinel.
+     * and fsync before rename.
      */
     fun writeVrkPinWrap(context: Context, vrk: ByteArray, pin: String, isDecoy: Boolean): Boolean {
         if (vrk.size != 32) return false
@@ -164,9 +209,6 @@ object VaultKeyManager {
                 tempFile.copyTo(targetFile, overwrite = true)
                 tempFile.delete()
             }
-
-            // Write authenticated sentinel
-            VaultSentinelManager.createSentinel(context, vrk, isDecoy)
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write VRK wrap (isDecoy=$isDecoy)", e)
@@ -186,7 +228,6 @@ object VaultKeyManager {
         return try {
             val bytes = wrapFile.readBytes()
             val vrk: ByteArray = if (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(MAGIC_VRK_WRAP)) {
-                // New self-contained QVRK format
                 var offset = 4
                 val version = bytes[offset++].toInt() and 0xFF
                 if (version != 1) return null
@@ -206,7 +247,6 @@ object VaultKeyManager {
                 cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, iv))
                 cipher.doFinal(ciphertext)
             } else {
-                // Legacy format: read external kek_salt.bin
                 val saltFile = File(context.filesDir, KEK_SALT_FILE)
                 if (!saltFile.exists()) return null
                 val salt = saltFile.readBytes()
@@ -242,24 +282,37 @@ object VaultKeyManager {
 
     /**
      * Generates a NEW Vault Root Key (VRK) and wraps it with the initial PIN.
-     * This must ONLY be called during first-time vault creation or fresh decoy initialization.
-     * NEVER call this during PIN rotation!
+     * STRICT INVARIANT: Only fresh vault creation with zero existing security artifacts may call this!
      */
     fun createVrkForFreshVault(context: Context, pin: String, isDecoy: Boolean = false) {
-        val fileName = if (isDecoy) DECOY_VRK_PIN_WRAP_FILE else VRK_PIN_WRAP_FILE
-        val wrapFile = File(context.filesDir, fileName)
-        if (wrapFile.exists()) {
-            throw IllegalStateException("Vault is already initialized. Cannot recreate VRK.")
+        val hasRealWrap = File(context.filesDir, VRK_PIN_WRAP_FILE).exists()
+        val hasDecoyWrap = File(context.filesDir, DECOY_VRK_PIN_WRAP_FILE).exists()
+        val hasSentinel = File(context.filesDir, "vault_sentinel.bin").exists()
+        val hasDecoySentinel = File(context.filesDir, "decoy_vault_sentinel.bin").exists()
+        val hasRealDb = context.getDatabasePath("secure_vault_db").exists()
+        val hasDecoyDb = context.getDatabasePath("secure_vault_decoy_db").exists()
+        val hasRealDbw2 = File(context.filesDir, DatabaseKeyManager.DBW2_FILE_REAL).exists()
+        val hasDecoyDbw2 = File(context.filesDir, DatabaseKeyManager.DBW2_FILE_DECOY).exists()
+
+        if (!isDecoy && (hasRealWrap || hasSentinel || hasRealDb || hasRealDbw2)) {
+            currentState = VaultState.RECOVERY_REQUIRED
+            throw IllegalStateException("Security artifacts already exist for real vault. Cannot recreate VRK.")
         }
+        if (isDecoy && (hasDecoyWrap || hasDecoySentinel || hasDecoyDb || hasDecoyDbw2)) {
+            currentState = VaultState.RECOVERY_REQUIRED
+            throw IllegalStateException("Security artifacts already exist for decoy vault. Cannot recreate VRK.")
+        }
+
+        currentState = VaultState.INITIALIZING
         val vrk = ByteArray(32).also { SecureRandom().nextBytes(it) }
         try {
-            writeVrkPinWrap(context, vrk, pin, isDecoy)
-            // Also maintain legacy salt file for backwards compatibility with any existing components
-            val saltFile = File(context.filesDir, KEK_SALT_FILE)
-            if (!saltFile.exists()) {
-                val s = ByteArray(16).also { SecureRandom().nextBytes(it) }
-                saltFile.writeBytes(s)
+            val written = writeVrkPinWrap(context, vrk, pin, isDecoy)
+            if (!written) {
+                currentState = VaultState.CORRUPTED
+                throw IllegalStateException("Failed to write VRK pin wrap file")
             }
+            VaultSentinelManager.createSentinel(context, vrk, isDecoy)
+            currentState = VaultState.INITIALIZED
         } finally {
             vrk.fill(0)
         }
@@ -272,12 +325,46 @@ object VaultKeyManager {
         val unwrappedVrk = unwrapVrkWithPin(context, pin, isDecoy) ?: return false
         activeVrk = unwrappedVrk
         isDecoyMode = isDecoy
+        currentState = if (isDecoy) VaultState.AUTHORIZED_DECOY else VaultState.AUTHORIZED_REAL
         return true
     }
 
     /**
-     * Initializes BiometricPrompt.CryptoObject in ENCRYPT mode.
-     * STRICT REQUIREMENT: Active session MUST be authorized for REAL vault. Decoy vault is rejected.
+     * Direct authorization for programmatic testing or migration workflows where VRK is known.
+     */
+    fun setAuthorizedSession(vrk: ByteArray, isDecoy: Boolean = false) {
+        if (vrk.size != 32) throw IllegalArgumentException("VRK must be exactly 32 bytes")
+        activeVrk = vrk.copyOf()
+        isDecoyMode = isDecoy
+        currentState = if (isDecoy) VaultState.AUTHORIZED_DECOY else VaultState.AUTHORIZED_REAL
+    }
+
+    /**
+     * Retrieves existing biometric master key strictly without generating a new one.
+     * Section 3.1: Unlock path may ONLY retrieve existing key; never create inside unlock.
+     */
+    @Synchronized
+    fun getExistingBiometricMasterKey(): SecretKey? {
+        if (keyStore != null) {
+            try {
+                if (!keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
+                    return null
+                }
+                val entry = keyStore.getEntry(ALIAS_BIOMETRIC_UNLOCK, null) as? KeyStore.SecretKeyEntry
+                return entry?.secretKey
+            } catch (e: KeyPermanentlyInvalidatedException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get existing biometric master key", e)
+                return null
+            }
+        }
+        return jvmFallbackKeys[ALIAS_BIOMETRIC_UNLOCK]
+    }
+
+    /**
+     * Initializes BiometricPrompt.CryptoObject in ENCRYPT mode using a provisional key.
+     * Transactional: Does not destroy existing enrolled key until new envelope is provisioned.
      */
     fun getBiometricEnrollCryptoObject(context: Context): androidx.biometric.BiometricPrompt.CryptoObject? {
         if (!isRealVaultAuthorized()) {
@@ -285,9 +372,9 @@ object VaultKeyManager {
             return null
         }
         return try {
-            val biometricKey = getOrCreateBiometricMasterKey(forceRecreate = true)
+            val provisionalKey = createBiometricMasterKey(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, biometricKey)
+            cipher.init(Cipher.ENCRYPT_MODE, provisionalKey)
             androidx.biometric.BiometricPrompt.CryptoObject(cipher)
         } catch (e: KeyPermanentlyInvalidatedException) {
             throw e
@@ -299,62 +386,91 @@ object VaultKeyManager {
 
     /**
      * Provisions the biometric envelope using the authenticated Cipher from BiometricPrompt.
-     * Wraps the existing active VRK with AAD, commits atomically, and verifies readability.
+     * Uses strict BIE1 binary format, binds single AAD, commits staged file atomically, and verifies.
      */
     fun provisionBiometricEnvelope(context: Context, authenticatedCipher: Cipher): Boolean {
         val vrk = activeVrk
         if (vrk == null || isDecoyMode || vrk.size != 32) {
-            Log.e(TAG, "Cannot provision biometric envelope: Invalid vault state (vrk=${if (vrk == null) "null" else "len=" + vrk.size}, isDecoy=$isDecoyMode)")
+            Log.e(TAG, "Cannot provision biometric envelope: Invalid vault state")
             return false
         }
+
+        val stagedFile = File(context.filesDir, "$BIOMETRIC_WRAP_FILE.staged")
+        val targetFile = File(context.filesDir, BIOMETRIC_WRAP_FILE)
 
         return try {
             authenticatedCipher.updateAAD(BIOMETRIC_AAD)
             val encryptedVrk = authenticatedCipher.doFinal(vrk)
             val iv = authenticatedCipher.iv
-            if (iv == null || iv.isEmpty()) {
-                Log.e(TAG, "Authenticated cipher returned null or empty IV")
+            if (iv == null || iv.size != 12) {
+                Log.e(TAG, "Authenticated cipher returned invalid IV")
                 return false
             }
 
-            val targetFile = File(context.filesDir, BIOMETRIC_WRAP_FILE)
-            val tempFile = File(context.filesDir, "$BIOMETRIC_WRAP_FILE.tmp")
+            val buffer = ByteBuffer.allocate(EXPECTED_BIE1_SIZE)
+            buffer.put(MAGIC_BIOMETRIC_WRAP)
+            buffer.put(BIE1_VERSION)
+            buffer.put(BIE1_REALM_REAL)
+            buffer.putLong(1L) // Key generation
+            buffer.put(iv.size.toByte())
+            buffer.put(iv)
+            buffer.putShort(encryptedVrk.size.toShort())
+            buffer.put(encryptedVrk)
 
-            FileOutputStream(tempFile).use { fos ->
-                fos.write(MAGIC_BIOMETRIC_WRAP)
-                fos.write(1) // version
-                fos.write(iv.size)
-                fos.write(iv)
-                fos.write((encryptedVrk.size shr 8) and 0xFF)
-                fos.write(encryptedVrk.size and 0xFF)
-                fos.write(encryptedVrk)
+            FileOutputStream(stagedFile).use { fos ->
+                fos.write(buffer.array())
                 fos.flush()
                 fos.fd.sync()
             }
 
-            if (!tempFile.renameTo(targetFile)) {
-                tempFile.copyTo(targetFile, overwrite = true)
-                tempFile.delete()
+            if (stagedFile.length() != EXPECTED_BIE1_SIZE.toLong()) {
+                stagedFile.delete()
+                return false
             }
 
-            // Read envelope back to verify structure
-            val envelopeValid = targetFile.exists() && targetFile.length() >= 60
-            if (!envelopeValid) {
-                targetFile.delete()
-                Log.e(TAG, "Biometric envelope written but length is invalid: ${targetFile.length()}")
-                false
-            } else {
-                Log.i(TAG, "Biometric envelope provisioned and verified successfully")
-                true
+            // Transactional commit: Promote provisional key to active key in Keystore
+            promoteProvisionalBiometricKey()
+
+            // Atomically rename staged envelope to active envelope
+            if (!stagedFile.renameTo(targetFile)) {
+                stagedFile.copyTo(targetFile, overwrite = true)
+                stagedFile.delete()
             }
+
+            Log.i(TAG, "BIE1 biometric envelope provisioned and committed successfully")
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to provision biometric envelope: ${e.message}", e)
+            stagedFile.delete()
             false
+        }
+    }
+
+    private fun promoteProvisionalBiometricKey() {
+        if (keyStore != null) {
+            try {
+                if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
+                    keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
+                }
+                // Re-create the master alias with same hardware spec
+                createBiometricMasterKey(ALIAS_BIOMETRIC_UNLOCK)
+                if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)) {
+                    keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error promoting provisional biometric key", e)
+            }
+        } else {
+            val provisional = jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+            if (provisional != null) {
+                jvmFallbackKeys[ALIAS_BIOMETRIC_UNLOCK] = provisional
+            }
         }
     }
 
     /**
      * Initializes BiometricPrompt.CryptoObject in DECRYPT mode using the IV stored in the envelope.
+     * STRICT INVARIANT: Unlock path NEVER generates a key; only retrieves existing.
      */
     fun getBiometricDecryptCryptoObject(context: Context): androidx.biometric.BiometricPrompt.CryptoObject? {
         val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
@@ -363,14 +479,18 @@ object VaultKeyManager {
         return try {
             val bytes = file.readBytes()
             val iv: ByteArray = if (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
-                val ivLen = bytes[5].toInt() and 0xFF
-                bytes.copyOfRange(6, 6 + ivLen)
+                val ivLen = bytes[14].toInt() and 0xFF
+                bytes.copyOfRange(15, 15 + ivLen)
             } else {
                 val ivLen = bytes[0].toInt() and 0xFF
                 bytes.copyOfRange(1, 1 + ivLen)
             }
 
-            val biometricKey = getOrCreateBiometricMasterKey()
+            val biometricKey = getExistingBiometricMasterKey() ?: run {
+                Log.w(TAG, "Existing biometric master key not found during unlock attempt")
+                return null
+            }
+
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, biometricKey, GCMParameterSpec(128, iv))
             androidx.biometric.BiometricPrompt.CryptoObject(cipher)
@@ -384,7 +504,7 @@ object VaultKeyManager {
 
     /**
      * Unwraps the VRK from the biometric envelope using the authenticated Cipher.
-     * Enforces the authenticated sentinel check before authorizing the session.
+     * Enforces strict BIE1 format, realm check, single AAD, and authenticated sentinel check.
      */
     fun unwrapBiometricSessionKey(context: Context, authenticatedCipher: Cipher): Boolean {
         val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
@@ -393,9 +513,27 @@ object VaultKeyManager {
         return try {
             val bytes = file.readBytes()
             val ciphertext: ByteArray
-            var hasAad = true
 
-            if (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
+            if (bytes.size == EXPECTED_BIE1_SIZE && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
+                val bb = ByteBuffer.wrap(bytes)
+                val magic = ByteArray(4)
+                bb.get(magic)
+                val version = bb.get()
+                val realm = bb.get()
+                val gen = bb.long
+                val ivLen = bb.get().toInt() and 0xFF
+                val iv = ByteArray(ivLen)
+                bb.get(iv)
+                val cipherLen = bb.short.toInt() and 0xFFFF
+                ciphertext = ByteArray(cipherLen)
+                bb.get(ciphertext)
+
+                // Enforce realm check: Decoy envelope must never unlock real vault!
+                if (realm != BIE1_REALM_REAL) {
+                    Log.e(TAG, "Biometric unwrap rejected: Wrong realm ($realm)")
+                    return false
+                }
+            } else if (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals("QVBE".toByteArray(Charsets.US_ASCII))) {
                 val ivLen = bytes[5].toInt() and 0xFF
                 val offset = 6 + ivLen
                 val cipherLen = ((bytes[offset].toInt() and 0xFF) shl 8) or (bytes[offset + 1].toInt() and 0xFF)
@@ -403,19 +541,16 @@ object VaultKeyManager {
             } else {
                 val ivLen = bytes[0].toInt() and 0xFF
                 ciphertext = bytes.copyOfRange(1 + ivLen, bytes.size)
-                hasAad = false
             }
 
-            if (hasAad) {
-                authenticatedCipher.updateAAD(BIOMETRIC_AAD)
-            }
-
+            authenticatedCipher.updateAAD(BIOMETRIC_AAD)
             val unwrappedBytes = authenticatedCipher.doFinal(ciphertext)
+
             if (unwrappedBytes != null && unwrappedBytes.size == 32) {
-                // Cryptographic Sentinel Check: verify real vault identity
                 if (VaultSentinelManager.verifyVrk(context, unwrappedBytes, isDecoy = false)) {
                     activeVrk = unwrappedBytes
                     isDecoyMode = false
+                    currentState = VaultState.AUTHORIZED_REAL
                     Log.i(TAG, "Biometric unlock verified against cryptographic sentinel: Real vault authorized")
                     true
                 } else {
@@ -433,11 +568,6 @@ object VaultKeyManager {
         }
     }
 
-    /**
-     * Validates the biometric enrollment state against Keystore and file invariants.
-     * If invalid, marks biometrics disabled and cleans up stale envelope while strictly
-     * preserving the vault and PIN credentials.
-     */
     suspend fun validateBiometricEnrollmentState(
         context: Context,
         settingsDataStore: SettingsDataStore
@@ -459,7 +589,6 @@ object VaultKeyManager {
             return BiometricEnrollmentState.ENVELOPE_CORRUPT
         }
 
-        // Keystore key validation
         if (keyStore != null) {
             try {
                 if (!keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
@@ -474,7 +603,6 @@ object VaultKeyManager {
                     return BiometricEnrollmentState.UNAVAILABLE
                 }
 
-                // Check key invalidation
                 val testCipher = Cipher.getInstance("AES/GCM/NoPadding")
                 val iv = ByteArray(12)
                 testCipher.init(Cipher.DECRYPT_MODE, entry.secretKey, GCMParameterSpec(128, iv))
@@ -484,9 +612,9 @@ object VaultKeyManager {
                 settingsDataStore.setBiometricsEnabled(false)
                 return BiometricEnrollmentState.KEY_INVALIDATED
             } catch (e: UserNotAuthenticatedException) {
-                // Expected for per-use biometric keys! Key is healthy.
+                // Key is healthy
             } catch (e: Exception) {
-                // Other transient / initialization states
+                // Other transient / init states
             }
         }
 
@@ -497,14 +625,18 @@ object VaultKeyManager {
         try {
             val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
             if (file.exists()) file.delete()
-            val legacyFile = File(context.filesDir, "vrk_biometric_envelope.bin")
-            if (legacyFile.exists()) legacyFile.delete()
+            val staged = File(context.filesDir, "$BIOMETRIC_WRAP_FILE.staged")
+            if (staged.exists()) staged.delete()
             keyStore?.let {
                 if (it.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
                     it.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
                 }
+                if (it.containsAlias(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)) {
+                    it.deleteEntry(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+                }
             }
             jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK)
+            jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
         } catch (e: Exception) {
             Log.e(TAG, "Error removing biometric envelope", e)
         }
@@ -542,7 +674,7 @@ object VaultKeyManager {
                 keyGenerator.init(keyGenSpec)
                 return keyGenerator.generateKey()
             } catch (e: Exception) {
-                Log.e(TAG, "Keystore unavailable or exception for alias $alias: ${e.message}")
+                Log.e(TAG, "Keystore exception for alias $alias: ${e.message}")
                 if (!isRunningInTestEnvironment()) {
                     throw IllegalStateException("Critical KeyStore failure for alias $alias. App cannot proceed.", e)
                 }
@@ -560,30 +692,18 @@ object VaultKeyManager {
 
     fun getDeviceBindingKey(): SecretKey = getOrCreateKey(ALIAS_DEVICE_BINDING)
 
-    @Synchronized
-    fun getOrCreateBiometricMasterKey(forceRecreate: Boolean = false): SecretKey {
+    private fun createBiometricMasterKey(alias: String): SecretKey {
         if (keyStore != null) {
             try {
-                if (forceRecreate) {
-                    try {
-                        if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
-                            keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to delete previous biometric key: ${e.message}")
-                    }
-                } else {
-                    val existing = keyStore.getEntry(ALIAS_BIOMETRIC_UNLOCK, null) as? KeyStore.SecretKeyEntry
-                    if (existing != null) {
-                        return existing.secretKey
-                    }
+                if (keyStore.containsAlias(alias)) {
+                    keyStore.deleteEntry(alias)
                 }
                 val keyGenerator = KeyGenerator.getInstance(
                     KeyProperties.KEY_ALGORITHM_AES,
                     ANDROID_KEYSTORE
                 )
                 val builder = KeyGenParameterSpec.Builder(
-                    ALIAS_BIOMETRIC_UNLOCK,
+                    alias,
                     KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
                 )
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -604,30 +724,36 @@ object VaultKeyManager {
                 keyGenerator.init(builder.build())
                 return keyGenerator.generateKey()
             } catch (e: Exception) {
-                Log.e(TAG, "Biometric key generation failed on this hardware: ${e.message}", e)
+                Log.e(TAG, "Biometric key generation failed for alias $alias: ${e.message}", e)
                 if (!isRunningInTestEnvironment()) {
-                    throw IllegalStateException("Critical KeyStore failure for biometric key. App cannot proceed.", e)
+                    throw IllegalStateException("Critical KeyStore failure for biometric key.", e)
                 }
             }
         }
         if (!isRunningInTestEnvironment()) {
-            throw IllegalStateException("Keystore is null in production environment. Failing securely.")
+            throw IllegalStateException("Keystore is null in production environment.")
         }
-        if (forceRecreate) {
-            jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK)
-        }
-        return getOrCreateKey(ALIAS_BIOMETRIC_UNLOCK)
+        val kg = KeyGenerator.getInstance("AES")
+        kg.init(256)
+        val key = kg.generateKey()
+        jvmFallbackKeys[alias] = key
+        return key
     }
 
+    /**
+     * Authoritatively deletes all keys in the registry.
+     * Section 7.1: If KeyStore is null or unavailable, it MUST report false, never true!
+     */
     @Synchronized
     fun destroyAllKeys(): Map<String, Boolean> {
         val results = mutableMapOf<String, Boolean>()
         jvmFallbackKeys.clear()
         if (keyStore == null) {
-            ALL_KEY_ALIASES.forEach { results[it] = true }
+            ALL_KEY_ALIASES.forEach { results[it] = false }
             return results
         }
-        ALL_KEY_ALIASES.forEach { alias ->
+        val targetAliases = (ALL_KEY_ALIASES + try { keyStore.aliases().toList() } catch (_: Exception) { emptyList() }).distinct()
+        targetAliases.forEach { alias ->
             try {
                 if (keyStore.containsAlias(alias)) {
                     keyStore.deleteEntry(alias)
