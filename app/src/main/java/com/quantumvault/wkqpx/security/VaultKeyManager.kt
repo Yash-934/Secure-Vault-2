@@ -52,21 +52,29 @@ object VaultKeyManager {
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
     const val ALIAS_BIOMETRIC_UNLOCK = "QuantumVaultBiometricUnlockMasterKey"
+    const val ALIAS_BIOMETRIC_SLOT_A = "QuantumVaultBiometricKey_SlotA"
+    const val ALIAS_BIOMETRIC_SLOT_B = "QuantumVaultBiometricKey_SlotB"
     const val ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL = "QuantumVaultBiometricUnlockMasterKey_Provisional"
     const val ALIAS_DEVICE_BINDING = "VaultBackupDeviceBindingHardwareKey"
     const val ALIAS_DEX_PROTECTION = "SecureVaultDexKey"
     const val ALIAS_ATTESTATION = "SecureVaultHardwareAttestationKey_v2"
     const val ALIAS_LEGACY_MASTER = "SecureVaultAES256MasterKey"
     const val ALIAS_AUDIT_PROBE = "AuditDeviceBindingProbe"
+    const val ALIAS_DB_WRAPPER = "SecureVaultDatabaseWrapperMasterKey"
+    const val ALIAS_DB_WRAPPER_DECOY = "SecureVaultDatabaseWrapperDecoyMasterKey"
 
     val ALL_KEY_ALIASES = listOf(
         ALIAS_BIOMETRIC_UNLOCK,
+        ALIAS_BIOMETRIC_SLOT_A,
+        ALIAS_BIOMETRIC_SLOT_B,
         ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL,
         ALIAS_DEVICE_BINDING,
         ALIAS_DEX_PROTECTION,
         ALIAS_ATTESTATION,
         ALIAS_LEGACY_MASTER,
-        ALIAS_AUDIT_PROBE
+        ALIAS_AUDIT_PROBE,
+        ALIAS_DB_WRAPPER,
+        ALIAS_DB_WRAPPER_DECOY
     )
 
     private val jvmFallbackKeys = ConcurrentHashMap<String, SecretKey>()
@@ -86,6 +94,9 @@ object VaultKeyManager {
 
     @Volatile
     private var isDecoyMode: Boolean = false
+
+    @Volatile
+    private var provisionalTargetSlot: Long? = null
 
     private const val VRK_PIN_WRAP_FILE = "vrk_pin_wrap.bin"
     private const val DECOY_VRK_PIN_WRAP_FILE = "decoy_vrk_pin_wrap.bin"
@@ -340,31 +351,61 @@ object VaultKeyManager {
     }
 
     /**
+     * Inspects active BIE1 biometric envelope to determine the committed key slot (1L or 2L).
+     */
+    fun getActiveBiometricSlot(context: Context): Long {
+        val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
+        if (!file.exists() || file.length() < EXPECTED_BIE1_SIZE) return 0L
+        return try {
+            val bytes = file.readBytes()
+            if (bytes.size >= 14 && bytes.copyOfRange(0, 4).contentEquals(MAGIC_BIOMETRIC_WRAP)) {
+                ByteBuffer.wrap(bytes).getLong(6)
+            } else {
+                0L
+            }
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    /**
+     * Resolves the Keystore alias corresponding to the currently active biometric envelope.
+     */
+    fun getActiveBiometricAlias(context: Context): String {
+        return when (getActiveBiometricSlot(context)) {
+            2L -> ALIAS_BIOMETRIC_SLOT_B
+            1L -> ALIAS_BIOMETRIC_SLOT_A
+            else -> ALIAS_BIOMETRIC_UNLOCK
+        }
+    }
+
+    /**
      * Retrieves existing biometric master key strictly without generating a new one.
      * Section 3.1: Unlock path may ONLY retrieve existing key; never create inside unlock.
      */
     @Synchronized
-    fun getExistingBiometricMasterKey(): SecretKey? {
+    fun getExistingBiometricMasterKey(alias: String = ALIAS_BIOMETRIC_UNLOCK): SecretKey? {
         if (keyStore != null) {
             try {
-                if (!keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
+                if (!keyStore.containsAlias(alias)) {
                     return null
                 }
-                val entry = keyStore.getEntry(ALIAS_BIOMETRIC_UNLOCK, null) as? KeyStore.SecretKeyEntry
+                val entry = keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry
                 return entry?.secretKey
             } catch (e: KeyPermanentlyInvalidatedException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to get existing biometric master key", e)
+                Log.e(TAG, "Failed to get existing biometric master key for alias $alias", e)
                 return null
             }
         }
-        return jvmFallbackKeys[ALIAS_BIOMETRIC_UNLOCK]
+        return jvmFallbackKeys[alias]
     }
 
     /**
-     * Initializes BiometricPrompt.CryptoObject in ENCRYPT mode using a provisional key.
-     * Transactional: Does not destroy existing enrolled key until new envelope is provisioned.
+     * Initializes BiometricPrompt.CryptoObject in ENCRYPT mode using a provisional target slot key.
+     * Transactional: Generates key under the target slot (A or B), leaving the active slot key
+     * completely intact until the new envelope is 100% written and committed.
      */
     fun getBiometricEnrollCryptoObject(context: Context): androidx.biometric.BiometricPrompt.CryptoObject? {
         if (!isRealVaultAuthorized()) {
@@ -372,7 +413,11 @@ object VaultKeyManager {
             return null
         }
         return try {
-            val provisionalKey = createBiometricMasterKey(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+            val currentSlot = getActiveBiometricSlot(context)
+            val targetSlot = if (currentSlot == 1L) 2L else 1L
+            provisionalTargetSlot = targetSlot
+            val targetAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_B else ALIAS_BIOMETRIC_SLOT_A
+            val provisionalKey = createBiometricMasterKey(targetAlias)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, provisionalKey)
             androidx.biometric.BiometricPrompt.CryptoObject(cipher)
@@ -387,6 +432,7 @@ object VaultKeyManager {
     /**
      * Provisions the biometric envelope using the authenticated Cipher from BiometricPrompt.
      * Uses strict BIE1 binary format, binds single AAD, commits staged file atomically, and verifies.
+     * The key that performed the encryption is preserved as the active slot key.
      */
     fun provisionBiometricEnvelope(context: Context, authenticatedCipher: Cipher): Boolean {
         val vrk = activeVrk
@@ -395,6 +441,7 @@ object VaultKeyManager {
             return false
         }
 
+        val targetSlot = provisionalTargetSlot ?: (if (getActiveBiometricSlot(context) == 1L) 2L else 1L)
         val stagedFile = File(context.filesDir, "$BIOMETRIC_WRAP_FILE.staged")
         val targetFile = File(context.filesDir, BIOMETRIC_WRAP_FILE)
 
@@ -411,7 +458,7 @@ object VaultKeyManager {
             buffer.put(MAGIC_BIOMETRIC_WRAP)
             buffer.put(BIE1_VERSION)
             buffer.put(BIE1_REALM_REAL)
-            buffer.putLong(1L) // Key generation
+            buffer.putLong(targetSlot) // Key generation / slot ID
             buffer.put(iv.size.toByte())
             buffer.put(iv)
             buffer.putShort(encryptedVrk.size.toShort())
@@ -428,16 +475,31 @@ object VaultKeyManager {
                 return false
             }
 
-            // Transactional commit: Promote provisional key to active key in Keystore
-            promoteProvisionalBiometricKey()
-
             // Atomically rename staged envelope to active envelope
             if (!stagedFile.renameTo(targetFile)) {
                 stagedFile.copyTo(targetFile, overwrite = true)
                 stagedFile.delete()
             }
 
-            Log.i(TAG, "BIE1 biometric envelope provisioned and committed successfully")
+            // Transactional cleanup: New key + envelope are live. Safely delete superseded old slot key.
+            if (keyStore != null) {
+                try {
+                    val oldAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_A else ALIAS_BIOMETRIC_SLOT_B
+                    if (keyStore.containsAlias(oldAlias)) keyStore.deleteEntry(oldAlias)
+                    if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
+                    if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)) keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Non-critical cleanup warning during biometric promotion", e)
+                }
+            } else {
+                val oldAlias = if (targetSlot == 2L) ALIAS_BIOMETRIC_SLOT_A else ALIAS_BIOMETRIC_SLOT_B
+                jvmFallbackKeys.remove(oldAlias)
+                jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK)
+                jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+            }
+            provisionalTargetSlot = null
+
+            Log.i(TAG, "BIE1 biometric envelope provisioned and committed successfully in slot $targetSlot")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to provision biometric envelope: ${e.message}", e)
@@ -446,31 +508,9 @@ object VaultKeyManager {
         }
     }
 
-    private fun promoteProvisionalBiometricKey() {
-        if (keyStore != null) {
-            try {
-                if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
-                    keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
-                }
-                // Re-create the master alias with same hardware spec
-                createBiometricMasterKey(ALIAS_BIOMETRIC_UNLOCK)
-                if (keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)) {
-                    keyStore.deleteEntry(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error promoting provisional biometric key", e)
-            }
-        } else {
-            val provisional = jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
-            if (provisional != null) {
-                jvmFallbackKeys[ALIAS_BIOMETRIC_UNLOCK] = provisional
-            }
-        }
-    }
-
     /**
      * Initializes BiometricPrompt.CryptoObject in DECRYPT mode using the IV stored in the envelope.
-     * STRICT INVARIANT: Unlock path NEVER generates a key; only retrieves existing.
+     * STRICT INVARIANT: Unlock path NEVER generates a key; only retrieves existing active key.
      */
     fun getBiometricDecryptCryptoObject(context: Context): androidx.biometric.BiometricPrompt.CryptoObject? {
         val file = File(context.filesDir, BIOMETRIC_WRAP_FILE)
@@ -486,8 +526,9 @@ object VaultKeyManager {
                 bytes.copyOfRange(1, 1 + ivLen)
             }
 
-            val biometricKey = getExistingBiometricMasterKey() ?: run {
-                Log.w(TAG, "Existing biometric master key not found during unlock attempt")
+            val activeAlias = getActiveBiometricAlias(context)
+            val biometricKey = getExistingBiometricMasterKey(activeAlias) ?: run {
+                Log.w(TAG, "Existing biometric master key not found for alias $activeAlias during unlock attempt")
                 return null
             }
 
@@ -589,14 +630,15 @@ object VaultKeyManager {
             return BiometricEnrollmentState.ENVELOPE_CORRUPT
         }
 
+        val activeAlias = getActiveBiometricAlias(context)
         if (keyStore != null) {
             try {
-                if (!keyStore.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
+                if (!keyStore.containsAlias(activeAlias)) {
                     envelopeFile.delete()
                     settingsDataStore.setBiometricsEnabled(false)
                     return BiometricEnrollmentState.UNAVAILABLE
                 }
-                val entry = keyStore.getEntry(ALIAS_BIOMETRIC_UNLOCK, null) as? KeyStore.SecretKeyEntry
+                val entry = keyStore.getEntry(activeAlias, null) as? KeyStore.SecretKeyEntry
                 if (entry == null) {
                     envelopeFile.delete()
                     settingsDataStore.setBiometricsEnabled(false)
@@ -628,15 +670,15 @@ object VaultKeyManager {
             val staged = File(context.filesDir, "$BIOMETRIC_WRAP_FILE.staged")
             if (staged.exists()) staged.delete()
             keyStore?.let {
-                if (it.containsAlias(ALIAS_BIOMETRIC_UNLOCK)) {
-                    it.deleteEntry(ALIAS_BIOMETRIC_UNLOCK)
-                }
-                if (it.containsAlias(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)) {
-                    it.deleteEntry(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+                listOf(ALIAS_BIOMETRIC_UNLOCK, ALIAS_BIOMETRIC_SLOT_A, ALIAS_BIOMETRIC_SLOT_B, ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL).forEach { alias ->
+                    if (it.containsAlias(alias)) {
+                        it.deleteEntry(alias)
+                    }
                 }
             }
-            jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK)
-            jvmFallbackKeys.remove(ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL)
+            listOf(ALIAS_BIOMETRIC_UNLOCK, ALIAS_BIOMETRIC_SLOT_A, ALIAS_BIOMETRIC_SLOT_B, ALIAS_BIOMETRIC_UNLOCK_PROVISIONAL).forEach { alias ->
+                jvmFallbackKeys.remove(alias)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error removing biometric envelope", e)
         }
