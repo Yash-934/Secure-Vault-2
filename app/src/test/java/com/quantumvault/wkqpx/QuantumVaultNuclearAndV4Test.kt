@@ -11,6 +11,12 @@ import com.quantumvault.wkqpx.security.SelfDestructStatus
 import com.quantumvault.wkqpx.security.VaultBackupManager
 import com.quantumvault.wkqpx.security.VaultGenerationManager
 import com.quantumvault.wkqpx.security.VaultKeyManager
+import com.quantumvault.wkqpx.security.RestoreFaultPhase
+import com.quantumvault.wkqpx.security.InvalidBackupPasswordException
+import com.quantumvault.wkqpx.security.CorruptedBackupException
+import com.quantumvault.wkqpx.security.BackupManifestIntegrityException
+import com.quantumvault.wkqpx.security.GenerationCorruptionException
+import com.quantumvault.wkqpx.security.Argon2Kdf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -437,6 +443,212 @@ class QuantumVaultNuclearAndV4Test {
         // Verify generation incremented
         val nextGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
         assertTrue("Generation epoch must increment after restore (initial=$initialGen, next=$nextGen)", nextGen > initialGen)
+    }
+
+    @Test
+    fun `test fault injection after FS swap rolls back filesystem and preserves generation`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+        val backupPassword = "FaultPassword123!"
+
+        // Create initial item
+        val vaultDir = repo.getVaultDirectory(context)
+        val initialFile = File(vaultDir, "initial_item.bin")
+        java.io.FileOutputStream(initialFile).use { fos ->
+            com.quantumvault.wkqpx.security.CryptoManager.encryptStream(ByteArrayInputStream("INITIAL_CONTENT".toByteArray(Charsets.UTF_8)), fos)
+        }
+        db.vaultDao().insertVaultItem(
+            VaultItem(
+                id = 1,
+                originalName = "initial.txt",
+                encryptedFileName = "initial_item.bin",
+                sizeBytes = 15,
+                mimeType = "text/plain",
+                addedTimestamp = System.currentTimeMillis(),
+                isVideo = false,
+                folderName = "Root"
+            )
+        )
+        val initialGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+
+        val backupOut = ByteArrayOutputStream()
+        val exportResult = VaultBackupManager.exportMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            outputStream = backupOut,
+            vaultRepository = repo,
+            isDeviceLocked = false
+        )
+        assertTrue(exportResult.isSuccess)
+
+        // Inject simulated process death / crash after FS swap
+        VaultBackupManager.testFaultInjectionHook = { phase ->
+            if (phase == RestoreFaultPhase.AFTER_FS_SWAP) {
+                throw RuntimeException("SIMULATED_DISK_IO_FAILURE_AFTER_FS_SWAP")
+            }
+        }
+
+        try {
+            val restoreResult = VaultBackupManager.importMasterBackup(
+                context = context,
+                masterPassword = backupPassword,
+                inputStream = ByteArrayInputStream(backupOut.toByteArray()),
+                vaultRepository = repo,
+                isReplaceMode = true
+            )
+            assertFalse("Restore must fail when fault is injected", restoreResult.isSuccess)
+            assertTrue(
+                "Exception should be simulated fault: ${restoreResult.exceptionOrNull()?.message}",
+                restoreResult.exceptionOrNull()?.message?.contains("SIMULATED_DISK_IO_FAILURE") == true
+            )
+
+            // Rollback verification: Initial state and generation must remain intact
+            val curGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+            assertEquals("Generation must not advance on rolled back restore", initialGen, curGen)
+            assertTrue("Initial physical file must be preserved by rollback", initialFile.exists())
+            assertEquals("Initial DB item must be intact", 1, db.vaultDao().getAllItemsSync().size)
+        } finally {
+            VaultBackupManager.testFaultInjectionHook = null
+        }
+    }
+
+    @Test
+    fun `test fault injection before generation commit triggers clean rollback`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+        val backupPassword = "FaultPassword123!"
+
+        val vaultDir = repo.getVaultDirectory(context)
+        val initialFile = File(vaultDir, "initial_item2.bin")
+        java.io.FileOutputStream(initialFile).use { fos ->
+            com.quantumvault.wkqpx.security.CryptoManager.encryptStream(ByteArrayInputStream("INITIAL_CONTENT_2".toByteArray(Charsets.UTF_8)), fos)
+        }
+        db.vaultDao().insertVaultItem(
+            VaultItem(
+                id = 2,
+                originalName = "initial2.txt",
+                encryptedFileName = "initial_item2.bin",
+                sizeBytes = 17,
+                mimeType = "text/plain",
+                addedTimestamp = System.currentTimeMillis(),
+                isVideo = false,
+                folderName = "Root"
+            )
+        )
+        val initialGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+
+        val backupOut = ByteArrayOutputStream()
+        val exportResult = VaultBackupManager.exportMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            outputStream = backupOut,
+            vaultRepository = repo,
+            isDeviceLocked = false
+        )
+        assertTrue(exportResult.isSuccess)
+
+        // Inject simulated failure right before generation commit
+        VaultBackupManager.testFaultInjectionHook = { phase ->
+            if (phase == RestoreFaultPhase.BEFORE_GENERATION_COMMIT) {
+                throw RuntimeException("SIMULATED_PROCESS_KILL_BEFORE_GEN_COMMIT")
+            }
+        }
+
+        try {
+            val restoreResult = VaultBackupManager.importMasterBackup(
+                context = context,
+                masterPassword = backupPassword,
+                inputStream = ByteArrayInputStream(backupOut.toByteArray()),
+                vaultRepository = repo,
+                isReplaceMode = true
+            )
+            assertFalse("Restore must fail when fault is injected", restoreResult.isSuccess)
+            val curGen = VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+            assertEquals("Generation must remain unchanged on abort", initialGen, curGen)
+            assertTrue("Initial physical file must still exist after rollback", initialFile.exists())
+        } finally {
+            VaultBackupManager.testFaultInjectionHook = null
+        }
+    }
+
+    @Test
+    fun `test corrupted generation file throws GenerationCorruptionException with RECOVERY_REQUIRED`() {
+        val genFile = File(context.filesDir, "vault_gen_real.bin")
+        // Overwrite generation file with corrupted data (invalid CRC / invalid magic)
+        genFile.writeBytes(ByteArray(24) { 0xAA.toByte() })
+
+        try {
+            VaultGenerationManager.getActiveGeneration(context, isDecoy = false)
+            org.junit.Assert.fail("Expected GenerationCorruptionException on corrupted generation file")
+        } catch (e: GenerationCorruptionException) {
+            assertTrue("Exception message must require recovery: ${e.message}", e.message?.contains("RECOVERY_REQUIRED") == true)
+        }
+    }
+
+    @Test
+    fun `test wrong password on V4 backup throws InvalidBackupPasswordException`() = runBlocking {
+        VaultKeyManager.createVrkForFreshVault(context, "1234")
+        VaultKeyManager.authorizeWithPin(context, "1234")
+        val db = AppDatabase.getDatabase(context)
+        val repo = VaultRepository(db.vaultDao())
+
+        val backupPassword = "RealCorrectPassword123!"
+        val backupOut = ByteArrayOutputStream()
+        val exportResult = VaultBackupManager.exportMasterBackup(
+            context = context,
+            masterPassword = backupPassword,
+            outputStream = backupOut,
+            vaultRepository = repo,
+            isDeviceLocked = false
+        )
+        assertTrue(exportResult.isSuccess)
+
+        // Attempt restore with WRONG password
+        val restoreResult = VaultBackupManager.importMasterBackup(
+            context = context,
+            masterPassword = "WrongPassword999!",
+            inputStream = ByteArrayInputStream(backupOut.toByteArray()),
+            vaultRepository = repo,
+            isReplaceMode = true
+        )
+
+        assertFalse(restoreResult.isSuccess)
+        val ex = restoreResult.exceptionOrNull()
+        assertTrue(
+            "Exception must be InvalidBackupPasswordException or cause: ${ex?.javaClass?.name} - ${ex?.message}",
+            ex is InvalidBackupPasswordException || ex?.cause is javax.crypto.AEADBadTagException
+        )
+    }
+
+    @Test
+    fun `test production Argon2 parameters derivation succeeds`() {
+        val password = "StrongProductionPassword#2026".toCharArray()
+        val salt = ByteArray(16) { 0x77.toByte() }
+
+        // Test production profile: 64 MiB (65536 KiB), 3 iterations, 1 parallelism
+        val key = Argon2Kdf.deriveKey(
+            password = password,
+            salt = salt,
+            memoryKb = 65536,
+            iterations = 3,
+            parallelism = 1
+        )
+        assertNotNull(key)
+        assertEquals(32, key.encoded.size)
+
+        // Verify deterministic output
+        val key2 = Argon2Kdf.deriveKey(
+            password = password,
+            salt = salt,
+            memoryKb = 65536,
+            iterations = 3,
+            parallelism = 1
+        )
+        org.junit.Assert.assertArrayEquals(key.encoded, key2.encoded)
     }
 }
 

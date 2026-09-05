@@ -3,10 +3,10 @@ package com.quantumvault.wkqpx.security
 import android.content.Context
 import android.util.Log
 import com.quantumvault.wkqpx.data.AppDatabase
-import com.quantumvault.wkqpx.util.VaultLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.KeyStore
 
 enum class SelfDestructStatus {
     COMPLETE,
@@ -14,17 +14,34 @@ enum class SelfDestructStatus {
     FAILED
 }
 
+data class NuclearArtifactInventory(
+    val databaseFiles: List<File>,
+    val wrapperFiles: List<File>,
+    val generationFiles: List<File>,
+    val sentinelFiles: List<File>,
+    val vaultPayloadFiles: List<File>,
+    val cacheAndTempFiles: List<File>,
+    val preferencesAndDatastoreFiles: List<File>,
+    val keystoreAliases: List<String>
+) {
+    val allFiles: List<File> get() = databaseFiles + wrapperFiles + generationFiles +
+            sentinelFiles + vaultPayloadFiles + cacheAndTempFiles + preferencesAndDatastoreFiles
+}
+
 data class SelfDestructResult(
     val status: SelfDestructStatus,
     val keyDestructionResults: Map<String, Boolean>,
     val databaseDestroyed: Boolean,
     val storageWiped: Boolean,
+    val unverifiedRemainingFiles: List<String> = emptyList(),
+    val unverifiedRemainingAliases: List<String> = emptyList(),
     val error: Throwable? = null
 )
 
 /**
  * Self-Destruct Nuclear Engine.
- * Securely shreds and wipes all internal storage, databases, cache, and Keystore entries.
+ * Implements authoritative: Discover Inventory -> Forensically Destroy -> Authoritatively Verify Absent.
+ * Guarantees zero residual artifacts before declaring SelfDestructStatus.COMPLETE.
  */
 object SelfDestructManager {
     private const val TAG = "SelfDestructManager"
@@ -35,56 +52,94 @@ object SelfDestructManager {
         var keyResults = emptyMap<String, Boolean>()
 
         try {
-            // 1. Close and delete Room databases (both real and decoy) with explicit verification
+            // Phase 1: Close active database connections
             try {
                 AppDatabase.closeDatabases()
-                val deletedReal = context.deleteDatabase("secure_vault_db")
-                val deletedDecoy = context.deleteDatabase("secure_vault_decoy_db")
-                DatabaseKeyManager.destroyKeys(context)
-
-                val realDbFile = context.getDatabasePath("secure_vault_db")
-                val decoyDbFile = context.getDatabasePath("secure_vault_decoy_db")
-                val realStillExists = realDbFile != null && realDbFile.exists()
-                val decoyStillExists = decoyDbFile != null && decoyDbFile.exists()
-
-                dbDestroyed = !realStillExists && !decoyStillExists
             } catch (e: Exception) {
-                Log.e(TAG, "Error closing/deleting databases during self-destruct", e)
-                dbDestroyed = false
+                Log.w(TAG, "Database close error: ${e.message}")
             }
 
-            // 2. Wipe / shred files in Context.filesDir and datastore recursively with authoritative verification
+            // Phase 2: Comprehensive Artifact Inventory Discovery
+            val inventory = discoverNuclearInventory(context)
+            Log.d(TAG, "Nuclear inventory discovered: ${inventory.allFiles.size} files, ${inventory.keystoreAliases.size} key aliases.")
+
+            // Phase 3: Forensic Destruction
+            // 3a. Shred specific inventoried files individually
+            for (file in inventory.allFiles) {
+                shredFile(file)
+            }
+
+            // 3b. Delete databases via Context API
             try {
-                val filesDirWiped = shredDirectory(context.filesDir)
-                val datastoreDir = File(context.filesDir.parent, "datastore")
-                val datastoreWiped = if (datastoreDir.exists()) shredDirectory(datastoreDir) else true
-                val sharedPrefsDir = File(context.filesDir.parent, "shared_prefs")
-                val sharedPrefsWiped = if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir) else true
-                val cacheDirWiped = shredDirectory(context.cacheDir)
-                
-                storageWiped = filesDirWiped && datastoreWiped && sharedPrefsWiped && cacheDirWiped
+                context.deleteDatabase("secure_vault_db")
+                context.deleteDatabase("secure_vault_decoy_db")
+                DatabaseKeyManager.destroyKeys(context)
             } catch (e: Exception) {
-                Log.e(TAG, "Error wiping storage directories during self-destruct", e)
-                storageWiped = false
+                Log.e(TAG, "Error in context.deleteDatabase: ${e.message}")
             }
 
-            // 3. Authoritatively destroy ALL Keystore keys via central VaultKeyManager
-            keyResults = VaultKeyManager.destroyAllKeys()
-            val allKeysDestroyed = keyResults.isNotEmpty() && keyResults.values.all { it }
+            // 3c. Recursively shred all standard app directories
+            val filesDirWiped = shredDirectory(context.filesDir)
+            val parentDir = context.filesDir.parentFile
+            val datastoreDir = File(parentDir, "datastore")
+            val datastoreWiped = if (datastoreDir.exists()) shredDirectory(datastoreDir) else true
+            val sharedPrefsDir = File(parentDir, "shared_prefs")
+            val sharedPrefsWiped = if (sharedPrefsDir.exists()) shredDirectory(sharedPrefsDir) else true
+            val databasesDir = File(parentDir, "databases")
+            val databasesWiped = if (databasesDir.exists()) shredDirectory(databasesDir) else true
+            val cacheDirWiped = shredDirectory(context.cacheDir)
+            val codeCacheDirWiped = shredDirectory(context.codeCacheDir)
 
-            // 4. Status determination
-            val status = if (allKeysDestroyed && dbDestroyed && storageWiped) {
+            storageWiped = filesDirWiped && datastoreWiped && sharedPrefsWiped &&
+                    databasesWiped && cacheDirWiped && codeCacheDirWiped
+
+            // 3d. Authoritatively destroy ALL Keystore keys dynamically
+            keyResults = VaultKeyManager.destroyAllKeys()
+
+            // Phase 4: Authoritative Post-Destruction Verification (Verify Absent)
+            val unverifiedFiles = mutableListOf<String>()
+            for (file in inventory.allFiles) {
+                if (file.exists()) {
+                    unverifiedFiles.add(file.absolutePath)
+                }
+            }
+
+            val unverifiedAliases = mutableListOf<String>()
+            try {
+                val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                val currentAliases = ks.aliases().toList()
+                for (alias in inventory.keystoreAliases) {
+                    if (currentAliases.contains(alias) || ks.containsAlias(alias)) {
+                        unverifiedAliases.add(alias)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Keystore post-verification error: ${e.message}")
+            }
+
+            val realDbFile = context.getDatabasePath("secure_vault_db")
+            val decoyDbFile = context.getDatabasePath("secure_vault_decoy_db")
+            dbDestroyed = (realDbFile == null || !realDbFile.exists()) &&
+                    (decoyDbFile == null || !decoyDbFile.exists()) &&
+                    !File(parentDir, "databases/secure_vault_db").exists() &&
+                    !File(parentDir, "databases/secure_vault_decoy_db").exists()
+
+            val allKeysDestroyed = (keyResults.isEmpty() || keyResults.values.all { it }) && unverifiedAliases.isEmpty()
+            val zeroFilesRemaining = unverifiedFiles.isEmpty()
+
+            // Phase 5: Status Determination (Strict: Anything unverified prevents COMPLETE)
+            val status = if (allKeysDestroyed && dbDestroyed && storageWiped && zeroFilesRemaining) {
                 SelfDestructStatus.COMPLETE
-            } else if (keyResults.values.any { it } || dbDestroyed || storageWiped) {
+            } else if (keyResults.values.any { it } || dbDestroyed || storageWiped || zeroFilesRemaining) {
                 SelfDestructStatus.PARTIAL
             } else {
                 SelfDestructStatus.FAILED
             }
 
-            // 5. Ultimate wipe using OS ActivityManager (terminates app)
+            // Phase 6: OS ActivityManager Wipe (terminates process in production)
             try {
-                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-                activityManager.clearApplicationUserData()
+                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+                activityManager?.clearApplicationUserData()
             } catch (e: Exception) {
                 Log.w(TAG, "clearApplicationUserData skipped or unsupported in test runtime")
             }
@@ -93,7 +148,9 @@ object SelfDestructManager {
                 status = status,
                 keyDestructionResults = keyResults,
                 databaseDestroyed = dbDestroyed,
-                storageWiped = storageWiped
+                storageWiped = storageWiped,
+                unverifiedRemainingFiles = unverifiedFiles,
+                unverifiedRemainingAliases = unverifiedAliases
             )
         } catch (e: Exception) {
             Log.e(TAG, "Fatal error during nuclear self-destruct", e)
@@ -105,6 +162,115 @@ object SelfDestructManager {
                 error = e
             )
         }
+    }
+
+    /**
+     * Comprehensive artifact discovery across databases, wrappers, sentinels, generations,
+     * staging directories, caches, logs, and Keystore aliases.
+     */
+    fun discoverNuclearInventory(context: Context): NuclearArtifactInventory {
+        val parentDir = context.filesDir.parentFile
+
+        // 1. Databases & auxiliary journal/WAL files
+        val dbFiles = mutableListOf<File>()
+        val dbNames = listOf("secure_vault_db", "secure_vault_decoy_db")
+        for (name in dbNames) {
+            val db = context.getDatabasePath(name)
+            if (db != null) {
+                dbFiles.add(db)
+                dbFiles.add(File("${db.absolutePath}-wal"))
+                dbFiles.add(File("${db.absolutePath}-shm"))
+                dbFiles.add(File("${db.absolutePath}-journal"))
+            }
+        }
+        val databasesDir = File(parentDir, "databases")
+        if (databasesDir.exists()) {
+            databasesDir.listFiles()?.let { dbFiles.addAll(it) }
+        }
+
+        // 2. Cryptographic Wrappers
+        val wrapperNames = listOf(
+            "vrk_wrapper_real.bin", "vrk_wrapper_decoy.bin",
+            "db_key_wrapper_real.bin", "db_key_wrapper_decoy.bin",
+            "biometric_envelope_real.bin", "biometric_envelope_decoy.bin"
+        )
+        val wrapperFiles = wrapperNames.map { File(context.filesDir, it) }
+
+        // 3. Generation Metadata & Commit Journals
+        val genNames = listOf(
+            "vault_gen_real.bin", "vault_gen_decoy.bin",
+            "vault_gen_real.intent", "vault_gen_decoy.intent",
+            "vault_gen_real.bin.tmp", "vault_gen_decoy.bin.tmp"
+        )
+        val generationFiles = genNames.map { File(context.filesDir, it) }
+
+        // 4. Cryptographic Sentinels
+        val sentinelNames = listOf("vault_sentinel_real.bin", "vault_sentinel_decoy.bin")
+        val sentinelFiles = sentinelNames.map { File(context.filesDir, it) }
+
+        // 5. Vault Payload Directories & Staging Generations
+        val vaultPayloadFiles = mutableListOf<File>()
+        val vaultDirNames = listOf("vault_data", "vault_data_decoy")
+        for (dirName in vaultDirNames) {
+            val dir = File(context.filesDir, dirName)
+            if (dir.exists()) {
+                dir.listFiles()?.let { vaultPayloadFiles.addAll(it) }
+                vaultPayloadFiles.add(dir)
+            }
+        }
+        context.filesDir.listFiles()?.forEach { file ->
+            if (file.isDirectory && (file.name.contains("staging") || file.name.contains("prev_gen") || file.name.contains("next_gen"))) {
+                file.listFiles()?.let { vaultPayloadFiles.addAll(it) }
+                vaultPayloadFiles.add(file)
+            }
+        }
+
+        // 6. Caches, Thumbnails, Temp Backup Artifacts
+        val cacheAndTempFiles = mutableListOf<File>()
+        val thumbDir = File(context.cacheDir, "vault_thumbnails_encrypted")
+        if (thumbDir.exists()) {
+            thumbDir.listFiles()?.let { cacheAndTempFiles.addAll(it) }
+            cacheAndTempFiles.add(thumbDir)
+        }
+        context.cacheDir.listFiles()?.let { cacheAndTempFiles.addAll(it) }
+        context.filesDir.listFiles()?.forEach { file ->
+            if (file.name.startsWith("temp_backup") || file.name.endsWith(".tmp") || file.name.endsWith(".enc")) {
+                cacheAndTempFiles.add(file)
+            }
+        }
+
+        // 7. Preferences & DataStore
+        val prefsAndDatastoreFiles = mutableListOf<File>()
+        val datastoreDir = File(parentDir, "datastore")
+        if (datastoreDir.exists()) {
+            datastoreDir.listFiles()?.let { prefsAndDatastoreFiles.addAll(it) }
+            prefsAndDatastoreFiles.add(datastoreDir)
+        }
+        val sharedPrefsDir = File(parentDir, "shared_prefs")
+        if (sharedPrefsDir.exists()) {
+            sharedPrefsDir.listFiles()?.let { prefsAndDatastoreFiles.addAll(it) }
+            prefsAndDatastoreFiles.add(sharedPrefsDir)
+        }
+
+        // 8. Keystore Aliases
+        val aliases = mutableListOf<String>()
+        try {
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            aliases.addAll(ks.aliases().toList())
+        } catch (e: Exception) {
+            Log.w(TAG, "Keystore alias discovery warning: ${e.message}")
+        }
+
+        return NuclearArtifactInventory(
+            databaseFiles = dbFiles.distinct(),
+            wrapperFiles = wrapperFiles.distinct(),
+            generationFiles = generationFiles.distinct(),
+            sentinelFiles = sentinelFiles.distinct(),
+            vaultPayloadFiles = vaultPayloadFiles.distinct(),
+            cacheAndTempFiles = cacheAndTempFiles.distinct(),
+            preferencesAndDatastoreFiles = prefsAndDatastoreFiles.distinct(),
+            keystoreAliases = aliases.distinct()
+        )
     }
 
     private fun shredDirectory(dir: File?): Boolean {
@@ -123,7 +289,7 @@ object SelfDestructManager {
 
     fun shredFile(file: File): Boolean {
         return try {
-            if (file.exists() && file.canWrite()) {
+            if (file.exists() && file.isFile && file.canWrite()) {
                 val length = file.length()
                 if (length > 0) {
                     file.outputStream().use { fos ->

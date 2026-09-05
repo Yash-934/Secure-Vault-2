@@ -2,44 +2,87 @@ package com.quantumvault.wkqpx.security
 
 import android.content.Context
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.CRC32
+
+class GenerationCorruptionException(message: String, cause: Throwable? = null) : SecurityException(message, cause)
+class GenerationPersistenceException(message: String, cause: Throwable? = null) : SecurityException(message, cause)
 
 /**
  * Authoritative persistent Vault Generation Lifecycle Manager.
  * Prevents vault rollback attacks and binds cryptographic sentinels to explicit,
  * monotonically tracked generation epochs.
+ *
+ * Persisted binary record schema (24 bytes):
+ * - [0..3]: MAGIC_GEN (0x5647454E = "VGEN")
+ * - [4..11]: Generation ID (Long)
+ * - [12..19]: Timestamp (Long)
+ * - [20..23]: CRC-32 Checksum of [0..19] (Int)
  */
 object VaultGenerationManager {
     private const val TAG = "VaultGenerationManager"
     private const val REAL_GEN_FILE = "vault_gen_real.bin"
     private const val DECOY_GEN_FILE = "vault_gen_decoy.bin"
+    private const val REAL_INTENT_FILE = "vault_gen_real.intent"
+    private const val DECOY_INTENT_FILE = "vault_gen_decoy.intent"
     private const val MAGIC_GEN = 0x5647454EL // "VGEN"
+    const val RECORD_SIZE_BYTES = 24
 
     @Synchronized
     fun getActiveGeneration(context: Context, isDecoy: Boolean): Long {
         val fileName = if (isDecoy) DECOY_GEN_FILE else REAL_GEN_FILE
         val file = File(context.filesDir, fileName)
-        if (!file.exists() || file.length() < 16) {
+        if (!file.exists()) {
             // First initialization of vault generation
             val initialGen = 1L
             persistGeneration(context, isDecoy, initialGen)
             return initialGen
         }
+
+        if (file.length() != RECORD_SIZE_BYTES.toLong()) {
+            throw GenerationCorruptionException(
+                "Corrupt generation file '$fileName': length is ${file.length()} bytes, expected $RECORD_SIZE_BYTES bytes. RECOVERY_REQUIRED."
+            )
+        }
+
         return try {
             val bytes = file.readBytes()
             val bb = ByteBuffer.wrap(bytes)
             val magic = bb.int.toLong() and 0xFFFFFFFFL
             if (magic != MAGIC_GEN) {
-                Log.w(TAG, "Corrupt generation header, resetting to 1L")
-                1L
-            } else {
-                bb.long
+                throw GenerationCorruptionException(
+                    "Corrupt generation header in '$fileName': magic $magic != expected $MAGIC_GEN. RECOVERY_REQUIRED."
+                )
             }
+            val gen = bb.long
+            val timestamp = bb.long
+            val recordedCrc = bb.int
+
+            val crcCalculator = CRC32()
+            crcCalculator.update(bytes, 0, 20)
+            val computedCrc = crcCalculator.value.toInt()
+
+            if (recordedCrc != computedCrc) {
+                throw GenerationCorruptionException(
+                    "Generation integrity CRC mismatch in '$fileName': recorded $recordedCrc != computed $computedCrc. Tamper detected. RECOVERY_REQUIRED."
+                )
+            }
+
+            if (gen < 1L) {
+                throw GenerationCorruptionException(
+                    "Invalid generation epoch in '$fileName': $gen < 1. RECOVERY_REQUIRED."
+                )
+            }
+            gen
+        } catch (e: GenerationCorruptionException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Error reading generation ID: ${e.message}", e)
-            1L
+            throw GenerationCorruptionException("Failed to read generation file '$fileName': ${e.message}", e)
         }
     }
 
@@ -51,8 +94,62 @@ object VaultGenerationManager {
         return next
     }
 
+    /**
+     * Prepares a durable generation intent for two-phase commit during atomic restores.
+     */
     @Synchronized
-    fun resetGeneration(context: Context, isDecoy: Boolean, newGen: Long = 1L) {
+    fun prepareGenerationIntent(context: Context, isDecoy: Boolean, nextGen: Long): File {
+        val intentFileName = if (isDecoy) DECOY_INTENT_FILE else REAL_INTENT_FILE
+        val intentFile = File(context.filesDir, intentFileName)
+        val bytes = buildGenerationRecord(nextGen)
+        FileOutputStream(intentFile).use { fos ->
+            fos.write(bytes)
+            fos.flush()
+            fos.fd.sync()
+        }
+        return intentFile
+    }
+
+    /**
+     * Atomically commits a prepared generation intent to become the authoritative active generation.
+     */
+    @Synchronized
+    fun commitGeneration(context: Context, isDecoy: Boolean, nextGen: Long, intentFile: File? = null) {
+        val fileName = if (isDecoy) DECOY_GEN_FILE else REAL_GEN_FILE
+        val targetFile = File(context.filesDir, fileName)
+
+        val sourceFile = if (intentFile != null && intentFile.exists()) {
+            intentFile
+        } else {
+            val tempFile = File(context.filesDir, "$fileName.tmp")
+            val bytes = buildGenerationRecord(nextGen)
+            FileOutputStream(tempFile).use { fos ->
+                fos.write(bytes)
+                fos.flush()
+                fos.fd.sync()
+            }
+            tempFile
+        }
+
+        try {
+            Files.move(
+                sourceFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (e: Exception) {
+            try { sourceFile.delete() } catch (_: Throwable) {}
+            throw GenerationPersistenceException("Atomic generation commit failed for $fileName: ${e.message}", e)
+        }
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    @Synchronized
+    fun resetGenerationForTesting(context: Context, isDecoy: Boolean, newGen: Long = 1L) {
+        if (!com.quantumvault.wkqpx.BuildConfig.DEBUG) {
+            throw SecurityException("Resetting generation is strictly forbidden in production release builds.")
+        }
         persistGeneration(context, isDecoy, newGen)
     }
 
@@ -61,22 +158,33 @@ object VaultGenerationManager {
         val targetFile = File(context.filesDir, fileName)
         val tempFile = File(context.filesDir, "$fileName.tmp")
         try {
-            val bb = ByteBuffer.allocate(16)
-            bb.putInt(MAGIC_GEN.toInt())
-            bb.putLong(gen)
-            bb.putInt(0) // Reserved padding
-
+            val bytes = buildGenerationRecord(gen)
             FileOutputStream(tempFile).use { fos ->
-                fos.write(bb.array())
+                fos.write(bytes)
                 fos.flush()
                 fos.fd.sync()
             }
-            if (!tempFile.renameTo(targetFile)) {
-                tempFile.copyTo(targetFile, overwrite = true)
-                tempFile.delete()
-            }
+            Files.move(
+                tempFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to persist generation $gen: ${e.message}", e)
+            try { tempFile.delete() } catch (_: Throwable) {}
+            throw GenerationPersistenceException("Failed to atomically persist generation $gen for $fileName: ${e.message}", e)
         }
+    }
+
+    private fun buildGenerationRecord(gen: Long): ByteArray {
+        val bb = ByteBuffer.allocate(RECORD_SIZE_BYTES)
+        bb.putInt(MAGIC_GEN.toInt())
+        bb.putLong(gen)
+        bb.putLong(System.currentTimeMillis())
+
+        val crcCalculator = CRC32()
+        crcCalculator.update(bb.array(), 0, 20)
+        bb.putInt(crcCalculator.value.toInt())
+        return bb.array()
     }
 }
